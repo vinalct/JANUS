@@ -65,7 +65,7 @@ def test_prepare_runtime_creates_expected_directories(tmp_path):
             "ivy_dir": "data/metadata/ivy",
             "iceberg": {
                 "catalog_name": "janus",
-                "warehouse_dir": "data/metadata/iceberg",
+                "warehouse_dir": "data/bronze/iceberg",
                 "runtime_package": ICEBERG_RUNTIME_PACKAGE,
                 "default_namespace": "bronze",
             },
@@ -99,7 +99,7 @@ def test_build_spark_options_merges_iceberg_runtime_settings(tmp_path):
             "ivy_dir": "data/metadata/ivy",
             "iceberg": {
                 "catalog_name": "janus",
-                "warehouse_dir": "data/metadata/iceberg",
+                "warehouse_dir": "data/bronze/iceberg",
                 "runtime_package": ICEBERG_RUNTIME_PACKAGE,
                 "default_namespace": "bronze",
             },
@@ -242,7 +242,7 @@ def _runtime_config() -> dict:
             "ivy_dir": "data/metadata/ivy",
             "iceberg": {
                 "catalog_name": "janus",
-                "warehouse_dir": "data/metadata/iceberg",
+                "warehouse_dir": "data/bronze/iceberg",
                 "runtime_package": ICEBERG_RUNTIME_PACKAGE,
                 "default_namespace": "bronze",
             },
