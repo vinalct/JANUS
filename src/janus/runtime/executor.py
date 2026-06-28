@@ -20,7 +20,7 @@ from janus.writers import SparkDatasetWriter
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
-_FILE_HANDOFF_ARTIFACTS_PER_BATCH = 1
+_FILE_HANDOFF_ARTIFACTS_PER_BATCH = 5
 
 
 @dataclass(frozen=True, slots=True)
