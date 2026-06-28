@@ -1,4 +1,5 @@
 .git
+.env
 .venv
 .tools
 .pytest_cache
@@ -7,6 +8,9 @@ __pycache__
 *.pyc
 build
 dist
-data/raw
-data/bronze
-data/metadata/spark-warehouse
+data/raw/**
+data/bronze/**
+data/metadata/**
+!data/raw/.gitkeep
+!data/bronze/.gitkeep
+!data/metadata/.gitkeep
