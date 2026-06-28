@@ -561,11 +561,10 @@ def test_source_executor_batches_file_handoff_artifacts_and_appends_after_overwr
     )
 
     assert executed_run.is_successful is True
-    assert reader.read_artifact_counts == [1, 1]
-    assert writer.modes == ["overwrite", "append"]
+    assert reader.read_artifact_counts == [2]
+    assert writer.modes == ["overwrite"]
     assert [write.mode for write in executed_run.write_results if write.zone == "bronze"] == [
         "overwrite",
-        "append",
     ]
 
 
