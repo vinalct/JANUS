@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -9,6 +10,10 @@ from typing import Any
 from janus.models import ExecutionPlan
 from janus.utils.environment import load_environment_config, prepare_runtime
 from janus.utils.storage import StorageLayout
+
+RAW_PROGRESS_PATH_PREFIX_FIELD = "raw_path_prefix"
+
+_RAW_PATH_SEGMENT_PATTERN = re.compile(r"[^A-Za-z0-9._=-]+")
 
 
 def _parse_datetime(value: str) -> datetime | None:
@@ -152,6 +157,29 @@ def _raw_page_path(
     if request_input_count > 1:
         return Path(f"request-input-{request_input_index:06d}") / filename
     return Path("pages") / filename
+
+
+def _raw_run_path_prefix(
+    plan: ExecutionPlan,
+    progress: Mapping[str, Any] | None = None,
+) -> Path | None:
+    if progress is not None:
+        raw_path_prefix = progress.get(RAW_PROGRESS_PATH_PREFIX_FIELD)
+        if isinstance(raw_path_prefix, str) and raw_path_prefix.strip():
+            return Path(raw_path_prefix)
+        return None
+
+    ingestion_date = plan.run_context.started_at.astimezone(UTC).date().isoformat()
+    return (
+        Path("runs")
+        / f"ingestion_date={ingestion_date}"
+        / f"run_id={_safe_raw_path_segment(plan.run_context.run_id)}"
+    )
+
+
+def _safe_raw_path_segment(value: str) -> str:
+    normalized = _RAW_PATH_SEGMENT_PATTERN.sub("-", value.strip()).strip("-")
+    return normalized or "run"
 
 
 def _default_storage_layout(plan: ExecutionPlan) -> StorageLayout:

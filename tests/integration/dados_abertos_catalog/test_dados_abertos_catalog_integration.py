@@ -197,14 +197,20 @@ def test_dados_abertos_catalog_extracts_catalog_entities_and_materializes_bronze
     assert second_query["pagina"] == ["2"]
     assert second_query["tamanhoPagina"] == ["2"]
 
+    raw_run_dir = (
+        tmp_path
+        / "data"
+        / "raw"
+        / "dados_abertos"
+        / "catalog"
+        / "runs"
+        / "ingestion_date=2026-04-10"
+        / "run_id=run-dados-abertos-catalog-001"
+    )
     raw_page_one = Path(extraction_result.artifacts[0].path)
     raw_page_two = Path(extraction_result.artifacts[1].path)
-    assert raw_page_one == (
-        tmp_path / "data" / "raw" / "dados_abertos" / "catalog" / "pages" / "page-0001.json"
-    )
-    assert raw_page_two == (
-        tmp_path / "data" / "raw" / "dados_abertos" / "catalog" / "pages" / "page-0002.json"
-    )
+    assert raw_page_one == raw_run_dir / "pages" / "page-0001.json"
+    assert raw_page_two == raw_run_dir / "pages" / "page-0002.json"
     assert json.loads(raw_page_one.read_text(encoding="utf-8")) == _load_fixture(
         "package_search_page_1.json"
     )
@@ -219,33 +225,9 @@ def test_dados_abertos_catalog_extracts_catalog_entities_and_materializes_bronze
         "resources.jsonl",
     ]
 
-    resource_records = _read_jsonl(
-        tmp_path
-        / "data"
-        / "raw"
-        / "dados_abertos"
-        / "catalog"
-        / "normalized"
-        / "resources.jsonl"
-    )
-    dataset_records = _read_jsonl(
-        tmp_path
-        / "data"
-        / "raw"
-        / "dados_abertos"
-        / "catalog"
-        / "normalized"
-        / "datasets.jsonl"
-    )
-    organization_records = _read_jsonl(
-        tmp_path
-        / "data"
-        / "raw"
-        / "dados_abertos"
-        / "catalog"
-        / "normalized"
-        / "organizations.jsonl"
-    )
+    resource_records = _read_jsonl(raw_run_dir / "normalized" / "resources.jsonl")
+    dataset_records = _read_jsonl(raw_run_dir / "normalized" / "datasets.jsonl")
+    organization_records = _read_jsonl(raw_run_dir / "normalized" / "organizations.jsonl")
 
     assert [record["entity_id"] for record in dataset_records] == [
         "dataset-orcamento-federal",

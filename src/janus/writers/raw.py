@@ -26,8 +26,21 @@ class PersistedArtifact:
 class RawArtifactWriter:
     """Persist exact payloads into raw-like JANUS zones with deterministic paths."""
 
-    def __init__(self, storage_layout: StorageLayout) -> None:
+    def __init__(
+        self,
+        storage_layout: StorageLayout,
+        *,
+        raw_path_prefix: str | Path | None = None,
+    ) -> None:
         self.storage_layout = storage_layout
+        self._raw_path_prefix = Path(raw_path_prefix) if raw_path_prefix is not None else None
+
+    @property
+    def raw_path_prefix(self) -> Path | None:
+        return self._raw_path_prefix
+
+    def with_raw_path_prefix(self, raw_path_prefix: str | Path | None) -> RawArtifactWriter:
+        return RawArtifactWriter(self.storage_layout, raw_path_prefix=raw_path_prefix)
 
     def write_bytes(
         self,
@@ -139,7 +152,7 @@ class RawArtifactWriter:
         _validate_write_mode(mode)
 
         target = self.storage_layout.resolve_output(plan, zone)
-        path = target.child(relative_path)
+        path = target.child(self._relative_path_for_zone(zone, relative_path))
         checksum, persisted_path = _write_bytes(path, payload, mode)
 
         resolved_metadata = dict(metadata or {})
@@ -159,6 +172,12 @@ class RawArtifactWriter:
             checksum=checksum,
         )
         return PersistedArtifact(artifact=artifact, write_result=write_result)
+
+    def _relative_path_for_zone(self, zone: str, relative_path: str | Path) -> Path:
+        path = Path(relative_path)
+        if zone == "raw" and self._raw_path_prefix is not None:
+            return self._raw_path_prefix / path
+        return path
 
 
 def _write_bytes(path: Path, payload: bytes, mode: str) -> tuple[str, Path]:

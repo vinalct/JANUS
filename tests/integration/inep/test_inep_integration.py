@@ -143,24 +143,21 @@ def test_inep_archive_extracts_microdata_csv_and_materializes_bronze_and_metadat
     assert metadata["normalization_candidate_count"] == "1"
     assert metadata["resolved_versions"] == "2024"
 
+    raw_run_dir = (
+        tmp_path
+        / "data"
+        / "raw"
+        / "inep"
+        / "censo_escolar_microdados"
+        / "runs"
+        / "ingestion_date=2026-04-10"
+        / "run_id=run-inep-censo-escolar-001"
+    )
     persisted_archive = Path(extraction_result.artifacts[0].path)
     extracted_csv = Path(handoff.artifacts[0].path)
-    assert persisted_archive == (
-        tmp_path
-        / "data"
-        / "raw"
-        / "inep"
-        / "censo_escolar_microdados"
-        / "downloads"
-        / "2024"
-        / ARCHIVE_NAME
-    )
+    assert persisted_archive == raw_run_dir / "downloads" / "2024" / ARCHIVE_NAME
     assert extracted_csv == (
-        tmp_path
-        / "data"
-        / "raw"
-        / "inep"
-        / "censo_escolar_microdados"
+        raw_run_dir
         / "extracted"
         / "2024"
         / "microdados_censo_escolar_2024"

@@ -162,14 +162,7 @@ def test_file_strategy_static_local_file_persists_raw_and_builds_csv_handoff(tmp
 
     persisted_path = Path(result.artifacts[0].path)
     assert persisted_path == (
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "static_local"
-        / "downloads"
-        / "current"
-        / "records.csv"
+        _raw_run_dir(tmp_path, "static_local") / "downloads" / "current" / "records.csv"
     )
     assert persisted_path.read_text(encoding="utf-8") == "id,name\n1,alpha\n2,beta\n"
     assert handoff.artifact_paths == (str(persisted_path),)
@@ -344,11 +337,7 @@ def test_file_strategy_archive_package_extracts_csv_members_for_handoff(tmp_path
     assert result.checkpoint_value == "2026-04"
     assert len(handoff.artifacts) == 1
     assert Path(handoff.artifacts[0].path) == (
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "archive_source"
+        _raw_run_dir(tmp_path, "archive_source")
         / "extracted"
         / "2026-04"
         / "package_2026-04"
@@ -622,6 +611,19 @@ def _build_source_config(
             "quality": {"allow_schema_evolution": True},
         },
         tmp_path / "conf" / "sources" / f"{source_id}.yaml",
+    )
+
+
+def _raw_run_dir(tmp_path: Path, source_id: str) -> Path:
+    return (
+        tmp_path
+        / "runtime"
+        / "raw"
+        / "example"
+        / source_id
+        / "runs"
+        / "ingestion_date=2026-04-10"
+        / f"run_id=run-{source_id}"
     )
 
 

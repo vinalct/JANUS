@@ -38,6 +38,7 @@ from janus.strategies.common import (
     _freeze_string_mapping,
     _parse_datetime,
     _raw_page_path,
+    _raw_run_path_prefix,
     _request_input_key,
     _retry_delay_seconds,
     _stringify_mapping,
@@ -262,7 +263,6 @@ class ApiStrategy(BaseStrategy):
     ) -> ExtractionResult:
         api_hook = hook if isinstance(hook, ApiHook) else None
         storage_layout = self.storage_layout_factory(plan)
-        raw_writer = self.raw_writer_factory(storage_layout)
         checkpoint_state = self.checkpoint_store.load(plan)
         checkpoint_request_value = _checkpoint_request_value(plan, checkpoint_state)
         base_request = self._build_base_request(plan, checkpoint_state, api_hook)
@@ -336,6 +336,9 @@ class ApiStrategy(BaseStrategy):
         else:
             self.progress_store.clear(plan)
             self.dead_letter_store.clear(plan)
+
+        raw_path_prefix = _raw_run_path_prefix(plan, progress)
+        raw_writer = self.raw_writer_factory(storage_layout).with_raw_path_prefix(raw_path_prefix)
 
         artifacts: list[ExtractedArtifact] = []
         total_records = 0
@@ -489,6 +492,7 @@ class ApiStrategy(BaseStrategy):
                         current_input_index=file_index,
                         progress_store=self.progress_store,
                         prior_artifact_count=len(artifacts),
+                        raw_path_prefix=raw_path_prefix,
                     )
                 else:
                     (
@@ -515,6 +519,7 @@ class ApiStrategy(BaseStrategy):
                         current_input_index=file_index,
                         progress_store=self.progress_store,
                         prior_artifact_count=len(artifacts),
+                        raw_path_prefix=raw_path_prefix,
                     )
             except Exception as exc:
                 if request_input_logger is not None:
@@ -604,6 +609,11 @@ class ApiStrategy(BaseStrategy):
                 "records_extracted": str(total_records),
                 "dead_letter_count": str(dead_letter_count),
                 "dead_letter_skipped_count": str(dead_letter_skip_count),
+                **(
+                    {"raw_path_prefix": str(raw_path_prefix)}
+                    if raw_path_prefix is not None
+                    else {}
+                ),
                 **request_input_metadata,
             },
         )
@@ -636,6 +646,7 @@ class ApiStrategy(BaseStrategy):
         current_input_index: int,
         progress_store: ExtractionProgressStore,
         prior_artifact_count: int = 0,
+        raw_path_prefix: Path | None = None,
     ) -> tuple[list[ExtractedArtifact], int, int, int, str | None]:
         artifacts: list[ExtractedArtifact] = []
         total_records = 0
@@ -692,6 +703,7 @@ class ApiStrategy(BaseStrategy):
                     current_input_key=current_input_key,
                     current_input_index=current_input_index,
                     request_input_count=request_input_count,
+                    raw_path_prefix=str(raw_path_prefix) if raw_path_prefix is not None else None,
                 )
                 pagination_state = processed.next_pagination_state
 
@@ -723,6 +735,7 @@ class ApiStrategy(BaseStrategy):
         current_input_index: int,
         progress_store: ExtractionProgressStore,
         prior_artifact_count: int = 0,
+        raw_path_prefix: Path | None = None,
     ) -> tuple[list[ExtractedArtifact], int, int, int, str | None]:
         concurrency = plan.source_config.access.rate_limit.concurrency
         artifacts: list[ExtractedArtifact] = []
@@ -808,6 +821,7 @@ class ApiStrategy(BaseStrategy):
                     current_input_key=current_input_key,
                     current_input_index=current_input_index,
                     request_input_count=request_input_count,
+                    raw_path_prefix=str(raw_path_prefix) if raw_path_prefix is not None else None,
                 )
                 next_request_index += 1
                 if processed.next_pagination_state is None:

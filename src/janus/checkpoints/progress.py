@@ -36,6 +36,7 @@ class ExtractionProgressStore:
         current_input_key: str | None = None,
         current_input_index: int = 1,
         request_input_count: int = 1,
+        raw_path_prefix: str | None = None,
     ) -> Path:
         """Atomically persist the last successfully processed pagination position."""
         payload: dict[str, Any] = {
@@ -50,6 +51,8 @@ class ExtractionProgressStore:
             "artifact_count": artifact_count,
             "updated_at": datetime.now(tz=UTC).isoformat(),
         }
+        if raw_path_prefix is not None and raw_path_prefix.strip():
+            payload["raw_path_prefix"] = raw_path_prefix.strip()
         if page_number is not None:
             payload["last_page_number"] = page_number
         if offset is not None:

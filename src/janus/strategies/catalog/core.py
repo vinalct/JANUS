@@ -101,6 +101,7 @@ from janus.strategies.common import (
     _max_checkpoint_value,
     _parse_datetime,
     _raw_page_path,
+    _raw_run_path_prefix,
     _request_input_key,
     _retry_delay_seconds,
     _stringify_mapping,
@@ -259,7 +260,6 @@ class CatalogStrategy(BaseStrategy):
     ) -> ExtractionResult:
         catalog_hook = hook if isinstance(hook, CatalogHook) else None
         storage_layout = self.storage_layout_factory(plan)
-        raw_writer = self.raw_writer_factory(storage_layout)
         checkpoint_state = self.checkpoint_store.load(plan)
         base_request = self._build_base_request(plan, checkpoint_state, catalog_hook)
         paginator = build_paginator(plan.source_config.access.pagination)
@@ -317,6 +317,9 @@ class CatalogStrategy(BaseStrategy):
         else:
             self.progress_store.clear(plan)
             self.dead_letter_store.clear(plan)
+
+        raw_path_prefix = _raw_run_path_prefix(plan, progress)
+        raw_writer = self.raw_writer_factory(storage_layout).with_raw_path_prefix(raw_path_prefix)
 
         raw_artifacts: list[ExtractedArtifact] = []
 
@@ -563,6 +566,9 @@ class CatalogStrategy(BaseStrategy):
                             current_input_key=request_input_key,
                             current_input_index=request_input_index,
                             request_input_count=request_input_count,
+                            raw_path_prefix=(
+                                str(raw_path_prefix) if raw_path_prefix is not None else None
+                            ),
                         )
                         pagination_state = next_pagination_state
                 except Exception as exc:
@@ -666,6 +672,11 @@ class CatalogStrategy(BaseStrategy):
                     for entity_type in ENTITY_TYPE_ORDER
                     if normalized_records[entity_type]
                 ) or "none",
+                **(
+                    {"raw_path_prefix": str(raw_path_prefix)}
+                    if raw_path_prefix is not None
+                    else {}
+                ),
             },
         )
         if dead_letter_count > 0:

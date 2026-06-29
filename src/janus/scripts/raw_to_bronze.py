@@ -550,10 +550,11 @@ def _build_extraction_result_from_raw(
             storage_layout,
         )
 
-    raw_artifacts = _rediscover_raw_artifacts(plan)
+    raw_plan = _plan_with_active_raw_root(plan)
+    raw_artifacts = _rediscover_raw_artifacts(raw_plan)
     raw_artifacts = _rehydrate_file_raw_artifacts(
         planned_run,
-        plan,
+        raw_plan,
         raw_artifacts,
         storage_layout,
     )
@@ -563,6 +564,7 @@ def _build_extraction_result_from_raw(
         metadata={
             "raw_to_bronze": "true",
             "rediscovered_raw_artifact_count": str(len(raw_artifacts)),
+            "raw_artifact_root": raw_plan.raw_output.path,
         },
     )
 
@@ -583,6 +585,29 @@ def _rediscover_raw_artifacts(plan: ExecutionPlan) -> tuple[ExtractedArtifact, .
     if not artifacts:
         raise FileNotFoundError(f"No raw artifacts were found under {raw_root}")
     return artifacts
+
+
+def _plan_with_active_raw_root(plan: ExecutionPlan) -> ExecutionPlan:
+    raw_root = Path(plan.raw_output.path)
+    latest_run_root = _latest_raw_run_root(raw_root)
+    if latest_run_root is None:
+        return plan
+    return replace(plan, raw_output=replace(plan.raw_output, path=str(latest_run_root)))
+
+
+def _latest_raw_run_root(raw_root: Path) -> Path | None:
+    runs_root = raw_root / "runs"
+    if not runs_root.exists():
+        return None
+
+    candidates = sorted(
+        path
+        for path in runs_root.glob("ingestion_date=*/run_id=*")
+        if path.is_dir()
+    )
+    if not candidates:
+        return None
+    return candidates[-1]
 
 
 def _rehydrate_file_raw_artifacts(
@@ -708,13 +733,15 @@ def _build_catalog_extraction_result_from_raw(
     if not request_inputs:
         request_inputs = (None,)
 
+    raw_plan = _plan_with_active_raw_root(plan)
+
     raw_artifacts = _rediscover_catalog_raw_artifacts(
-        plan,
+        raw_plan,
         storage_layout,
         request_input_count=len(request_inputs),
     )
     if not raw_artifacts:
-        raise FileNotFoundError(f"No raw artifacts were found under {plan.raw_output.path}")
+        raise FileNotFoundError(f"No raw artifacts were found under {raw_plan.raw_output.path}")
 
     normalized_records = {entity_type: [] for entity_type in ENTITY_TYPE_ORDER}
     entity_indexes: dict[tuple[str, str], int] = {}
@@ -730,7 +757,7 @@ def _build_catalog_extraction_result_from_raw(
         )
         checkpoint_value = _replay_catalog_entities_from_dir(
             strategy,
-            plan,
+            raw_plan,
             storage_layout,
             per_input_request,
             paginator,
@@ -744,7 +771,7 @@ def _build_catalog_extraction_result_from_raw(
 
     raw_writer = RawArtifactWriter(storage_layout)
     normalized_artifacts = strategy._persist_normalized_records(
-        plan,
+        raw_plan,
         raw_writer,
         normalized_records,
     )
@@ -761,6 +788,7 @@ def _build_catalog_extraction_result_from_raw(
             "raw_to_bronze": "true",
             "rediscovered_raw_artifact_count": str(len(raw_artifacts)),
             "normalized_artifact_count": str(normalized_artifact_count),
+            "raw_artifact_root": raw_plan.raw_output.path,
             "organizations_extracted": str(len(normalized_records["organization"])),
             "groups_extracted": str(len(normalized_records["group"])),
             "datasets_extracted": str(len(normalized_records["dataset"])),

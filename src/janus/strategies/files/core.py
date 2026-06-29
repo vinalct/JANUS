@@ -46,6 +46,7 @@ from janus.strategies.common import (
     _freeze_string_mapping,
     _max_checkpoint_value,
     _parse_datetime,
+    _raw_run_path_prefix,
     _retry_delay_seconds,
 )
 from janus.strategies.files.formats import (
@@ -245,8 +246,9 @@ class FileStrategy(BaseStrategy):
         del spark
         file_hook = hook if isinstance(hook, FileHook) else None
         storage_layout = self.storage_layout_factory(plan)
-        raw_writer = self.raw_writer_factory(storage_layout)
         checkpoint_state = self.checkpoint_store.load(plan)
+        raw_path_prefix = _raw_run_path_prefix(plan)
+        raw_writer = self.raw_writer_factory(storage_layout).with_raw_path_prefix(raw_path_prefix)
         logger = self._bind_logger(plan)
         throttle = FileRequestThrottle(
             requests_per_minute=plan.source_config.access.rate_limit.requests_per_minute,
@@ -548,6 +550,7 @@ class FileStrategy(BaseStrategy):
         }
         if resolved_versions:
             extraction_metadata["resolved_versions"] = ",".join(resolved_versions)
+        extraction_metadata["raw_path_prefix"] = str(raw_path_prefix or "")
 
         if logger is not None:
             logger.info(

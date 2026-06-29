@@ -220,12 +220,8 @@ def test_catalog_strategy_page_number_extracts_raw_pages_and_normalized_entities
 
     raw_page_one = Path(result.artifacts[0].path)
     raw_page_two = Path(result.artifacts[1].path)
-    assert raw_page_one == (
-        tmp_path / "runtime" / "raw" / "example" / "catalog_metadata" / "pages" / "page-0001.json"
-    )
-    assert raw_page_two == (
-        tmp_path / "runtime" / "raw" / "example" / "catalog_metadata" / "pages" / "page-0002.json"
-    )
+    assert raw_page_one == _raw_run_dir(tmp_path, "catalog_metadata") / "pages" / "page-0001.json"
+    assert raw_page_two == _raw_run_dir(tmp_path, "catalog_metadata") / "pages" / "page-0002.json"
 
     assert [Path(artifact.path).name for artifact in handoff.artifacts] == [
         "organizations.jsonl",
@@ -235,31 +231,13 @@ def test_catalog_strategy_page_number_extracts_raw_pages_and_normalized_entities
     ]
 
     organization_records = _read_jsonl(
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "catalog_metadata"
-        / "normalized"
-        / "organizations.jsonl"
+        _raw_run_dir(tmp_path, "catalog_metadata") / "normalized" / "organizations.jsonl"
     )
     resource_records = _read_jsonl(
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "catalog_metadata"
-        / "normalized"
-        / "resources.jsonl"
+        _raw_run_dir(tmp_path, "catalog_metadata") / "normalized" / "resources.jsonl"
     )
     dataset_records = _read_jsonl(
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "catalog_metadata"
-        / "normalized"
-        / "datasets.jsonl"
+        _raw_run_dir(tmp_path, "catalog_metadata") / "normalized" / "datasets.jsonl"
     )
 
     assert len(organization_records) == 1
@@ -340,13 +318,7 @@ def test_catalog_strategy_incremental_uses_checkpoint_param_and_filters_old_enti
     assert metadata["resources_extracted"] == "1"
 
     dataset_records = _read_jsonl(
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "catalog_incremental"
-        / "normalized"
-        / "datasets.jsonl"
+        _raw_run_dir(tmp_path, "catalog_incremental") / "normalized" / "datasets.jsonl"
     )
     assert [record["entity_id"] for record in dataset_records] == ["dataset-new"]
 
@@ -392,13 +364,7 @@ def test_catalog_strategy_resource_catalog_uses_resource_root_results_for_handof
     ]
 
     resource_records = _read_jsonl(
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "catalog_resources"
-        / "normalized"
-        / "resources.jsonl"
+        _raw_run_dir(tmp_path, "catalog_resources") / "normalized" / "resources.jsonl"
     )
     assert [record["entity_id"] for record in resource_records] == [
         "resource-1",
@@ -793,6 +759,20 @@ def _pagination_block(pagination_type: str, page_size: int) -> dict[str, Any]:
     return {"type": "none"}
 
 
+def _raw_run_dir(tmp_path: Path, source_id: str, *, run_id: str | None = None) -> Path:
+    resolved_run_id = run_id or f"run-{source_id}"
+    return (
+        tmp_path
+        / "runtime"
+        / "raw"
+        / "example"
+        / source_id
+        / "runs"
+        / "ingestion_date=2026-04-10"
+        / f"run_id={resolved_run_id}"
+    )
+
+
 def _storage_layout(tmp_path: Path) -> StorageLayout:
     return StorageLayout.from_environment_config(
         {
@@ -1081,13 +1061,7 @@ def test_catalog_strategy_dead_letters_failed_request_input_without_partial_enti
         if Path(artifact.path).suffix == ".json"
     ]
     dataset_records = _read_jsonl(
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "catalog_dead_letter"
-        / "normalized"
-        / "datasets.jsonl"
+        _raw_run_dir(tmp_path, "catalog_dead_letter") / "normalized" / "datasets.jsonl"
     )
 
     assert len(transport.requests) == 3
@@ -1146,13 +1120,7 @@ def test_catalog_strategy_continues_after_multiple_dead_letters_within_budget(tm
 
     assert len(transport.requests) == 3
     assert [record["entity_id"] for record in _read_jsonl(
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "catalog_dead_letter_budget"
-        / "normalized"
-        / "datasets.jsonl"
+        _raw_run_dir(tmp_path, "catalog_dead_letter_budget") / "normalized" / "datasets.jsonl"
     )] == ["dataset-gamma"]
     assert result.records_extracted == 1
     assert metadata["dead_letter_count"] == "2"

@@ -242,7 +242,16 @@ def test_ibge_pib_source_extracts_raw_response_and_normalizes_dynamic_dimensions
     raw_artifact = Path(run["extraction_result"].artifacts[0].path)
     normalized_artifact = Path(run["handoff"].artifacts[0].path)
     assert raw_artifact == (
-        tmp_path / "data" / "raw" / "ibge" / "pib_brasil" / "pages" / "response-0001.json"
+        tmp_path
+        / "data"
+        / "raw"
+        / "ibge"
+        / "pib_brasil"
+        / "runs"
+        / "ingestion_date=2026-04-11"
+        / "run_id=run-ibge-pib-001"
+        / "pages"
+        / "response-0001.json"
     )
     assert normalized_artifact == (
         tmp_path
@@ -394,6 +403,9 @@ def test_ibge_agro_source_extracts_alternate_dimension_layout(tmp_path):
         / "raw"
         / "ibge"
         / "agro_abacaxi_pronaf"
+        / "runs"
+        / "ingestion_date=2026-04-11"
+        / "run_id=run-ibge-agro-001"
         / "pages"
         / "response-0001.json"
     )

@@ -323,20 +323,12 @@ def test_api_strategy_request_inputs_bind_date_windows_and_partition_raw_outputs
     assert [query["page_size"] for query in queries] == [["2"], ["2"]]
 
     assert Path(result.artifacts[0].path) == (
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "windowed_source"
+        _raw_run_dir(tmp_path, "windowed_source")
         / "request-input-000001"
         / "page-0001.json"
     )
     assert Path(result.artifacts[1].path) == (
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "windowed_source"
+        _raw_run_dir(tmp_path, "windowed_source")
         / "request-input-000002"
         / "page-0001.json"
     )
@@ -383,13 +375,7 @@ def test_api_strategy_keeps_static_params_backward_compatible_when_request_input
     assert metadata["request_input_count"] == "1"
     assert "bound_parameter_names" not in metadata
     assert Path(result.artifacts[0].path) == (
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "static_param_source"
-        / "pages"
-        / "page-0001.json"
+        _raw_run_dir(tmp_path, "static_param_source") / "pages" / "page-0001.json"
     )
 
 
@@ -451,17 +437,77 @@ def test_api_strategy_page_number_extracts_raw_pages_and_tracks_checkpoint(tmp_p
 
     first_artifact = Path(result.artifacts[0].path)
     second_artifact = Path(result.artifacts[1].path)
-    assert first_artifact == (
-        tmp_path / "runtime" / "raw" / "example" / "page_source" / "pages" / "page-0001.json"
-    )
-    assert second_artifact == (
-        tmp_path / "runtime" / "raw" / "example" / "page_source" / "pages" / "page-0002.json"
-    )
+    assert first_artifact == _raw_run_dir(tmp_path, "page_source") / "pages" / "page-0001.json"
+    assert second_artifact == _raw_run_dir(tmp_path, "page_source") / "pages" / "page-0002.json"
     assert json.loads(first_artifact.read_text(encoding="utf-8"))["records"][0]["id"] == "1"
 
     emitted_metadata = strategy.emit_metadata(plan, result)
     assert emitted_metadata["artifact_count"] == 2
     assert emitted_metadata["pagination_type"] == "page_number"
+
+
+def test_api_strategy_rerun_preserves_previous_raw_payloads(tmp_path):
+    source_config = _build_source_config(
+        tmp_path,
+        source_id="preserved_rerun_source",
+        pagination_type="none",
+        requests_per_minute=None,
+    )
+    first_plan = ExecutionPlan.from_source_config(
+        source_config,
+        RunContext.create(
+            run_id="run-preserved-rerun-001",
+            environment="local",
+            project_root=tmp_path,
+            started_at=datetime(2026, 4, 10, 12, 0, tzinfo=UTC),
+        ),
+    )
+    second_plan = ExecutionPlan.from_source_config(
+        source_config,
+        RunContext.create(
+            run_id="run-preserved-rerun-002",
+            environment="local",
+            project_root=tmp_path,
+            started_at=datetime(2026, 4, 11, 12, 0, tzinfo=UTC),
+        ),
+    )
+
+    first_strategy, _ = _build_strategy(
+        tmp_path,
+        [ResponseSpec(200, {"records": [{"id": "old"}]})],
+    )
+    second_strategy, _ = _build_strategy(
+        tmp_path,
+        [ResponseSpec(200, {"records": [{"id": "new"}]})],
+    )
+
+    first_result = first_strategy.extract(first_plan)
+    second_result = second_strategy.extract(second_plan)
+
+    first_path = Path(first_result.artifacts[0].path)
+    second_path = Path(second_result.artifacts[0].path)
+    assert first_path == (
+        _raw_run_dir(
+            tmp_path,
+            "preserved_rerun_source",
+            ingestion_date="2026-04-10",
+            run_id="run-preserved-rerun-001",
+        )
+        / "pages"
+        / "response-0001.json"
+    )
+    assert second_path == (
+        _raw_run_dir(
+            tmp_path,
+            "preserved_rerun_source",
+            ingestion_date="2026-04-11",
+            run_id="run-preserved-rerun-002",
+        )
+        / "pages"
+        / "response-0001.json"
+    )
+    assert json.loads(first_path.read_text(encoding="utf-8"))["records"][0]["id"] == "old"
+    assert json.loads(second_path.read_text(encoding="utf-8"))["records"][0]["id"] == "new"
 
 
 def test_api_strategy_offset_pagination_reuses_offset_parameters_from_config(tmp_path):
@@ -792,20 +838,12 @@ def test_api_strategy_request_inputs_bind_iceberg_rows_from_runtime_spark(tmp_pa
     assert metadata["upstream_column_names"] == "id"
 
     assert Path(result.artifacts[0].path) == (
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "iceberg_row_source"
+        _raw_run_dir(tmp_path, "iceberg_row_source")
         / "request-input-000001"
         / "page-0001.json"
     )
     assert Path(result.artifacts[1].path) == (
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "iceberg_row_source"
+        _raw_run_dir(tmp_path, "iceberg_row_source")
         / "request-input-000002"
         / "page-0001.json"
     )
@@ -884,20 +922,12 @@ def test_api_strategy_combined_request_inputs_cross_join_iceberg_and_date_window
     assert metadata["upstream_column_names"] == "codigo"
 
     assert Path(result.artifacts[0].path) == (
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "combined_source"
+        _raw_run_dir(tmp_path, "combined_source")
         / "request-input-000001"
         / "page-0001.json"
     )
     assert Path(result.artifacts[3].path) == (
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "combined_source"
+        _raw_run_dir(tmp_path, "combined_source")
         / "request-input-000004"
         / "page-0001.json"
     )
@@ -1110,6 +1140,26 @@ def _pagination_block(pagination_type: str, page_size: int) -> dict[str, Any]:
             "cursor_param": "cursor",
         }
     return {"type": "none"}
+
+
+def _raw_run_dir(
+    tmp_path: Path,
+    source_id: str,
+    *,
+    ingestion_date: str = "2026-04-10",
+    run_id: str | None = None,
+) -> Path:
+    resolved_run_id = run_id or f"run-{source_id}"
+    return (
+        tmp_path
+        / "runtime"
+        / "raw"
+        / "example"
+        / source_id
+        / "runs"
+        / f"ingestion_date={ingestion_date}"
+        / f"run_id={resolved_run_id}"
+    )
 
 
 def _storage_layout(tmp_path: Path) -> StorageLayout:

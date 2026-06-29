@@ -223,6 +223,46 @@ def test_raw_to_bronze_loader_reuses_existing_modules_and_overrides_target_table
     assert result.to_summary()["raw_artifact_count"] == 1
 
 
+def test_raw_to_bronze_loader_uses_latest_run_scoped_raw_root(tmp_path):
+    calls: list[str] = []
+    planned_run = _planned_run(tmp_path, calls)
+    raw_root = tmp_path / "data" / "raw" / "example" / "federal_open_data_example"
+    old_run = raw_root / "runs" / "ingestion_date=2026-04-08" / "run_id=run-old"
+    latest_run = raw_root / "runs" / "ingestion_date=2026-04-09" / "run_id=run-new"
+    old_run.mkdir(parents=True, exist_ok=True)
+    latest_run.mkdir(parents=True, exist_ok=True)
+    (old_run / "page-0001.json").write_text('{"id": "old"}\n', encoding="utf-8")
+    (latest_run / "page-0001.json").write_text('{"id": "new"}\n', encoding="utf-8")
+
+    validation_report = ValidationReport.from_plan(
+        planned_run.plan,
+        [ValidationCheck.passed("output", "materialized_outputs", "ok")],
+    )
+    metadata_root = tmp_path / "data" / "metadata" / "example" / "federal_open_data_example"
+
+    result = RawToBronzeLoader(
+        reader=FakeReader(calls),
+        normalizer=FakeNormalizer(calls),
+        quality_gate=FakeQualityGate(
+            calls,
+            validation_report,
+            metadata_root / "validations" / "run-001.json",
+        ),
+        observer=FakeObserver(calls, metadata_root),
+        writer_factory=lambda storage_layout: FakeWriter(calls),
+        storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
+    ).ingest(
+        planned_run,
+        spark=object(),
+        environment_config={},
+        bronze_table="curated.custom_table",
+    )
+
+    assert result.is_successful is True
+    assert result.extraction_result.artifact_paths == (str(latest_run / "page-0001.json"),)
+    assert result.extraction_result.metadata_as_dict()["raw_artifact_root"] == str(latest_run)
+
+
 def test_artifact_format_inference_uses_file_suffix_before_fallback():
     assert _artifact_format_for_path(Path("page-0001.json"), fallback="csv") == "json"
     assert _artifact_format_for_path(Path("dataset.jsonl"), fallback="json") == "jsonl"

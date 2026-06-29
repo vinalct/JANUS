@@ -172,10 +172,11 @@ def test_transparencia_source_extracts_raw_pages_and_materializes_bronze_and_met
     assert second_query["tamanhoPagina"] == ["2"]
 
     raw_target = storage_layout.resolve_output(plan, "raw")
+    raw_run_prefix = "runs/ingestion_date=2026-04-09/run_id=run-transparencia-001"
     first_artifact = Path(extraction_result.artifacts[0].path)
     second_artifact = Path(extraction_result.artifacts[1].path)
-    assert first_artifact == raw_target.child("pages/page-0001.json")
-    assert second_artifact == raw_target.child("pages/page-0002.json")
+    assert first_artifact == raw_target.child(f"{raw_run_prefix}/pages/page-0001.json")
+    assert second_artifact == raw_target.child(f"{raw_run_prefix}/pages/page-0002.json")
     assert json.loads(first_artifact.read_text(encoding="utf-8")) == _load_fixture(
         "servidores_por_orgao_page_1.json"
     )

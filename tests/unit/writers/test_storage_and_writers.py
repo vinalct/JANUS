@@ -125,6 +125,36 @@ def test_raw_artifact_writer_persists_json_payload_with_checksum(tmp_path):
     assert persisted.write_result.metadata_as_dict()["source"] == "unit-test"
 
 
+def test_raw_artifact_writer_can_scope_raw_payloads_under_a_run_prefix(tmp_path):
+    plan = _build_plan(
+        tmp_path,
+        run_id="run-writer-raw-002",
+        started_at=datetime(2026, 4, 9, 13, 0, tzinfo=UTC),
+    )
+    storage_layout = _build_storage_layout(tmp_path)
+    writer = RawArtifactWriter(
+        storage_layout,
+        raw_path_prefix="runs/ingestion_date=2026-04-09/run_id=run-writer-raw-002",
+    )
+
+    persisted = writer.write_text(plan, "pages/page-0001.txt", "hello")
+
+    persisted_path = Path(persisted.write_result.path)
+    assert persisted_path == (
+        tmp_path
+        / "runtime"
+        / "raw"
+        / "example"
+        / "federal_open_data_example"
+        / "runs"
+        / "ingestion_date=2026-04-09"
+        / "run_id=run-writer-raw-002"
+        / "pages"
+        / "page-0001.txt"
+    )
+    assert persisted_path.read_text(encoding="utf-8") == "hello"
+
+
 def test_spark_dataset_writer_persists_bronze_output_with_normalization_columns(
     spark: SparkSession,
     tmp_path,

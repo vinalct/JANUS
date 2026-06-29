@@ -199,6 +199,24 @@ def test_progress_store_clear_is_safe_when_no_file(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_progress_store_persists_raw_path_prefix_for_resume(tmp_path):
+    plan = _build_plan(tmp_path)
+    store = ExtractionProgressStore()
+
+    store.save(
+        plan,
+        page_number=2,
+        artifact_count=2,
+        raw_path_prefix="runs/ingestion_date=2026-04-14/run_id=run-progress-001",
+    )
+    progress = store.load(plan)
+
+    assert progress is not None
+    assert progress["raw_path_prefix"] == (
+        "runs/ingestion_date=2026-04-14/run_id=run-progress-001"
+    )
+
+
 def test_progress_store_writes_valid_json(tmp_path):
     plan = _build_plan(tmp_path)
     store = ExtractionProgressStore()
