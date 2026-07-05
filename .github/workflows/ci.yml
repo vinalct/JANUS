@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:            # FR-1: manual trigger
+
+jobs:
+  fast:
+    name: Fast gate (lint + unit)
+    runs-on: ubuntu-latest       # NFR-4: GitHub-hosted, not the maintainer's Podman host
+    timeout-minutes: 10          # guardrail; target is <= 3 min p50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.12"   # NFR-1: exact pinned Python
+          cache: pip                   # NFR-3: cache pip downloads (see task 06)
+      - name: Install lint/test tooling (no JVM, no PySpark)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            ruff==0.11.6 \
+            pytest==9.0.2 \
+            PyYAML==6.0.3 \
+            certifi==2026.2.25
+      - name: Lint
+        run: ruff check src tests           # AC-2 / AC-9 — same command as `make lint`
+      - name: Unit tests (Spark tests self-skip)
+        run: pytest tests/unit -ra          # AC-2 — Spark modules importorskip out here
