@@ -14,7 +14,6 @@ from janus.models import (
 )
 from janus.registry import load_registry
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 

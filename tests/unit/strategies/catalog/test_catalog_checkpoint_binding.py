@@ -10,7 +10,6 @@ from janus.strategies.api import ApiRequest
 from janus.strategies.api.request_inputs import ApiParameterBindingError
 from janus.strategies.catalog.core import _apply_per_input_params
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

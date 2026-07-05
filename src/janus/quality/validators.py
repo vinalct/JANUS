@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from janus.models import ExecutionPlan, QualityConfig, WriteResult
 from janus.normalizers import NORMALIZATION_METADATA_COLUMNS
@@ -423,7 +423,9 @@ def validate_materialized_outputs(
                 plan.run_context.project_root,
                 _expected_zone_path(plan, write_result.zone),
             )
-            materialized_path = resolve_project_path(plan.run_context.project_root, write_result.path)
+            materialized_path = resolve_project_path(
+                plan.run_context.project_root, write_result.path
+            )
             if not materialized_path.is_relative_to(expected_root):
                 violations.append(
                     f"{write_result.zone}: path {materialized_path} must stay under {expected_root}"

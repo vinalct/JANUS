@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -20,7 +19,6 @@ from janus.strategies.files.formats import (
     _is_tarball_filename,
     _safe_path_segment,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -106,7 +104,9 @@ def _make_response(retry_after: str | None = None) -> ApiResponse:
 
 
 def test_file_retry_delay_fixed_returns_same_delay_for_all_attempts(tmp_path):
-    plan = _build_plan(tmp_path, retry_backoff_strategy="fixed", retry_backoff_seconds=2, retry_max_attempts=5)
+    plan = _build_plan(
+        tmp_path, retry_backoff_strategy="fixed", retry_backoff_seconds=2, retry_max_attempts=5
+    )
 
     delays = [_retry_delay_seconds(plan, attempt, None) for attempt in range(1, 5)]
 
@@ -119,7 +119,12 @@ def test_file_retry_delay_fixed_returns_same_delay_for_all_attempts(tmp_path):
 
 
 def test_file_retry_delay_exponential_doubles_on_each_attempt(tmp_path):
-    plan = _build_plan(tmp_path, retry_backoff_strategy="exponential", retry_backoff_seconds=2, retry_max_attempts=5)
+    plan = _build_plan(
+        tmp_path,
+        retry_backoff_strategy="exponential",
+        retry_backoff_seconds=2,
+        retry_max_attempts=5,
+    )
 
     assert _retry_delay_seconds(plan, 1, None) == 2.0
     assert _retry_delay_seconds(plan, 2, None) == 4.0
@@ -144,14 +149,24 @@ def test_file_retry_delay_exponential_capped_by_rate_limit_backoff(tmp_path):
 
 
 def test_file_retry_delay_valid_retry_after_extends_delay(tmp_path):
-    plan = _build_plan(tmp_path, retry_backoff_strategy="fixed", retry_backoff_seconds=1, rate_limit_backoff_seconds=60)
+    plan = _build_plan(
+        tmp_path,
+        retry_backoff_strategy="fixed",
+        retry_backoff_seconds=1,
+        rate_limit_backoff_seconds=60,
+    )
     response = _make_response(retry_after="30")
 
     assert _retry_delay_seconds(plan, 1, response) == 30.0
 
 
 def test_file_retry_delay_invalid_retry_after_is_ignored(tmp_path):
-    plan = _build_plan(tmp_path, retry_backoff_strategy="fixed", retry_backoff_seconds=2, rate_limit_backoff_seconds=60)
+    plan = _build_plan(
+        tmp_path,
+        retry_backoff_strategy="fixed",
+        retry_backoff_seconds=2,
+        rate_limit_backoff_seconds=60,
+    )
     response = _make_response(retry_after="not-a-number")
 
     assert _retry_delay_seconds(plan, 1, response) == 2.0
@@ -300,7 +315,10 @@ def test_filename_from_content_disposition_plain():
 
 
 def test_filename_from_content_disposition_encoded():
-    assert _filename_from_content_disposition("attachment; filename*=UTF-8''report%202026.csv") == "report 2026.csv"
+    assert (
+        _filename_from_content_disposition("attachment; filename*=UTF-8''report%202026.csv")
+        == "report 2026.csv"
+    )
 
 
 def test_filename_from_content_disposition_no_match():

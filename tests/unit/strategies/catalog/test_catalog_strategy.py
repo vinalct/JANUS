@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-import pytest
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
+
+import pytest
 
 from janus.checkpoints import CheckpointStore
 from janus.models import ExecutionPlan, RunContext, SourceConfig
@@ -393,7 +394,7 @@ def test_catalog_strategy_retries_on_malformed_payload_then_succeeds(tmp_path):
     def patched_send(request):
         call_count[0] += 1
         if call_count[0] == 1:
-            resp = original_send.__func__.__get__(transport, type(transport)).__call__(request)
+            original_send.__func__.__get__(transport, type(transport)).__call__(request)
             from janus.strategies.api import ApiResponse
 
             return ApiResponse(
@@ -422,7 +423,7 @@ def test_catalog_strategy_retries_on_malformed_payload_exhausts_attempts(tmp_pat
     original_send = transport.send
 
     def patched_send(request):
-        resp = original_send(request)
+        original_send(request)
         from janus.strategies.api import ApiResponse
 
         return ApiResponse(request=request, status_code=200, body=bad_body, headers=())
@@ -430,6 +431,7 @@ def test_catalog_strategy_retries_on_malformed_payload_exhausts_attempts(tmp_pat
     transport.send = patched_send
 
     import pytest
+
     from janus.strategies.catalog import CatalogPayloadError
 
     with pytest.raises(CatalogPayloadError):
@@ -447,8 +449,9 @@ def test_catalog_strategy_checkpoint_as_path_param(tmp_path):
         checkpoint_field="metadata_modified",
         checkpoint_strategy="max_value",
     )
+    from datetime import UTC, datetime
+
     from janus.models import RunContext
-    from datetime import datetime, UTC
 
     run_context = RunContext.create(
         run_id="run-path-param",
@@ -466,7 +469,13 @@ def test_catalog_strategy_checkpoint_as_path_param(tmp_path):
         [
             ResponseSpec(
                 200,
-                {"result": {"results": [{"id": "ds-1", "metadata_modified": "2026-04-10T08:00:00Z"}]}},
+                {
+                    "result": {
+                        "results": [
+                            {"id": "ds-1", "metadata_modified": "2026-04-10T08:00:00Z"}
+                        ]
+                    }
+                },
             )
         ],
     )
@@ -480,9 +489,10 @@ def test_catalog_strategy_checkpoint_as_path_param(tmp_path):
 
 
 def test_catalog_strategy_resume_skips_completed_pages_and_rediscovers_artifacts(tmp_path):
+    from datetime import UTC, datetime
+
     from janus.checkpoints import ExtractionProgressStore
-    from janus.models import RunContext, ExecutionPlan
-    from datetime import datetime, UTC
+    from janus.models import ExecutionPlan, RunContext
 
     source_id = "catalog_resume"
     plan_normal = _build_plan(tmp_path, source_id=source_id, page_size=10)
@@ -536,11 +546,8 @@ def test_catalog_strategy_resume_skips_completed_pages_and_rediscovers_artifacts
 
 
 def test_catalog_strategy_resume_clears_progress_on_success(tmp_path):
-    from janus.checkpoints import ExtractionProgressStore
-
     source_id = "catalog_resume_clear"
     plan = _build_plan(tmp_path, source_id=source_id, page_size=10)
-    progress_store = ExtractionProgressStore()
 
     strategy, _ = _build_strategy(
         tmp_path,
@@ -563,7 +570,7 @@ def _build_source_config_with_url(
     checkpoint_strategy: str = "none",
     lookback_days: int | None = 1,
     dead_letter_max_items: int = 0,
-) -> "SourceConfig":
+) -> SourceConfig:
     return SourceConfig.from_mapping(
         {
             "source_id": source_id,
@@ -915,7 +922,7 @@ def test_catalog_strategy_iceberg_rows_request_inputs_iterates_over_inputs(tmp_p
 
     # Simulate two iceberg_rows contexts — same as load_request_inputs would return
     from unittest.mock import patch
-    from janus.strategies.api.request_inputs import load_request_inputs
+
 
     fake_inputs = ({"entity_id": "alpha"}, {"entity_id": "beta"})
 
@@ -981,7 +988,7 @@ def test_catalog_strategy_request_inputs_query_param_binding(tmp_path):
         "janus.strategies.catalog.core.load_request_inputs",
         return_value=fake_inputs,
     ):
-        result = strategy.extract(plan)
+        strategy.extract(plan)
 
     assert len(transport.requests) == 2
     assert transport.requests[0].params_as_dict().get("organization") == "org-1"
@@ -1128,7 +1135,8 @@ def test_catalog_strategy_continues_after_multiple_dead_letters_within_budget(tm
 
 
 def test_catalog_strategy_emits_no_entity_types_when_no_entities_returned(tmp_path):
-    """Successful request returning no parseable entities still reports an empty entity handoff cleanly."""
+    """Successful request returning no parseable entities still reports an
+    empty entity handoff cleanly."""
     plan = _build_plan(tmp_path, source_id="catalog_empty_parse", pagination_type="none")
     strategy, _ = _build_strategy(
         tmp_path,
@@ -1143,7 +1151,8 @@ def test_catalog_strategy_emits_no_entity_types_when_no_entities_returned(tmp_pa
 
 
 def test_catalog_strategy_emits_entity_counts_for_ambiguous_payload(tmp_path):
-    """Payloads with mixed confidence still emit only the entity artifacts discovered by the shared parser."""
+    """Payloads with mixed confidence still emit only the entity artifacts
+    discovered by the shared parser."""
     plan = _build_plan(tmp_path, source_id="catalog_ambiguous_parse", pagination_type="none")
     strategy, _ = _build_strategy(
         tmp_path,
@@ -1152,7 +1161,12 @@ def test_catalog_strategy_emits_entity_counts_for_ambiguous_payload(tmp_path):
                 200,
                 {
                     "results": [
-                        {"id": "ds-1", "resources": ["r1"], "owner_org": "org-1", "metadata_created": "2026-01-01"},
+                        {
+                            "id": "ds-1",
+                            "resources": ["r1"],
+                            "owner_org": "org-1",
+                            "metadata_created": "2026-01-01",
+                        },
                         {"id": "ds-2", "title": "bare"},  # low confidence — no hint keys
                     ]
                 },
@@ -1193,10 +1207,27 @@ def test_catalog_source_config_rejects_request_inputs_for_file_source(tmp_path):
                     "timeout_seconds": 30,
                     "auth": {"type": "none"},
                     "pagination": {"type": "none"},
-                    "rate_limit": {"requests_per_minute": 10, "concurrency": 1, "backoff_seconds": 1},
-                    "request_inputs": {"type": "iceberg_rows", "namespace": "ns", "table_name": "t", "columns": {"x": "y"}},
+                    "rate_limit": {
+                        "requests_per_minute": 10,
+                        "concurrency": 1,
+                        "backoff_seconds": 1,
+                    },
+                    "request_inputs": {
+                        "type": "iceberg_rows",
+                        "namespace": "ns",
+                        "table_name": "t",
+                        "columns": {"x": "y"},
+                    },
                 },
-                "extraction": {"mode": "full_refresh", "checkpoint_strategy": "none", "retry": {"max_attempts": 1, "backoff_strategy": "fixed", "backoff_seconds": 0}},
+                "extraction": {
+                    "mode": "full_refresh",
+                    "checkpoint_strategy": "none",
+                    "retry": {
+                        "max_attempts": 1,
+                        "backoff_strategy": "fixed",
+                        "backoff_seconds": 0,
+                    },
+                },
                 "schema": {"mode": "infer"},
                 "spark": {"input_format": "csv", "write_mode": "overwrite"},
                 "outputs": {

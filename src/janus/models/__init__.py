@@ -1,9 +1,9 @@
 from janus.models.contracts import (
+    SUPPORTED_OUTPUT_ZONES,
     ExecutionPlan,
     ExtractedArtifact,
     ExtractionResult,
     RunContext,
-    SUPPORTED_OUTPUT_ZONES,
     SourceReference,
     WriteResult,
 )
@@ -14,8 +14,8 @@ from janus.models.source_config import (
     DateWindowRequestInputsConfig,
     ExtractionConfig,
     IcebergRowsRequestInputsConfig,
-    OutputTarget,
     OutputsConfig,
+    OutputTarget,
     PaginationConfig,
     ParameterBinding,
     QualityConfig,
