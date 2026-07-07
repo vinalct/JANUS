@@ -30,3 +30,24 @@ jobs:
         run: ruff check src tests           # AC-2 / AC-9 — same command as `make lint`
       - name: Unit tests (Spark tests self-skip)
         run: pytest tests/unit -ra          # AC-2 — Spark modules importorskip out here
+
+  spark:
+    name: Spark gate (full suite in container)
+    runs-on: ubuntu-latest          # NFR-4: GitHub-hosted docker compose, not the Podman host
+    timeout-minutes: 30             # PRD §5: <= 20 min p50, <= 30 min p95
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build JANUS image           # FR-3 — build the pinned stack from docker/Dockerfile
+        run: docker compose -f docker/docker-compose.yml build janus
+      - name: Full test suite incl. integration (inside container)
+        run: |
+          set -o pipefail                 # without this, tee masks pytest's exit code (FR-4)
+          JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m pytest -ra tests \
+            | tee data/pytest-output.txt
+          # -T disables the pseudo-TTY: matches the Makefile's `exec -T`, avoids the
+          # non-interactive "input device is not a TTY" failure, and keeps control
+          # codes out of pytest-output.txt for the task-04 skip-grep / task-07 coverage.
+      # task 04 appends the "assert zero PySpark skips" step here (FR-6)
+      # task 07 appends --cov flags + coverage upload here (FR-5)
