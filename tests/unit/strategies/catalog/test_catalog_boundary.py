@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Architectural guardrails for the shared catalog strategy boundary.
 
 These tests enforce the rule: the shared catalog core must never branch on
@@ -10,6 +8,8 @@ If any of these tests break it means someone is trying to smuggle
 one-source logic into the shared parsing path — the change should be
 rejected in review and redirected to a bounded hook instead.
 """
+
+from __future__ import annotations
 
 import ast
 import inspect
@@ -193,7 +193,8 @@ def test_normalized_catalog_record_payload_field_carries_original_data():
 
 
 def test_catalog_hook_exposes_transform_payload_for_source_local_shaping():
-    """CatalogHook.transform_payload is the sanctioned entry point for source-local payload mutation."""
+    """CatalogHook.transform_payload is the sanctioned entry point for
+    source-local payload mutation."""
     hook = CatalogHook()
     assert callable(hook.transform_payload), "transform_payload must be callable"
 
@@ -213,7 +214,8 @@ def test_catalog_hook_base_transform_payload_is_identity():
 
 
 def test_catalog_hook_base_page_records_returns_none():
-    """Default CatalogHook.page_records returns None — signals the strategy to use generic counting."""
+    """Default CatalogHook.page_records returns None — signals the strategy to
+    use generic counting."""
     hook = CatalogHook()
     result = hook.page_records(None, None, None, None)  # type: ignore[arg-type]
     assert result is None

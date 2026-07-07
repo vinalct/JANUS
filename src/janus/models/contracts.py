@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Mapping, Self
+from typing import Self
 
 from janus.models.source_config import OutputTarget, SourceConfig
 

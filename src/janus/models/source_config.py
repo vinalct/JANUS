@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Mapping, Self
+from typing import Any, Self
 
 SUPPORTED_SOURCE_TYPES = frozenset({"api", "catalog", "file"})
 SUPPORTED_STRATEGIES = SUPPORTED_SOURCE_TYPES
@@ -695,7 +696,8 @@ def _build_combined_request_inputs_config(
             issues.append(
                 ValidationIssue(
                     sub_prefix,
-                    f"field name(s) {conflicting!r} conflict with another input in this combined config",
+                    f"field name(s) {conflicting!r} conflict with another input "
+                    "in this combined config",
                 )
             )
         seen_fields.update(sub_fields)
@@ -830,7 +832,8 @@ def _validate_parameter_binding_source(
             issues.append(
                 ValidationIssue(
                     field_path,
-                    "must reference one of access.request_inputs.columns when access.request_inputs.type is 'iceberg_rows'",
+                    "must reference one of access.request_inputs.columns when "
+                    "access.request_inputs.type is 'iceberg_rows'",
                 )
             )
             return

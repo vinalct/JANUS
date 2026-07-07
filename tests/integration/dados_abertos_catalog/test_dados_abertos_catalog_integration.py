@@ -330,7 +330,9 @@ def _cloned_source_config(tmp_path: Path, *, page_size: int) -> SourceConfig:
         / "catalog_metadata_schema.json"
     )
 
-    copied_config_path = tmp_path / "conf" / "sources" / "dados_abertos_catalog" / "conjunto_de_dados.yaml"
+    copied_config_path = (
+        tmp_path / "conf" / "sources" / "dados_abertos_catalog" / "conjunto_de_dados.yaml"
+    )
     copied_schema_path = (
         tmp_path
         / "conf"

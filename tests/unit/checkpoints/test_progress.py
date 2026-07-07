@@ -4,8 +4,6 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
-
 from janus.checkpoints.progress import ExtractionProgressStore
 from janus.models import ExecutionPlan, RunContext
 from janus.registry import load_registry
@@ -114,7 +112,10 @@ def test_progress_store_saves_completed_inputs(tmp_path):
     assert progress["completed_inputs"][0]["key"] == completed[0][0]
     assert progress["completed_inputs"][0]["index"] == 1
     assert progress["completed_inputs"][1]["index"] == 2
-    assert progress["current_input_key"] == "orgao_codigo=170010|window_end=2025-03-31|window_start=2025-03-01"
+    assert (
+        progress["current_input_key"]
+        == "orgao_codigo=170010|window_end=2025-03-31|window_start=2025-03-01"
+    )
     assert progress["current_input_index"] == 3
 
 
