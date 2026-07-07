@@ -5,19 +5,19 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:            # FR-1: manual trigger
+  workflow_dispatch:            
 
 jobs:
   fast:
     name: Fast gate (lint + unit)
-    runs-on: ubuntu-latest       # NFR-4: GitHub-hosted, not the maintainer's Podman host
-    timeout-minutes: 10          # guardrail; target is <= 3 min p50
+    runs-on: ubuntu-latest       
+    timeout-minutes: 10          
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13.12"   # NFR-1: exact pinned Python
-          cache: pip                   # NFR-3: cache pip downloads (see task 06)
+          python-version: "3.13.12"  
+          cache: pip                   
       - name: Install lint/test tooling (no JVM, no PySpark)
         run: |
           python -m pip install --upgrade pip
@@ -27,17 +27,17 @@ jobs:
             PyYAML==6.0.3 \
             certifi==2026.2.25
       - name: Lint
-        run: ruff check src tests           # AC-2 / AC-9 — same command as `make lint`
+        run: ruff check src tests          
       - name: Unit tests (Spark tests self-skip)
-        run: pytest tests/unit -ra          # AC-2 — Spark modules importorskip out here
+        run: pytest tests/unit -ra          
 
   spark:
     name: Spark gate (full suite in container)
-    runs-on: ubuntu-latest          # NFR-4: GitHub-hosted docker compose, not the Podman host
-    timeout-minutes: 30             # PRD §5: <= 20 min p50, <= 30 min p95
+    runs-on: ubuntu-latest          
+    timeout-minutes: 30             
     steps:
       - uses: actions/checkout@v4
-      - name: Build JANUS image           # FR-3 — build the pinned stack from docker/Dockerfile
+      - name: Build JANUS image           
         run: docker compose -f docker/docker-compose.yml build janus
       - name: Full test suite incl. integration (inside container)
         run: |
@@ -49,5 +49,16 @@ jobs:
           # -T disables the pseudo-TTY: matches the Makefile's `exec -T`, avoids the
           # non-interactive "input device is not a TTY" failure, and keeps control
           # codes out of pytest-output.txt for the task-04 skip-grep / task-07 coverage.
-      # task 04 appends the "assert zero PySpark skips" step here (FR-6)
-      # task 07 appends --cov flags + coverage upload here (FR-5)
+      - name: Prove PySpark is importable in the image
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -c "import pyspark.sql; print('pyspark', pyspark.__version__)"
+      - name: Assert zero PySpark skips
+        run: |
+          if grep -Eiq "could not import .?pyspark(\.sql)?.?" data/pytest-output.txt; then
+            echo "::error::AC-3 violated — Spark tests were SKIPPED for missing PySpark in the container job."
+            echo "Offending skip lines:"
+            grep -Ein "could not import .?pyspark" data/pytest-output.txt || true
+            exit 1
+          fi
+          echo "OK: no PySpark import skips detected."
