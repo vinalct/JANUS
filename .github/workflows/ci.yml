@@ -41,14 +41,12 @@ jobs:
         run: docker compose -f docker/docker-compose.yml build janus
       - name: Full test suite incl. integration (inside container)
         run: |
-          set -o pipefail                 # without this, tee masks pytest's exit code (FR-4)
+          set -o pipefail               
+          set -o pipefail               
           JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
           docker compose -f docker/docker-compose.yml run --rm -T janus \
             python -m pytest -ra tests \
             | tee data/pytest-output.txt
-          # -T disables the pseudo-TTY: matches the Makefile's `exec -T`, avoids the
-          # non-interactive "input device is not a TTY" failure, and keeps control
-          # codes out of pytest-output.txt for the task-04 skip-grep / task-07 coverage.
       - name: Prove PySpark is importable in the image
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \

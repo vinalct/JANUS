@@ -3,7 +3,8 @@ FROM python:3.13.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
-    JANUS_SYSTEM_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    JANUS_SYSTEM_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    HOME=/tmp
 
 WORKDIR /workspace
 
