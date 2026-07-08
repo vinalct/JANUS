@@ -4,7 +4,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
     JANUS_SYSTEM_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
-    HOME=/tmp
+    HOME=/tmp \
+    JAVA_TOOL_OPTIONS=-Duser.home=/tmp
 
 WORKDIR /workspace
 
