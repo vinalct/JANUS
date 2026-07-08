@@ -37,12 +37,32 @@ jobs:
     timeout-minutes: 30             
     steps:
       - uses: actions/checkout@v4
-      - name: Build JANUS image           
+      - name: Build JANUS image
         run: docker compose -f docker/docker-compose.yml build janus
+      - name: Cache Iceberg runtime jar
+        id: iceberg-jar
+        uses: actions/cache@v4
+        with:
+          path: data/metadata/ivy/jars
+          key: iceberg-runtime-jar-4.0_2.13-1.10.1
+      - name: Fetch Iceberg runtime jar (pinned, offline thereafter)
+        if: steps.iceberg-jar.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          jar_dir="data/metadata/ivy/jars"
+          jar_name="org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
+          url="https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-4.0_2.13/1.10.1/iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
+          mkdir -p "$jar_dir"
+          curl -fSL --retry 3 --retry-delay 5 -o "$jar_dir/$jar_name" "$url"
+      - name: Verify Iceberg runtime jar is present and valid
+        run: |
+          set -euo pipefail
+          jar="data/metadata/ivy/jars/org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
+          test -s "$jar"
+          unzip -tq "$jar" >/dev/null   # jar is a zip; catches truncated/HTML-error downloads
       - name: Full test suite incl. integration (inside container)
         run: |
-          set -o pipefail               
-          set -o pipefail               
+          set -o pipefail
           JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
           docker compose -f docker/docker-compose.yml run --rm -T janus \
             python -m pytest -ra tests \
@@ -60,3 +80,12 @@ jobs:
             exit 1
           fi
           echo "OK: no PySpark import skips detected."
+      - name: Assert the Iceberg writer path actually ran
+        run: |
+          if grep -Eiq "Iceberg runtime jar is not available" data/pytest-output.txt; then
+            echo "::error::AC-3 violated — Iceberg writer/integration tests were SKIPPED for a missing runtime jar."
+            echo "Offending skip lines:"
+            grep -Ein "Iceberg runtime jar is not available" data/pytest-output.txt || true
+            exit 1
+          fi
+          echo "OK: Iceberg runtime jar was present; writer path executed."
