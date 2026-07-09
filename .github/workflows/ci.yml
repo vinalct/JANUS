@@ -24,13 +24,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install \
             ruff==0.11.6 \
+            mypy==2.2.0 \
             pytest==9.0.2 \
             PyYAML==6.0.3 \
             certifi==2026.2.25
       - name: Lint
-        run: ruff check src tests          
+        run: ruff check src tests
+      - name: Type check
+        run: mypy
       - name: Unit tests (Spark tests self-skip)
-        run: pytest tests/unit -ra          
+        run: pytest tests/unit -ra
 
   spark:
     name: Spark gate (full suite in container)
