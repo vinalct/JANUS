@@ -145,11 +145,11 @@ def _collect_sidra_projection_details(
         page_records = normalize_sidra_flat_payload(payload, aggregate_id=_aggregate_id(plan))
         normalized_records.extend(page_records)
         for record in page_records:
-            for attribute in record.get("sidra_attributes", ()):  # type: ignore[arg-type]
+            for attribute in record.get("sidra_attributes", ()):
                 attribute_key = str(attribute.get("key", "")).strip()
                 if attribute_key:
                     attribute_keys.add(attribute_key)
-            for dimension in record.get("sidra_dimensions", ()):  # type: ignore[arg-type]
+            for dimension in record.get("sidra_dimensions", ()):
                 dimension_id = str(dimension.get("id", "")).strip()
                 if dimension_id:
                     dimension_ids.add(dimension_id)

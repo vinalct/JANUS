@@ -6,6 +6,12 @@ JANUS_UID := $(shell id -u)
 JANUS_GID := $(shell id -g)
 JANUS_PROJECT_ROOT := $(CURDIR)
 
+# Iceberg runtime jar is vendored under deps/ (data/metadata/** is ignored) and seeded into the
+# path the Spark session resolves from, so Iceberg never resolves over the network.
+IVY_JAR_NAME := org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar
+IVY_JAR_SRC := deps/$(IVY_JAR_NAME)
+IVY_JAR_DEST_DIR := data/metadata/ivy/jars
+
 DETECT_COMPOSE = if podman compose version >/dev/null 2>&1; then echo 'podman compose'; elif command -v podman-compose >/dev/null 2>&1; then echo podman-compose; elif docker compose version >/dev/null 2>&1; then echo 'docker compose'; elif command -v docker-compose >/dev/null 2>&1; then echo docker-compose; else exit 1; fi
 
 define RUN_COMPOSE
@@ -18,7 +24,14 @@ define RUN_COMPOSE
 	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose up ensure-up down status logs shell pyspark-local lint test run-local run-local-config docker-build docker-run clean
+.PHONY: bootstrap check-compose up ensure-up seed-ivy down status logs shell pyspark-local lint test ci run-local run-local-config docker-build docker-run clean
+
+seed-ivy:
+	@if [ ! -f "$(IVY_JAR_DEST_DIR)/$(IVY_JAR_NAME)" ]; then \
+		echo "Seeding Iceberg runtime jar from $(IVY_JAR_SRC)"; \
+		mkdir -p "$(IVY_JAR_DEST_DIR)"; \
+		cp "$(IVY_JAR_SRC)" "$(IVY_JAR_DEST_DIR)/$(IVY_JAR_NAME)"; \
+	fi
 
 check-compose:
 	@compose_cmd="$$( $(DETECT_COMPOSE) )" || { \
@@ -32,10 +45,10 @@ bootstrap: check-compose
 	$(call RUN_COMPOSE,build $(SERVICE))
 
 # Explicit fresh restart — stops and recreates the container.
-up: check-compose
+up: check-compose seed-ivy
 	$(call RUN_COMPOSE,up -d --force-recreate $(SERVICE))
 
-ensure-up: check-compose
+ensure-up: check-compose seed-ivy
 	$(call RUN_COMPOSE,up -d $(SERVICE))
 
 down: check-compose
@@ -78,6 +91,13 @@ lint: ensure-up
 
 test: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m pytest)
+
+# Reproduce CI locally: same lint + type check + full suite the container CI job runs,
+# in the container so the Spark/Iceberg path is exercised. Keep in lockstep with .github/workflows/ci.yml.
+ci: ensure-up
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m ruff check src tests)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m pytest -ra --cov=janus --cov-report=term-missing)
 
 run-local: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main --environment $(ENVIRONMENT) --with-spark)

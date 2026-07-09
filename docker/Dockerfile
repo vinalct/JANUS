@@ -3,7 +3,8 @@ FROM python:3.13.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
-    JANUS_SYSTEM_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    JANUS_SYSTEM_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    HOME=/tmp
 
 WORKDIR /workspace
 
@@ -25,4 +26,9 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt \
     && python -m pip install --no-deps .
 
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh \
+    && chmod 0666 /etc/passwd
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["python", "-m", "janus.main", "--environment", "local", "--with-spark"]

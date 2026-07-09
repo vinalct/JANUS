@@ -74,7 +74,7 @@ class MaterializedOutput:
         return dict(self.metadata)
 
     def to_dict(self) -> dict[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "zone": self.zone,
             "path": self.path,
             "format": self.format,

@@ -1,5 +1,6 @@
 services:
   janus:
+    image: ${JANUS_IMAGE:-janus:local}
     build:
       context: ..
       dockerfile: docker/Dockerfile

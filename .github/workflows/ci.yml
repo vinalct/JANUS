@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:            
+
+jobs:
+  fast:
+    name: Fast gate (lint + unit)
+    runs-on: ubuntu-latest       
+    timeout-minutes: 10          
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.12"
+          cache: pip                          
+          cache-dependency-path: requirements.txt   
+      - name: Install lint/test tooling (no JVM, no PySpark)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            ruff==0.11.6 \
+            mypy==2.2.0 \
+            pytest==9.0.2 \
+            PyYAML==6.0.3 \
+            certifi==2026.2.25
+      - name: Lint
+        run: ruff check src tests
+      - name: Type check
+        run: mypy
+      - name: Unit tests (Spark tests self-skip)
+        run: pytest tests/unit -ra
+
+  spark:
+    name: Spark gate (full suite in container)
+    runs-on: ubuntu-latest          
+    timeout-minutes: 30             
+    env:
+      IVY_JAR: org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar
+      IVY_JAR_SHA256: 2192a0881ed0f5773b5a83a8820d2b0b2069beec203028643a1c338551007f09
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build JANUS image (buildx GHA layer cache)   
+        uses: docker/build-push-action@v6
+        with:
+          context: .                       
+          file: docker/Dockerfile
+          tags: janus:local                 
+          load: true                        
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Seed Iceberg runtime jar from committed deps/ (no Maven at test time)
+        run: |
+          set -euo pipefail
+          mkdir -p data/metadata/ivy/jars
+          cp "deps/${IVY_JAR}" "data/metadata/ivy/jars/${IVY_JAR}"
+      - name: Verify Iceberg runtime jar is present and valid
+        run: |
+          set -euo pipefail
+          jar="data/metadata/ivy/jars/${IVY_JAR}"
+          test -s "$jar"
+          echo "${IVY_JAR_SHA256}  ${jar}" | sha256sum -c -   
+          unzip -tq "$jar" >/dev/null                         
+      - name: Prove Iceberg jar is visible in-container at test time (no Maven fetch)
+        run: |
+          set -euo pipefail
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            sh -lc "ls -1 data/metadata/ivy/jars/${IVY_JAR}"
+      - name: Full test suite + coverage incl. integration (inside container)
+        run: |
+          set -o pipefail
+          JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
+          docker compose -f docker/docker-compose.yml run --rm -T \
+            -e COVERAGE_FILE=data/.coverage \
+            janus \
+            python -m pytest -ra tests \
+              --cov=janus \
+              --cov-report=term-missing \
+              --cov-report=xml:data/coverage.xml \
+            | tee data/pytest-output.txt
+      - name: Prove PySpark is importable in the image
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -c "import pyspark.sql; print('pyspark', pyspark.__version__)"
+      - name: Assert zero PySpark skips
+        run: |
+          if grep -Eiq "could not import .?pyspark(\.sql)?.?" data/pytest-output.txt; then
+            echo "::error::AC-3 violated — Spark tests were SKIPPED for missing PySpark in the container job."
+            echo "Offending skip lines:"
+            grep -Ein "could not import .?pyspark" data/pytest-output.txt || true
+            exit 1
+          fi
+          echo "OK: no PySpark import skips detected."
+      - name: Assert the Iceberg writer path actually ran
+        run: |
+          if grep -Eiq "Iceberg runtime jar is not available" data/pytest-output.txt; then
+            echo "::error::AC-3 violated — Iceberg writer/integration tests were SKIPPED for a missing runtime jar."
+            echo "Offending skip lines:"
+            grep -Ein "Iceberg runtime jar is not available" data/pytest-output.txt || true
+            exit 1
+          fi
+          echo "OK: Iceberg runtime jar was present; writer path executed."
+      - name: Coverage summary (inside container)
+        if: always()
+        run: |
+          set -o pipefail
+          JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
+          docker compose -f docker/docker-compose.yml run --rm -T \
+            -e COVERAGE_FILE=data/.coverage \
+            janus \
+            python -m coverage report \
+            | tee data/coverage-summary.txt
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            data/coverage.xml
+            data/coverage-summary.txt
+          if-no-files-found: warn

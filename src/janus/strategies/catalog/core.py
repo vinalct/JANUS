@@ -402,7 +402,10 @@ class CatalogStrategy(BaseStrategy):
                 request_input_total_attempts = 0
                 request_input_page_record_total = 0
 
+                pagination_state: PaginationState | None
                 if is_resuming:
+                    # is_resuming implies progress was loaded (see its definition above).
+                    assert progress is not None
                     pre_artifacts = _rediscover_catalog_raw_artifacts(
                         plan, storage_layout, progress, request_input_index, request_input_count
                     )
