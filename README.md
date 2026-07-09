@@ -3,6 +3,8 @@
 
 # JANUS
 
+[![CI](https://github.com/vinalct/janus/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/vinalct/janus/actions/workflows/ci.yml)
+
 JANUS is a metadata-driven Apache Spark framework for ingesting Brazilian federal open data in a reproducible, safe, and extensible way.
 
 In simple terms, it helps turn public datasets published as APIs, catalogs, and bulk files into repeatable, traceable data products. Technically, it combines typed YAML source contracts, a planner, strategy families (`api`, `catalog`, `file`), optional narrow hooks, Spark normalization, and metadata, checkpoint, lineage, and validation persistence.
