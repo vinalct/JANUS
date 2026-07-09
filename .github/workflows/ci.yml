@@ -16,8 +16,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13.12"  
-          cache: pip                   
+          python-version: "3.13.12"
+          cache: pip                          
+          cache-dependency-path: requirements.txt   
       - name: Install lint/test tooling (no JVM, no PySpark)
         run: |
           python -m pip install --upgrade pip
@@ -35,31 +36,41 @@ jobs:
     name: Spark gate (full suite in container)
     runs-on: ubuntu-latest          
     timeout-minutes: 30             
+    env:
+      IVY_JAR: org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar
+      IVY_JAR_SHA256: 2192a0881ed0f5773b5a83a8820d2b0b2069beec203028643a1c338551007f09
     steps:
       - uses: actions/checkout@v4
-      - name: Build JANUS image
-        run: docker compose -f docker/docker-compose.yml build janus
-      - name: Cache Iceberg runtime jar
-        id: iceberg-jar
-        uses: actions/cache@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build JANUS image (buildx layer cache)  
+        uses: docker/bake-action@v5
         with:
-          path: data/metadata/ivy/jars
-          key: iceberg-runtime-jar-4.0_2.13-1.10.1
-      - name: Fetch Iceberg runtime jar (pinned, offline thereafter)
-        if: steps.iceberg-jar.outputs.cache-hit != 'true'
+          files: docker/docker-compose.yml
+          targets: janus
+          load: true                                   
+          set: |
+            janus.cache-from=type=gha
+            janus.cache-to=type=gha,mode=max
+      - name: Seed Iceberg runtime jar from committed deps/ (no Maven at test time)
         run: |
           set -euo pipefail
-          jar_dir="data/metadata/ivy/jars"
-          jar_name="org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
-          url="https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-spark-runtime-4.0_2.13/1.10.1/iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
-          mkdir -p "$jar_dir"
-          curl -fSL --retry 3 --retry-delay 5 -o "$jar_dir/$jar_name" "$url"
+          # NFR-3 / PRD §9 rows 1-2: resolve Iceberg from the in-repo jar, never from the network.
+          # deps/ is committed (data/metadata/** is intentionally ignored), so seed the path the
+          # Spark session and tests read from — the `data/` bind mount then exposes it in-container.
+          mkdir -p data/metadata/ivy/jars
+          cp "deps/${IVY_JAR}" "data/metadata/ivy/jars/${IVY_JAR}"
       - name: Verify Iceberg runtime jar is present and valid
         run: |
           set -euo pipefail
-          jar="data/metadata/ivy/jars/org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
+          jar="data/metadata/ivy/jars/${IVY_JAR}"
           test -s "$jar"
-          unzip -tq "$jar" >/dev/null   # jar is a zip; catches truncated/HTML-error downloads
+          echo "${IVY_JAR_SHA256}  ${jar}" | sha256sum -c -   # committed bytes, not a mutated download
+          unzip -tq "$jar" >/dev/null                          # jar is a zip; catches corruption
+      - name: Prove Iceberg jar is visible in-container at test time (no Maven fetch)
+        run: |
+          set -euo pipefail
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            sh -lc "ls -1 data/metadata/ivy/jars/${IVY_JAR}"
       - name: Full test suite incl. integration (inside container)
         run: |
           set -o pipefail
