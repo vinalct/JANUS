@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Self, overload
 
 SUPPORTED_SOURCE_TYPES = frozenset({"api", "catalog", "file"})
 SUPPORTED_STRATEGIES = SUPPORTED_SOURCE_TYPES
@@ -1171,6 +1171,29 @@ def _optional_enum(
     return _require_enum(data, field_name, allowed_values, issues, prefix)
 
 
+@overload
+def _optional_int(
+    data: Mapping[str, Any],
+    field_name: str,
+    issues: list[ValidationIssue],
+    prefix: str | None = ...,
+    *,
+    default: int,
+    minimum: int | None = ...,
+) -> int: ...
+
+
+@overload
+def _optional_int(
+    data: Mapping[str, Any],
+    field_name: str,
+    issues: list[ValidationIssue],
+    prefix: str | None = ...,
+    default: None = ...,
+    minimum: int | None = ...,
+) -> int | None: ...
+
+
 def _optional_int(
     data: Mapping[str, Any],
     field_name: str,
@@ -1179,7 +1202,11 @@ def _optional_int(
     default: int | None = None,
     minimum: int | None = None,
 ) -> int | None:
-    """Read an optional integer field and enforce a minimum when one is provided."""
+    """Read an optional integer field and enforce a minimum when one is provided.
+
+    A non-``None`` ``default`` guarantees a non-``None`` result, which the overloads
+    above express so callers assigning to a required ``int`` field type-check cleanly.
+    """
     if field_name not in data or data[field_name] is None:
         return default
 

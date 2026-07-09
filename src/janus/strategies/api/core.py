@@ -11,7 +11,7 @@ from datetime import timedelta
 from hashlib import sha256
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, TypeGuard
 from urllib.parse import urljoin
 
 from janus.checkpoints import (
@@ -450,6 +450,8 @@ class ApiStrategy(BaseStrategy):
             pagination_state = paginator.initial_state(request_input_base_request)
 
             if is_resuming:
+                # is_resuming implies progress was loaded (see its definition above).
+                assert progress is not None
                 pre_artifacts = _rediscover_raw_artifacts(
                     plan, storage_layout, progress, file_index, request_input_count
                 )
@@ -1294,7 +1296,7 @@ def _checkpoint_request_value(
 def _supports_concurrent_pagination(
     paginator: Any,
     concurrency: int,
-) -> bool:
+) -> TypeGuard[PageNumberPaginator | OffsetPaginator]:
     return concurrency > 1 and isinstance(paginator, PageNumberPaginator | OffsetPaginator)
 
 

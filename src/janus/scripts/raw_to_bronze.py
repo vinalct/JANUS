@@ -743,7 +743,9 @@ def _build_catalog_extraction_result_from_raw(
     if not raw_artifacts:
         raise FileNotFoundError(f"No raw artifacts were found under {raw_plan.raw_output.path}")
 
-    normalized_records = {entity_type: [] for entity_type in ENTITY_TYPE_ORDER}
+    normalized_records: dict[str, list[dict[str, Any]]] = {
+        entity_type: [] for entity_type in ENTITY_TYPE_ORDER
+    }
     entity_indexes: dict[tuple[str, str], int] = {}
     paginator = build_paginator(plan.source_config.access.pagination)
     base_request = _catalog_base_request(plan)

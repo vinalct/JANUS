@@ -19,7 +19,7 @@ def resolve_schema_path_for_plan(plan: ExecutionPlan) -> Path | None:
     if configured_path.is_absolute():
         return configured_path
 
-    runtime_path = resolve_project_path(plan.run_context.project_root, configured_path)
+    runtime_path = resolve_project_path(plan.run_context.project_root, str(configured_path))
     if runtime_path.exists():
         return runtime_path
 
