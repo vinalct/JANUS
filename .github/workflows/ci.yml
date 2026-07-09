@@ -42,15 +42,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build JANUS image (buildx layer cache)  
-        uses: docker/bake-action@v5
+      - name: Build JANUS image (buildx GHA layer cache)   
+        uses: docker/build-push-action@v6
         with:
-          files: docker/docker-compose.yml
-          targets: janus
-          load: true                                   
-          set: |
-            janus.cache-from=type=gha
-            janus.cache-to=type=gha,mode=max
+          context: .                       
+          file: docker/Dockerfile
+          tags: janus:local                 
+          load: true                        
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: Seed Iceberg runtime jar from committed deps/ (no Maven at test time)
         run: |
           set -euo pipefail
