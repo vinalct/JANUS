@@ -210,7 +210,11 @@ def _rebalance_for_write(
 def _partition_clause(partition_columns: tuple[str, ...]) -> str:
     if not partition_columns:
         return ""
-    rendered_columns = ", ".join(_quote_identifier(column) for column in partition_columns)
+    # AC-5 PROOF: deliberate Iceberg-writer regression - partition the bronze CTAS
+    # by a non-existent column so the write fails. REVERT before merge; main never carries this.
+    rendered_columns = ", ".join(
+        _quote_identifier(f"{column}_nonexistent") for column in partition_columns
+    )
     return f"PARTITIONED BY ({rendered_columns})"
 
 
