@@ -54,9 +54,6 @@ jobs:
       - name: Seed Iceberg runtime jar from committed deps/ (no Maven at test time)
         run: |
           set -euo pipefail
-          # NFR-3 / PRD §9 rows 1-2: resolve Iceberg from the in-repo jar, never from the network.
-          # deps/ is committed (data/metadata/** is intentionally ignored), so seed the path the
-          # Spark session and tests read from — the `data/` bind mount then exposes it in-container.
           mkdir -p data/metadata/ivy/jars
           cp "deps/${IVY_JAR}" "data/metadata/ivy/jars/${IVY_JAR}"
       - name: Verify Iceberg runtime jar is present and valid
@@ -64,19 +61,24 @@ jobs:
           set -euo pipefail
           jar="data/metadata/ivy/jars/${IVY_JAR}"
           test -s "$jar"
-          echo "${IVY_JAR_SHA256}  ${jar}" | sha256sum -c -   # committed bytes, not a mutated download
-          unzip -tq "$jar" >/dev/null                          # jar is a zip; catches corruption
+          echo "${IVY_JAR_SHA256}  ${jar}" | sha256sum -c -   
+          unzip -tq "$jar" >/dev/null                         
       - name: Prove Iceberg jar is visible in-container at test time (no Maven fetch)
         run: |
           set -euo pipefail
           docker compose -f docker/docker-compose.yml run --rm -T janus \
             sh -lc "ls -1 data/metadata/ivy/jars/${IVY_JAR}"
-      - name: Full test suite incl. integration (inside container)
+      - name: Full test suite + coverage incl. integration (inside container)
         run: |
           set -o pipefail
           JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
-          docker compose -f docker/docker-compose.yml run --rm -T janus \
+          docker compose -f docker/docker-compose.yml run --rm -T \
+            -e COVERAGE_FILE=data/.coverage \
+            janus \
             python -m pytest -ra tests \
+              --cov=janus \
+              --cov-report=term-missing \
+              --cov-report=xml:data/coverage.xml \
             | tee data/pytest-output.txt
       - name: Prove PySpark is importable in the image
         run: |
@@ -100,3 +102,22 @@ jobs:
             exit 1
           fi
           echo "OK: Iceberg runtime jar was present; writer path executed."
+      - name: Coverage summary (inside container)
+        if: always()
+        run: |
+          set -o pipefail
+          JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
+          docker compose -f docker/docker-compose.yml run --rm -T \
+            -e COVERAGE_FILE=data/.coverage \
+            janus \
+            python -m coverage report \
+            | tee data/coverage-summary.txt
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            data/coverage.xml
+            data/coverage-summary.txt
+          if-no-files-found: warn
