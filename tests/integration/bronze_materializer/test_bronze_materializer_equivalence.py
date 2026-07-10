@@ -177,13 +177,6 @@ def test_file_family_replay_bronze_matches_live_rows_schema_and_partitions(
     assert len(_bronze_results(executed.write_results)) == 2
 
 
-@pytest.mark.xfail(
-    reason=(
-        "PRD order-02 §3.1: _FILE_HANDOFF_ARTIFACTS_PER_BATCH diverged "
-        "(executor.py=5, raw_to_bronze.py=1); converges in M3"
-    ),
-    strict=True,
-)
 def test_file_family_replay_bronze_commit_count_matches_live(file_family_runs):
     executed, ingested = file_family_runs
 
