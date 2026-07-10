@@ -59,3 +59,25 @@ python -m pip install \
 
 ruff check src tests && mypy && pytest tests/unit -ra
 ```
+
+## Licensing and contribution terms
+
+JANUS is released under the [Apache License 2.0](LICENSE). By contributing, you
+agree that your contributions are licensed under the same terms.
+
+We use the **Developer Certificate of Origin (DCO)**: you certify that you wrote
+the contribution or otherwise have the right to submit it under the project's
+license. Sign off each commit with the `-s` flag, which appends a
+`Signed-off-by` trailer with your real name and email:
+
+```bash
+git commit -s -m "your message"
+```
+
+By signing off, you certify the [DCO 1.1](https://developercertificate.org/).
+
+Do not submit code you do not have the right to license (e.g. copied from a
+GPL/AGPL project, or work owned by an employer or academic institution under an
+IP-assignment clause) — it cannot be accepted. If a project entity is later
+formed, contributors may be asked to accept a Contributor License Agreement
+(CLA) so the terms can be administered centrally.
