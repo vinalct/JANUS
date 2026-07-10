@@ -1,3 +1,12 @@
+"""Replay entry point: re-materialize bronze from an existing raw zone.
+
+`RawToBronzeLoader` owns only raw rehydration — rediscovering raw artifacts on
+disk and rebuilding the `ExtractionResult` the live run would have produced.
+The write path itself (batch -> read -> normalize -> write) is delegated to
+`janus.runtime.materialize.BronzeMaterializer`, the same component the live
+executor uses, so replaying raw produces the same bronze as `--execute`.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
