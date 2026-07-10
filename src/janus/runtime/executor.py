@@ -13,20 +13,15 @@ from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, QualityGate, ValidationReportStore
 from janus.readers import SparkDatasetReader
 from janus.runtime.materialize import (
-    _FILE_HANDOFF_ARTIFACTS_PER_BATCH,
-    _batch_log_metadata,
+    BronzeMaterializer,
     _bind_execution_logger,
     _default_storage_layout,
     _log_error,
     _log_exception,
     _log_info,
-    _normalization_handoff_batches,
     _quality_failure_message,
     _raw_write_results,
-    _should_count_records_for_handoff,
-    _write_mode_for_batch,
 )
-from janus.schema_contracts import resolve_spark_schema_for_plan
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout
 from janus.writers import SparkDatasetWriter
@@ -211,7 +206,12 @@ class SourceExecutor:
 
             normalized_dataframe = None
             if not handoff.is_empty:
-                bronze_results, normalized_dataframe = self._write_handoff_to_bronze(
+                materializer = BronzeMaterializer(
+                    reader=self.reader,
+                    normalizer=self.normalizer,
+                    writer_factory=self.writer_factory,
+                )
+                bronze_results, normalized_dataframe = materializer.materialize(
                     runtime_planned_run,
                     plan,
                     spark,
@@ -312,105 +312,6 @@ class SourceExecutor:
                 failure_reason=str(exc),
                 error_type=type(exc).__name__,
             )
-
-    def _write_handoff_to_bronze(
-        self,
-        planned_run: PlannedRun,
-        plan: ExecutionPlan,
-        spark: SparkSession,
-        handoff: ExtractionResult,
-        storage_layout: StorageLayout,
-        logger: StructuredLogger | None,
-    ) -> tuple[tuple[WriteResult, ...], Any | None]:
-        batches = _normalization_handoff_batches(planned_run, handoff)
-        if len(batches) > 1:
-            _log_info(
-                logger,
-                "bronze_write_batches_started",
-                batch_count=len(batches),
-                handoff_artifact_count=len(handoff.artifacts),
-                batch_artifact_limit=_FILE_HANDOFF_ARTIFACTS_PER_BATCH,
-            )
-
-        writer = self.writer_factory(storage_layout)
-        bronze_results: list[WriteResult] = []
-        normalized_dataframe = None
-        for batch_index, batch_artifacts in enumerate(batches, start=1):
-            batch_handoff = replace(handoff, artifacts=batch_artifacts).with_metadata(
-                "normalization_artifact_count",
-                str(len(batch_artifacts)),
-            )
-            batch_metadata = _batch_log_metadata(
-                batch_index,
-                len(batches),
-                batch_artifacts,
-            )
-
-            _log_info(
-                logger,
-                "spark_read_started",
-                artifact_count=len(batch_artifacts),
-                **batch_metadata,
-            )
-            handoff_format = batch_handoff.single_artifact_format()
-            spark_schema = (
-                resolve_spark_schema_for_plan(plan)
-                if handoff_format == plan.source_config.spark.input_format
-                else None
-            )
-            read_options = (
-                plan.source_config.spark.read_options
-                if handoff_format == plan.source_config.spark.input_format
-                else None
-            )
-            raw_dataframe = self.reader.read_extraction_result(
-                spark,
-                batch_handoff,
-                format_name=handoff_format,
-                schema=spark_schema,
-                options=read_options,
-            )
-            _log_info(logger, "spark_read_finished", **batch_metadata)
-
-            _log_info(logger, "normalization_started", **batch_metadata)
-            normalized_dataframe = self.normalizer.normalize(raw_dataframe, plan)
-            _log_info(logger, "normalization_finished", **batch_metadata)
-
-            write_mode = _write_mode_for_batch(plan, batch_index)
-            _log_info(
-                logger,
-                "bronze_write_started",
-                bronze_output_path=plan.bronze_output.path,
-                write_mode=write_mode,
-                **batch_metadata,
-            )
-            bronze_result = writer.write(
-                normalized_dataframe,
-                plan,
-                "bronze",
-                mode=write_mode,
-                count_records=_should_count_records_for_handoff(planned_run),
-            )
-            bronze_results.append(bronze_result)
-            _log_info(
-                logger,
-                "bronze_write_finished",
-                path=bronze_result.path,
-                format=bronze_result.format,
-                mode=bronze_result.mode,
-                records_written=bronze_result.records_written,
-                partition_by=list(bronze_result.partition_by),
-                **batch_metadata,
-            )
-
-        if len(batches) > 1:
-            _log_info(
-                logger,
-                "bronze_write_batches_finished",
-                batch_count=len(batches),
-                materialized_output_count=len(bronze_results),
-            )
-        return tuple(bronze_results), normalized_dataframe
 
 
 def _attach_strategy_logger(strategy: Any, logger: StructuredLogger | None) -> None:
