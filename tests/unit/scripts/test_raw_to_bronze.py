@@ -547,14 +547,11 @@ def test_file_raw_to_bronze_writes_handoff_artifacts_in_append_batches(tmp_path)
 
     raw_root = tmp_path / "data" / "raw" / "receita_federal" / "cnpj" / "empresas"
     raw_root.mkdir(parents=True, exist_ok=True)
-    (raw_root / "part-000.csv").write_text(
-        "12345678;ACME LTDA;2062;49;1000,00;01;\n",
-        encoding="utf-8",
-    )
-    (raw_root / "part-001.csv").write_text(
-        "23456789;BRAVO LTDA;2062;49;2000,00;01;\n",
-        encoding="utf-8",
-    )
+    for part_index in range(6):
+        (raw_root / f"part-{part_index:03d}.csv").write_text(
+            f"1234567{part_index};EMPRESA {part_index:02d} LTDA;2062;49;1000,00;01;\n",
+            encoding="utf-8",
+        )
 
     validation_report = ValidationReport.from_plan(
         planned_run.plan,
@@ -584,7 +581,7 @@ def test_file_raw_to_bronze_writes_handoff_artifacts_in_append_batches(tmp_path)
     )
 
     assert result.is_successful is True
-    assert reader.read_artifact_counts == [1, 1]
+    assert reader.read_artifact_counts == [5, 1]
     assert writer.modes == ["overwrite", "append"]
     assert [write.mode for write in result.write_results if write.zone == "bronze"] == [
         "overwrite",
