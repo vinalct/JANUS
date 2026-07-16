@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from janus.strategies.api.http import ApiTransportError, AuthResolutionError
+from janus.strategies.http import ApiTransportError, AuthResolutionError
 
 from .conftest import (
     CountingThrottle,

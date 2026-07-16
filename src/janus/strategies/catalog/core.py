@@ -27,16 +27,8 @@ from janus.models import (
     WriteResult,
 )
 from janus.strategies.api import (
-    ApiClient,
-    ApiRequest,
-    ApiResponse,
-    ApiTransport,
-    ApiTransportError,
-    AuthResolutionError,
     PaginationState,
-    UrllibApiTransport,
     build_paginator,
-    inject_auth,
 )
 from janus.strategies.api.pagination import _resume_pagination_state
 from janus.strategies.api.request_inputs import (
@@ -105,6 +97,16 @@ from janus.strategies.common import (
     _request_input_key,
     _retry_delay_seconds,
     _stringify_mapping,
+)
+from janus.strategies.http import (
+    ApiClient,
+    ApiRequest,
+    ApiResponse,
+    ApiTransport,
+    ApiTransportError,
+    AuthResolutionError,
+    UrllibApiTransport,
+    inject_auth,
 )
 from janus.utils.logging import StructuredLogger, redact_url
 from janus.utils.storage import StorageLayout

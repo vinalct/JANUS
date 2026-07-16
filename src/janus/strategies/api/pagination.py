@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from janus.models import PaginationConfig
-
-from .http import ApiRequest
+from janus.strategies.http import ApiRequest
 
 _CURSOR_HINT_KEYS = ("next_cursor", "nextCursor", "cursor")
 _CURSOR_CONTAINER_KEYS = ("meta", "metadata", "pagination")

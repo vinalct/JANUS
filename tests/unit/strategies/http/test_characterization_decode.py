@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from janus.strategies.api.http import ApiResponse
+from janus.strategies.http import ApiResponse
 
 from .conftest import FAMILIES, build_plan, build_strategy, make_request
 

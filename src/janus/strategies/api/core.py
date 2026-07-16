@@ -43,11 +43,7 @@ from janus.strategies.common import (
     _retry_delay_seconds,
     _stringify_mapping,
 )
-from janus.utils.logging import StructuredLogger, redact_url
-from janus.utils.storage import StorageLayout
-from janus.writers import RawArtifactWriter
-
-from .http import (
+from janus.strategies.http import (
     ApiClient,
     ApiRequest,
     ApiResponse,
@@ -57,6 +53,10 @@ from .http import (
     UrllibApiTransport,
     inject_auth,
 )
+from janus.utils.logging import StructuredLogger, redact_url
+from janus.utils.storage import StorageLayout
+from janus.writers import RawArtifactWriter
+
 from .pagination import (
     OffsetPaginator,
     PageNumberPaginator,

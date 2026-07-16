@@ -29,16 +29,6 @@ from janus.models import (
     SourceConfig,
     WriteResult,
 )
-from janus.strategies.api import (
-    ApiClient,
-    ApiRequest,
-    ApiResponse,
-    ApiTransport,
-    ApiTransportError,
-    AuthResolutionError,
-    UrllibApiTransport,
-    inject_auth,
-)
 from janus.strategies.base import BaseStrategy, SourceHook
 from janus.strategies.common import (
     _compare_checkpoint_values,
@@ -57,6 +47,16 @@ from janus.strategies.files.formats import (
     _infer_format_name,
     _is_tarball_filename,
     _safe_path_segment,
+)
+from janus.strategies.http import (
+    ApiClient,
+    ApiRequest,
+    ApiResponse,
+    ApiTransport,
+    ApiTransportError,
+    AuthResolutionError,
+    UrllibApiTransport,
+    inject_auth,
 )
 from janus.utils.environment import resolve_project_path
 from janus.utils.logging import StructuredLogger, redact_url

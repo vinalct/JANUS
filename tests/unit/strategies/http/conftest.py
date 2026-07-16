@@ -22,7 +22,7 @@ import janus.strategies.api.core as api_core
 import janus.strategies.catalog.core as catalog_core
 import janus.strategies.files.core as files_core
 from janus.models import ExecutionPlan, RunContext, SourceConfig
-from janus.strategies.api.http import ApiClient, ApiRequest, ApiResponse
+from janus.strategies.http import ApiClient, ApiRequest, ApiResponse
 from janus.utils.logging import StructuredLogger, build_structured_logger
 
 # ---------------------------------------------------------------------------
