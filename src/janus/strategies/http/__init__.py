@@ -7,6 +7,12 @@ families already share; later tasks add the throttle, retry loop, decoder, and
 binding helpers here so the import idiom stays uniform.
 """
 
+from janus.strategies.http.errors import HttpStrategyError
+from janus.strategies.http.retry import (
+    RETRYABLE_STATUS_CODES,
+    RetryErrorPolicy,
+    send_with_retries,
+)
 from janus.strategies.http.throttle import HttpRequestThrottle
 from janus.strategies.http.transport import (
     ApiClient,
@@ -20,6 +26,7 @@ from janus.strategies.http.transport import (
 )
 
 __all__ = [
+    "RETRYABLE_STATUS_CODES",
     "ApiClient",
     "ApiRequest",
     "ApiResponse",
@@ -27,6 +34,9 @@ __all__ = [
     "ApiTransportError",
     "AuthResolutionError",
     "HttpRequestThrottle",
+    "HttpStrategyError",
+    "RetryErrorPolicy",
     "UrllibApiTransport",
     "inject_auth",
+    "send_with_retries",
 ]

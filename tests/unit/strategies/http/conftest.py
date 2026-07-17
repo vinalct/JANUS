@@ -11,6 +11,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from io import StringIO
 from itertools import count
 from pathlib import Path
@@ -22,7 +23,14 @@ import janus.strategies.api.core as api_core
 import janus.strategies.catalog.core as catalog_core
 import janus.strategies.files.core as files_core
 from janus.models import ExecutionPlan, RunContext, SourceConfig
-from janus.strategies.http import ApiClient, ApiRequest, ApiResponse, HttpRequestThrottle
+from janus.strategies.http import (
+    RETRYABLE_STATUS_CODES,
+    ApiClient,
+    ApiRequest,
+    ApiResponse,
+    HttpRequestThrottle,
+    send_with_retries,
+)
 from janus.utils.logging import StructuredLogger, build_structured_logger
 
 # ---------------------------------------------------------------------------
@@ -61,12 +69,31 @@ class BindingUnderTest:
     resolve_url_missing_base_message: str
 
 
-def _send_via_strategy_method(strategy, plan, client, request, throttle, logger):
-    return strategy._send_with_retries(plan, client, request, throttle, logger)
-
-
 def _decode_via_strategy_method(strategy, plan, response):
     return strategy._decode_payload(plan, response)
+
+
+def _shared_send_via(core, *, decode_via, payload_error):
+
+    def send(strategy, plan, client, request, throttle, logger):
+        decode = partial(decode_via, strategy, plan) if decode_via is not None else None
+        payload_error_types = (payload_error,) if decode_via is not None else ()
+        response, payload, attempts = send_with_retries(
+            plan,
+            client,
+            request,
+            throttle,
+            logger,
+            policy=core._RETRY_POLICY,
+            sleeper=strategy.sleeper,
+            decode=decode,
+            payload_error_types=payload_error_types,
+        )
+        if decode is None:
+            return response, attempts
+        return response, payload, attempts
+
+    return send
 
 
 FAMILIES: dict[str, FamilyUnderTest] = {
@@ -74,7 +101,7 @@ FAMILIES: dict[str, FamilyUnderTest] = {
         name="api",
         strategy_cls=api_core.ApiStrategy,
         throttle_cls=HttpRequestThrottle,
-        retryable_status_codes=api_core.RETRYABLE_STATUS_CODES,
+        retryable_status_codes=RETRYABLE_STATUS_CODES,
         transport_exhaustion_error=api_core.ApiStrategyError,
         response_error=api_core.ApiResponseError,
         payload_error=api_core.ApiPayloadError,
@@ -84,14 +111,18 @@ FAMILIES: dict[str, FamilyUnderTest] = {
         status_error_message=(
             lambda status, url: f"API request failed with status {status} for {url}"
         ),
-        send_with_retries=_send_via_strategy_method,
+        send_with_retries=_shared_send_via(
+            api_core,
+            decode_via=_decode_via_strategy_method,
+            payload_error=api_core.ApiPayloadError,
+        ),
         decode_payload=_decode_via_strategy_method,
     ),
     "catalog": FamilyUnderTest(
         name="catalog",
         strategy_cls=catalog_core.CatalogStrategy,
         throttle_cls=HttpRequestThrottle,
-        retryable_status_codes=catalog_core.RETRYABLE_STATUS_CODES,
+        retryable_status_codes=RETRYABLE_STATUS_CODES,
         transport_exhaustion_error=catalog_core.CatalogStrategyError,
         response_error=catalog_core.CatalogResponseError,
         payload_error=catalog_core.CatalogPayloadError,
@@ -101,14 +132,18 @@ FAMILIES: dict[str, FamilyUnderTest] = {
         status_error_message=(
             lambda status, url: f"Catalog request failed with status {status} for {url}"
         ),
-        send_with_retries=_send_via_strategy_method,
+        send_with_retries=_shared_send_via(
+            catalog_core,
+            decode_via=_decode_via_strategy_method,
+            payload_error=catalog_core.CatalogPayloadError,
+        ),
         decode_payload=_decode_via_strategy_method,
     ),
     "file": FamilyUnderTest(
         name="file",
         strategy_cls=files_core.FileStrategy,
         throttle_cls=HttpRequestThrottle,
-        retryable_status_codes=files_core.RETRYABLE_STATUS_CODES,
+        retryable_status_codes=RETRYABLE_STATUS_CODES,
         transport_exhaustion_error=files_core.FileDownloadError,
         response_error=files_core.FileDownloadError,
         payload_error=None,
@@ -118,7 +153,7 @@ FAMILIES: dict[str, FamilyUnderTest] = {
         status_error_message=(
             lambda status, url: f"File request failed with status {status} for {url}"
         ),
-        send_with_retries=_send_via_strategy_method,
+        send_with_retries=_shared_send_via(files_core, decode_via=None, payload_error=None),
         decode_payload=None,
     ),
 }

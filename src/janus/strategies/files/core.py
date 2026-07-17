@@ -37,7 +37,6 @@ from janus.strategies.common import (
     _max_checkpoint_value,
     _parse_datetime,
     _raw_run_path_prefix,
-    _retry_delay_seconds,
 )
 from janus.strategies.files.formats import (
     ARCHIVE_FILE_SUFFIXES,
@@ -53,23 +52,23 @@ from janus.strategies.http import (
     ApiRequest,
     ApiResponse,
     ApiTransport,
-    ApiTransportError,
-    AuthResolutionError,
     HttpRequestThrottle,
+    HttpStrategyError,
+    RetryErrorPolicy,
     UrllibApiTransport,
     inject_auth,
+    send_with_retries,
 )
 from janus.utils.environment import resolve_project_path
 from janus.utils.logging import StructuredLogger, redact_url
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 
-RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 CHECKSUM_HEADER_CANDIDATES = ("x-checksum-sha256", "x-amz-checksum-sha256")
 VERSION_TOKEN_PATTERN = re.compile(r"(\d{4}(?:[-_]\d{2}(?:[-_]\d{2})?)?)")
 
 
-class FileStrategyError(RuntimeError):
+class FileStrategyError(HttpStrategyError):
     """Base failure for file-strategy execution."""
 
 
@@ -87,6 +86,20 @@ class FileIntegrityError(FileStrategyError):
 
 class ArchiveExtractionError(FileStrategyError):
     """Raised when an archive payload cannot be expanded safely."""
+
+
+def _file_response_error(response: ApiResponse) -> FileDownloadError:
+    return FileDownloadError(
+        "File request failed with status "
+        f"{response.status_code} for {redact_url(response.request.full_url())}"
+    )
+
+
+_RETRY_POLICY = RetryErrorPolicy(
+    transport_error_factory=FileDownloadError,
+    response_error_factory=_file_response_error,
+    retry_log_event="file_retry_scheduled",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -808,72 +821,16 @@ class FileStrategy(BaseStrategy):
             plan.source_config.access.auth,
             env_reader=self._resolve_env_var,
         )
-        response, attempts_used = self._send_with_retries(
+        response, _payload, attempts_used = send_with_retries(
             plan,
             client,
             request,
             throttle,
             logger,
+            policy=_RETRY_POLICY,
+            sleeper=self.sleeper,
         )
         return response.body, response, attempts_used
-
-    def _send_with_retries(
-        self,
-        plan: ExecutionPlan,
-        client: ApiClient,
-        request: ApiRequest,
-        throttle: HttpRequestThrottle,
-        logger: StructuredLogger | None,
-    ) -> tuple[ApiResponse, int]:
-        retry_config = plan.source_config.extraction.retry
-        last_error: Exception | None = None
-
-        for attempt in range(1, retry_config.max_attempts + 1):
-            throttle.wait_for_turn()
-            try:
-                response = client.send(request)
-            except (ApiTransportError, AuthResolutionError) as exc:
-                last_error = exc
-                if attempt == retry_config.max_attempts:
-                    raise FileDownloadError(str(exc)) from exc
-                self._sleep_for_retry(plan, attempt, response=None, logger=logger)
-                continue
-
-            if 200 <= response.status_code < 300:
-                return response, attempt
-
-            if (
-                response.status_code not in RETRYABLE_STATUS_CODES
-                or attempt == retry_config.max_attempts
-            ):
-                raise FileDownloadError(
-                    "File request failed with status "
-                    f"{response.status_code} for {redact_url(response.request.full_url())}"
-                )
-
-            self._sleep_for_retry(plan, attempt, response=response, logger=logger)
-
-        if last_error is not None:
-            raise FileDownloadError(str(last_error)) from last_error
-        raise FileDownloadError("Retry loop exited without a response or error")
-
-    def _sleep_for_retry(
-        self,
-        plan: ExecutionPlan,
-        attempt: int,
-        *,
-        response: ApiResponse | None,
-        logger: StructuredLogger | None,
-    ) -> None:
-        delay = _retry_delay_seconds(plan, attempt, response)
-        if logger is not None:
-            logger.warning(
-                "file_retry_scheduled",
-                attempt=attempt,
-                delay_seconds=delay,
-                status_code=response.status_code if response is not None else None,
-            )
-        self.sleeper(delay)
 
     def _resolve_version(
         self,

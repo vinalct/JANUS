@@ -95,7 +95,6 @@ from janus.strategies.common import (
     _raw_page_path,
     _raw_run_path_prefix,
     _request_input_key,
-    _retry_delay_seconds,
     _stringify_mapping,
 )
 from janus.strategies.http import (
@@ -103,22 +102,22 @@ from janus.strategies.http import (
     ApiRequest,
     ApiResponse,
     ApiTransport,
-    ApiTransportError,
-    AuthResolutionError,
     HttpRequestThrottle,
+    HttpStrategyError,
+    RetryErrorPolicy,
     UrllibApiTransport,
     inject_auth,
+    send_with_retries,
 )
 from janus.utils.logging import StructuredLogger, redact_url
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 
-RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 SUPPORTED_CATALOG_PAYLOAD_FORMATS = frozenset({"json"})
 SUPPORTED_CATALOG_INPUT_FORMATS = frozenset({"jsonl"})
 
 
-class CatalogStrategyError(RuntimeError):
+class CatalogStrategyError(HttpStrategyError):
     """Base failure for metadata/catalog strategy execution."""
 
 
@@ -136,6 +135,13 @@ class CatalogResponseError(CatalogStrategyError):
 
 class CatalogPayloadError(CatalogStrategyError):
     """Raised when a catalog payload cannot be decoded or traversed safely."""
+
+
+_RETRY_POLICY = RetryErrorPolicy(
+    transport_error_factory=CatalogStrategyError,
+    response_error_factory=CatalogResponseError,
+    retry_log_event="catalog_retry_scheduled",
+)
 
 
 class CatalogHook(SourceHook):
@@ -426,12 +432,16 @@ class CatalogStrategy(BaseStrategy):
                                 request_url=request.full_url(),
                             )
 
-                        response, payload, attempts_used = self._send_with_retries(
+                        response, payload, attempts_used = send_with_retries(
                             plan,
                             client,
                             request,
                             throttle,
                             logger,
+                            policy=_RETRY_POLICY,
+                            sleeper=self.sleeper,
+                            decode=lambda response: self._decode_payload(plan, response),
+                            payload_error_types=(CatalogPayloadError,),
                         )
                         request_input_total_attempts += attempts_used
                         request_input_successful_requests += 1
@@ -769,68 +779,6 @@ class CatalogStrategy(BaseStrategy):
             if query_checkpoint_params:
                 request = request.with_params(query_checkpoint_params)
         return request
-
-    def _send_with_retries(
-        self,
-        plan: ExecutionPlan,
-        client: ApiClient,
-        request: ApiRequest,
-        throttle: HttpRequestThrottle,
-        logger: StructuredLogger | None,
-    ) -> tuple[ApiResponse, Any, int]:
-        retry_config = plan.source_config.extraction.retry
-        last_transport_error: Exception | None = None
-
-        for attempt in range(1, retry_config.max_attempts + 1):
-            throttle.wait_for_turn()
-            try:
-                response = client.send(request)
-            except (ApiTransportError, AuthResolutionError) as exc:
-                last_transport_error = exc
-                if attempt == retry_config.max_attempts:
-                    raise CatalogStrategyError(str(exc)) from exc
-                self._sleep_for_retry(plan, attempt, response=None, logger=logger)
-                continue
-
-            if 200 <= response.status_code < 300:
-                try:
-                    payload = self._decode_payload(plan, response)
-                except CatalogPayloadError:
-                    if attempt == retry_config.max_attempts:
-                        raise
-                    self._sleep_for_retry(plan, attempt, response=response, logger=logger)
-                    continue
-                return response, payload, attempt
-
-            if (
-                response.status_code not in RETRYABLE_STATUS_CODES
-                or attempt == retry_config.max_attempts
-            ):
-                raise CatalogResponseError(response)
-
-            self._sleep_for_retry(plan, attempt, response=response, logger=logger)
-
-        if last_transport_error is not None:
-            raise CatalogStrategyError(str(last_transport_error)) from last_transport_error
-        raise CatalogStrategyError("Retry loop exited without a response or error")
-
-    def _sleep_for_retry(
-        self,
-        plan: ExecutionPlan,
-        attempt: int,
-        *,
-        response: ApiResponse | None,
-        logger: StructuredLogger | None,
-    ) -> None:
-        delay = _retry_delay_seconds(plan, attempt, response)
-        if logger is not None:
-            logger.warning(
-                "catalog_retry_scheduled",
-                attempt=attempt,
-                delay_seconds=delay,
-                status_code=response.status_code if response is not None else None,
-            )
-        self.sleeper(delay)
 
     def _decode_payload(self, plan: ExecutionPlan, response: ApiResponse) -> Any:
         if plan.source_config.access.format != "json":

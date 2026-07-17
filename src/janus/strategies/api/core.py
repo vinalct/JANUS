@@ -39,7 +39,6 @@ from janus.strategies.common import (
     _raw_page_path,
     _raw_run_path_prefix,
     _request_input_key,
-    _retry_delay_seconds,
     _stringify_mapping,
 )
 from janus.strategies.http import (
@@ -47,11 +46,12 @@ from janus.strategies.http import (
     ApiRequest,
     ApiResponse,
     ApiTransport,
-    ApiTransportError,
-    AuthResolutionError,
     HttpRequestThrottle,
+    HttpStrategyError,
+    RetryErrorPolicy,
     UrllibApiTransport,
     inject_auth,
+    send_with_retries,
 )
 from janus.utils.logging import StructuredLogger, redact_url
 from janus.utils.storage import StorageLayout
@@ -73,7 +73,6 @@ from .request_inputs import (
 )
 
 SUPPORTED_API_PAYLOAD_FORMATS = frozenset({"binary", "json", "jsonl", "text"})
-RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 RAW_FILE_SUFFIXES = {
     "binary": ".bin",
     "json": ".json",
@@ -83,7 +82,7 @@ RAW_FILE_SUFFIXES = {
 DEFAULT_RECORD_KEYS = ("records", "items", "results", "data", "value")
 
 
-class ApiStrategyError(RuntimeError):
+class ApiStrategyError(HttpStrategyError):
     """Base failure for API strategy execution."""
 
 
@@ -101,6 +100,13 @@ class ApiResponseError(ApiStrategyError):
 
 class ApiPayloadError(ApiStrategyError):
     """Raised when the configured payload format cannot be decoded."""
+
+
+_RETRY_POLICY = RetryErrorPolicy(
+    transport_error_factory=ApiStrategyError,
+    response_error_factory=ApiResponseError,
+    retry_log_event="api_retry_scheduled",
+)
 
 
 class ApiHook(SourceHook):
@@ -639,7 +645,7 @@ class ApiStrategy(BaseStrategy):
                     checkpoint_state=checkpoint_state,
                     logger=logger,
                 )
-                response, payload, attempts_used = self._send_with_retries(
+                response, payload, attempts_used = self._send_request(
                     plan,
                     client,
                     request,
@@ -935,15 +941,9 @@ class ApiStrategy(BaseStrategy):
         logger: StructuredLogger | None,
     ) -> tuple[ApiResponse, Any, int]:
         with ApiClient(self.transport_factory()) as client:
-            return self._send_with_retries(
-                plan,
-                client,
-                request,
-                throttle,
-                logger,
-            )
+            return self._send_request(plan, client, request, throttle, logger)
 
-    def _send_with_retries(
+    def _send_request(
         self,
         plan: ExecutionPlan,
         client: ApiClient,
@@ -951,41 +951,17 @@ class ApiStrategy(BaseStrategy):
         throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
     ) -> tuple[ApiResponse, Any, int]:
-        retry_config = plan.source_config.extraction.retry
-        last_transport_error: Exception | None = None
-
-        for attempt in range(1, retry_config.max_attempts + 1):
-            throttle.wait_for_turn()
-            try:
-                response = client.send(request)
-            except (ApiTransportError, AuthResolutionError) as exc:
-                last_transport_error = exc
-                if attempt == retry_config.max_attempts:
-                    raise ApiStrategyError(str(exc)) from exc
-                self._sleep_for_retry(plan, attempt, response=None, logger=logger)
-                continue
-
-            if 200 <= response.status_code < 300:
-                try:
-                    payload = self._decode_payload(plan, response)
-                except ApiPayloadError:
-                    if attempt == retry_config.max_attempts:
-                        raise
-                    self._sleep_for_retry(plan, attempt, response=response, logger=logger)
-                    continue
-                return response, payload, attempt
-
-            if (
-                response.status_code not in RETRYABLE_STATUS_CODES
-                or attempt == retry_config.max_attempts
-            ):
-                raise ApiResponseError(response)
-
-            self._sleep_for_retry(plan, attempt, response=response, logger=logger)
-
-        if last_transport_error is not None:
-            raise ApiStrategyError(str(last_transport_error)) from last_transport_error
-        raise ApiStrategyError("Retry loop exited without a response or error")
+        return send_with_retries(
+            plan,
+            client,
+            request,
+            throttle,
+            logger,
+            policy=_RETRY_POLICY,
+            sleeper=self.sleeper,
+            decode=lambda response: self._decode_payload(plan, response),
+            payload_error_types=(ApiPayloadError,),
+        )
 
     def _process_response(
         self,
@@ -1068,24 +1044,6 @@ class ApiStrategy(BaseStrategy):
             checkpoint_value=resolved_checkpoint_value,
             next_pagination_state=next_pagination_state,
         )
-
-    def _sleep_for_retry(
-        self,
-        plan: ExecutionPlan,
-        attempt: int,
-        *,
-        response: ApiResponse | None,
-        logger: StructuredLogger | None,
-    ) -> None:
-        delay = _retry_delay_seconds(plan, attempt, response)
-        if logger is not None:
-            logger.warning(
-                "api_retry_scheduled",
-                attempt=attempt,
-                delay_seconds=delay,
-                status_code=response.status_code if response is not None else None,
-            )
-        self.sleeper(delay)
 
     def _decode_payload(self, plan: ExecutionPlan, response: ApiResponse) -> Any:
         format_name = plan.source_config.access.format
