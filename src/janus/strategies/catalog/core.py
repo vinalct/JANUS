@@ -104,8 +104,10 @@ from janus.strategies.http import (
     ApiTransport,
     HttpRequestThrottle,
     HttpStrategyError,
+    PayloadDecodeError,
     RetryErrorPolicy,
     UrllibApiTransport,
+    decode_payload,
     inject_auth,
     send_with_retries,
 )
@@ -781,17 +783,16 @@ class CatalogStrategy(BaseStrategy):
         return request
 
     def _decode_payload(self, plan: ExecutionPlan, response: ApiResponse) -> Any:
-        if plan.source_config.access.format != "json":
-            raise CatalogPayloadError(
-                f"Unsupported catalog payload format: {plan.source_config.access.format}"
-            )
-
         try:
-            return response.json()
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise CatalogPayloadError(
-                f"Failed to decode catalog payload from {redact_url(response.request.full_url())}"
-            ) from exc
+            return decode_payload(
+                plan.source_config.access.format,
+                response,
+                allowed_formats=frozenset({"json"}),
+                family_label="catalog",
+                failure_label="catalog",
+            )
+        except PayloadDecodeError as exc:
+            raise CatalogPayloadError(str(exc)) from exc.__cause__
 
     def _persist_raw_payload(
         self,

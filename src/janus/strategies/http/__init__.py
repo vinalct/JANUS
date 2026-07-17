@@ -8,6 +8,11 @@ binding helpers here so the import idiom stays uniform.
 """
 
 from janus.strategies.http.errors import HttpStrategyError
+from janus.strategies.http.payload import (
+    ALL_PAYLOAD_FORMATS,
+    PayloadDecodeError,
+    decode_payload,
+)
 from janus.strategies.http.retry import (
     RETRYABLE_STATUS_CODES,
     RetryErrorPolicy,
@@ -26,6 +31,7 @@ from janus.strategies.http.transport import (
 )
 
 __all__ = [
+    "ALL_PAYLOAD_FORMATS",
     "RETRYABLE_STATUS_CODES",
     "ApiClient",
     "ApiRequest",
@@ -35,8 +41,10 @@ __all__ = [
     "AuthResolutionError",
     "HttpRequestThrottle",
     "HttpStrategyError",
+    "PayloadDecodeError",
     "RetryErrorPolicy",
     "UrllibApiTransport",
+    "decode_payload",
     "inject_auth",
     "send_with_retries",
 ]

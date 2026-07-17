@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import time
@@ -48,8 +47,10 @@ from janus.strategies.http import (
     ApiTransport,
     HttpRequestThrottle,
     HttpStrategyError,
+    PayloadDecodeError,
     RetryErrorPolicy,
     UrllibApiTransport,
+    decode_payload,
     inject_auth,
     send_with_retries,
 )
@@ -1046,26 +1047,14 @@ class ApiStrategy(BaseStrategy):
         )
 
     def _decode_payload(self, plan: ExecutionPlan, response: ApiResponse) -> Any:
-        format_name = plan.source_config.access.format
         try:
-            if format_name == "binary":
-                return response.body
-            if format_name == "text":
-                return response.text()
-            if format_name == "json":
-                return response.json()
-            if format_name == "jsonl":
-                text = response.text()
-                if not text.strip():
-                    return []
-                return [json.loads(line) for line in text.splitlines() if line.strip()]
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ApiPayloadError(
-                "Failed to decode "
-                f"{format_name} payload from {redact_url(response.request.full_url())}"
-            ) from exc
-
-        raise ApiPayloadError(f"Unsupported API payload format: {format_name}")
+            return decode_payload(
+                plan.source_config.access.format,
+                response,
+                family_label="API",
+            )
+        except PayloadDecodeError as exc:
+            raise ApiPayloadError(str(exc)) from exc.__cause__
 
     def _extract_records(
         self,
