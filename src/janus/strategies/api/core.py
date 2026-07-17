@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from hashlib import sha256
 from pathlib import Path
-from threading import Lock
 from typing import Any, TypeGuard
 from urllib.parse import urljoin
 
@@ -50,6 +49,7 @@ from janus.strategies.http import (
     ApiTransport,
     ApiTransportError,
     AuthResolutionError,
+    HttpRequestThrottle,
     UrllibApiTransport,
     inject_auth,
 )
@@ -177,33 +177,6 @@ class ApiHook(SourceHook):
         return None
 
 
-@dataclass(slots=True)
-class ApiRequestThrottle:
-    """Thread-safe request pacing aligned with JANUS safe defaults."""
-
-    requests_per_minute: int | None
-    clock: Callable[[], float]
-    sleeper: Callable[[float], None]
-    _next_allowed_at: float | None = None
-    _lock: Lock = field(default_factory=Lock, init=False, repr=False)
-
-    def wait_for_turn(self) -> None:
-        if self.requests_per_minute is None:
-            return
-
-        interval_seconds = 60 / self.requests_per_minute
-        with self._lock:
-            now = self.clock()
-            scheduled_at = now
-            if self._next_allowed_at is not None and now < self._next_allowed_at:
-                scheduled_at = self._next_allowed_at
-            self._next_allowed_at = scheduled_at + interval_seconds
-
-        delay = scheduled_at - now
-        if delay > 0:
-            self.sleeper(delay)
-
-
 @dataclass(frozen=True, slots=True)
 class SubmittedApiRequest:
     pagination_state: PaginationState
@@ -267,7 +240,7 @@ class ApiStrategy(BaseStrategy):
         checkpoint_request_value = _checkpoint_request_value(plan, checkpoint_state)
         base_request = self._build_base_request(plan, checkpoint_state, api_hook)
         paginator = build_paginator(plan.source_config.access.pagination)
-        throttle = ApiRequestThrottle(
+        throttle = HttpRequestThrottle(
             requests_per_minute=plan.source_config.access.rate_limit.requests_per_minute,
             clock=self.clock,
             sleeper=self.sleeper,
@@ -639,7 +612,7 @@ class ApiStrategy(BaseStrategy):
         checkpoint_state: CheckpointState | None,
         checkpoint_value: str | None,
         raw_writer: RawArtifactWriter,
-        throttle: ApiRequestThrottle,
+        throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
         request_input_index: int,
         request_input_count: int,
@@ -728,7 +701,7 @@ class ApiStrategy(BaseStrategy):
         checkpoint_state: CheckpointState | None,
         checkpoint_value: str | None,
         raw_writer: RawArtifactWriter,
-        throttle: ApiRequestThrottle,
+        throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
         request_input_index: int,
         request_input_count: int,
@@ -958,7 +931,7 @@ class ApiStrategy(BaseStrategy):
         self,
         plan: ExecutionPlan,
         request: ApiRequest,
-        throttle: ApiRequestThrottle,
+        throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
     ) -> tuple[ApiResponse, Any, int]:
         with ApiClient(self.transport_factory()) as client:
@@ -975,7 +948,7 @@ class ApiStrategy(BaseStrategy):
         plan: ExecutionPlan,
         client: ApiClient,
         request: ApiRequest,
-        throttle: ApiRequestThrottle,
+        throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
     ) -> tuple[ApiResponse, Any, int]:
         retry_config = plan.source_config.extraction.retry

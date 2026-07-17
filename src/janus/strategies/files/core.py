@@ -55,6 +55,7 @@ from janus.strategies.http import (
     ApiTransport,
     ApiTransportError,
     AuthResolutionError,
+    HttpRequestThrottle,
     UrllibApiTransport,
     inject_auth,
 )
@@ -182,27 +183,6 @@ class FileHook(SourceHook):
 
 
 @dataclass(slots=True)
-class FileRequestThrottle:
-    """Single-threaded rate limiter reused for remote file downloads."""
-
-    requests_per_minute: int | None
-    clock: Callable[[], float]
-    sleeper: Callable[[float], None]
-    _next_allowed_at: float | None = None
-
-    def wait_for_turn(self) -> None:
-        if self.requests_per_minute is None:
-            return
-
-        interval_seconds = 60 / self.requests_per_minute
-        now = self.clock()
-        if self._next_allowed_at is not None and now < self._next_allowed_at:
-            self.sleeper(self._next_allowed_at - now)
-            now = self._next_allowed_at
-        self._next_allowed_at = now + interval_seconds
-
-
-@dataclass(slots=True)
 class FileStrategy(BaseStrategy):
     """Reusable bulk-file strategy for public datasets delivered as files or archives."""
 
@@ -250,7 +230,7 @@ class FileStrategy(BaseStrategy):
         raw_path_prefix = _raw_run_path_prefix(plan)
         raw_writer = self.raw_writer_factory(storage_layout).with_raw_path_prefix(raw_path_prefix)
         logger = self._bind_logger(plan)
-        throttle = FileRequestThrottle(
+        throttle = HttpRequestThrottle(
             requests_per_minute=plan.source_config.access.rate_limit.requests_per_minute,
             clock=self.clock,
             sleeper=self.sleeper,
@@ -810,7 +790,7 @@ class FileStrategy(BaseStrategy):
         discovered_file: DiscoveredFile,
         *,
         client: ApiClient,
-        throttle: FileRequestThrottle,
+        throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
     ) -> tuple[bytes, ApiResponse | None, int]:
         if discovered_file.source_kind == "local":
@@ -842,7 +822,7 @@ class FileStrategy(BaseStrategy):
         plan: ExecutionPlan,
         client: ApiClient,
         request: ApiRequest,
-        throttle: FileRequestThrottle,
+        throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
     ) -> tuple[ApiResponse, int]:
         retry_config = plan.source_config.extraction.retry

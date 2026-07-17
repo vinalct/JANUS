@@ -22,7 +22,7 @@ import janus.strategies.api.core as api_core
 import janus.strategies.catalog.core as catalog_core
 import janus.strategies.files.core as files_core
 from janus.models import ExecutionPlan, RunContext, SourceConfig
-from janus.strategies.http import ApiClient, ApiRequest, ApiResponse
+from janus.strategies.http import ApiClient, ApiRequest, ApiResponse, HttpRequestThrottle
 from janus.utils.logging import StructuredLogger, build_structured_logger
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ FAMILIES: dict[str, FamilyUnderTest] = {
     "api": FamilyUnderTest(
         name="api",
         strategy_cls=api_core.ApiStrategy,
-        throttle_cls=api_core.ApiRequestThrottle,
+        throttle_cls=HttpRequestThrottle,
         retryable_status_codes=api_core.RETRYABLE_STATUS_CODES,
         transport_exhaustion_error=api_core.ApiStrategyError,
         response_error=api_core.ApiResponseError,
@@ -90,7 +90,7 @@ FAMILIES: dict[str, FamilyUnderTest] = {
     "catalog": FamilyUnderTest(
         name="catalog",
         strategy_cls=catalog_core.CatalogStrategy,
-        throttle_cls=catalog_core.CatalogRequestThrottle,
+        throttle_cls=HttpRequestThrottle,
         retryable_status_codes=catalog_core.RETRYABLE_STATUS_CODES,
         transport_exhaustion_error=catalog_core.CatalogStrategyError,
         response_error=catalog_core.CatalogResponseError,
@@ -107,7 +107,7 @@ FAMILIES: dict[str, FamilyUnderTest] = {
     "file": FamilyUnderTest(
         name="file",
         strategy_cls=files_core.FileStrategy,
-        throttle_cls=files_core.FileRequestThrottle,
+        throttle_cls=HttpRequestThrottle,
         retryable_status_codes=files_core.RETRYABLE_STATUS_CODES,
         transport_exhaustion_error=files_core.FileDownloadError,
         response_error=files_core.FileDownloadError,

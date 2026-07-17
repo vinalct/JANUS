@@ -7,6 +7,7 @@ families already share; later tasks add the throttle, retry loop, decoder, and
 binding helpers here so the import idiom stays uniform.
 """
 
+from janus.strategies.http.throttle import HttpRequestThrottle
 from janus.strategies.http.transport import (
     ApiClient,
     ApiRequest,
@@ -25,6 +26,7 @@ __all__ = [
     "ApiTransport",
     "ApiTransportError",
     "AuthResolutionError",
+    "HttpRequestThrottle",
     "UrllibApiTransport",
     "inject_auth",
 ]

@@ -105,6 +105,7 @@ from janus.strategies.http import (
     ApiTransport,
     ApiTransportError,
     AuthResolutionError,
+    HttpRequestThrottle,
     UrllibApiTransport,
     inject_auth,
 )
@@ -198,27 +199,6 @@ class CatalogHook(SourceHook):
         return None
 
 @dataclass(slots=True)
-class CatalogRequestThrottle:
-    """Single-threaded request throttle reused by metadata/catalog requests."""
-
-    requests_per_minute: int | None
-    clock: Callable[[], float]
-    sleeper: Callable[[float], None]
-    _next_allowed_at: float | None = None
-
-    def wait_for_turn(self) -> None:
-        if self.requests_per_minute is None:
-            return
-
-        interval_seconds = 60 / self.requests_per_minute
-        now = self.clock()
-        if self._next_allowed_at is not None and now < self._next_allowed_at:
-            self.sleeper(self._next_allowed_at - now)
-            now = self._next_allowed_at
-        self._next_allowed_at = now + interval_seconds
-
-
-@dataclass(slots=True)
 class CatalogStrategy(BaseStrategy):
     """Reusable metadata-first strategy for public dataset catalogs."""
 
@@ -265,7 +245,7 @@ class CatalogStrategy(BaseStrategy):
         checkpoint_state = self.checkpoint_store.load(plan)
         base_request = self._build_base_request(plan, checkpoint_state, catalog_hook)
         paginator = build_paginator(plan.source_config.access.pagination)
-        throttle = CatalogRequestThrottle(
+        throttle = HttpRequestThrottle(
             requests_per_minute=plan.source_config.access.rate_limit.requests_per_minute,
             clock=self.clock,
             sleeper=self.sleeper,
@@ -795,7 +775,7 @@ class CatalogStrategy(BaseStrategy):
         plan: ExecutionPlan,
         client: ApiClient,
         request: ApiRequest,
-        throttle: CatalogRequestThrottle,
+        throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
     ) -> tuple[ApiResponse, Any, int]:
         retry_config = plan.source_config.extraction.retry
