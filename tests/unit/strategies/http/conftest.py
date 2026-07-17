@@ -29,7 +29,11 @@ from janus.strategies.http import (
     ApiRequest,
     ApiResponse,
     HttpRequestThrottle,
+    checkpoint_request_value,
+    default_checkpoint_params,
+    resolve_url,
     send_with_retries,
+    split_path_and_query_params,
 )
 from janus.utils.logging import StructuredLogger, build_structured_logger
 
@@ -58,15 +62,14 @@ class FamilyUnderTest:
 
 
 @dataclass(frozen=True, slots=True)
-class BindingUnderTest:
-    """Current per-family module-level binding helpers."""
+class SharedBinding:
+    """The now-single shared binding helpers (the api and catalog copies collapsed onto one)."""
 
     name: str
     split_path_and_query_params: Callable[..., Any]
-    resolve_url: Callable[[SourceConfig], str]
+    resolve_url: Callable[..., str]
     default_checkpoint_params: Callable[..., dict[str, str]]
     checkpoint_request_value: Callable[..., str | None]
-    resolve_url_missing_base_message: str
 
 
 def _decode_via_strategy_method(strategy, plan, response):
@@ -158,24 +161,15 @@ FAMILIES: dict[str, FamilyUnderTest] = {
     ),
 }
 
-BINDINGS: dict[str, BindingUnderTest] = {
-    "api": BindingUnderTest(
-        name="api",
-        split_path_and_query_params=api_core._split_path_and_query_params,
-        resolve_url=api_core._resolve_url,
-        default_checkpoint_params=api_core._default_checkpoint_params,
-        checkpoint_request_value=api_core._checkpoint_request_value,
-        resolve_url_missing_base_message="API source requires access.base_url or access.url",
-    ),
-    "catalog": BindingUnderTest(
-        name="catalog",
-        split_path_and_query_params=catalog_core._split_path_and_query_params,
-        resolve_url=catalog_core._resolve_url,
-        default_checkpoint_params=catalog_core._default_checkpoint_params,
-        checkpoint_request_value=catalog_core._checkpoint_request_value,
-        resolve_url_missing_base_message="Catalog source requires access.base_url or access.url",
-    ),
-}
+# The api and catalog copies now share one definition in ``strategies/http/binding``,
+# so the former per-family parametrization collapses to this single mapping.
+SHARED_BINDING = SharedBinding(
+    name="api",
+    split_path_and_query_params=split_path_and_query_params,
+    resolve_url=resolve_url,
+    default_checkpoint_params=default_checkpoint_params,
+    checkpoint_request_value=checkpoint_request_value,
+)
 
 
 @pytest.fixture(params=sorted(FAMILIES))
@@ -188,9 +182,9 @@ def payload_family(request) -> FamilyUnderTest:
     return FAMILIES[request.param]
 
 
-@pytest.fixture(params=sorted(BINDINGS))
-def binding(request) -> BindingUnderTest:
-    return BINDINGS[request.param]
+@pytest.fixture
+def binding() -> SharedBinding:
+    return SHARED_BINDING
 
 
 # ---------------------------------------------------------------------------

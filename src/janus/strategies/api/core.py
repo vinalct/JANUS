@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import os
-import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, TypeGuard
-from urllib.parse import urljoin
 
 from janus.checkpoints import (
     CheckpointState,
@@ -32,9 +29,7 @@ from janus.strategies.base import BaseStrategy, SourceHook
 from janus.strategies.common import (
     _compare_checkpoint_values,
     _default_storage_layout,
-    _format_datetime,
     _freeze_string_mapping,
-    _parse_datetime,
     _raw_page_path,
     _raw_run_path_prefix,
     _request_input_key,
@@ -50,9 +45,13 @@ from janus.strategies.http import (
     PayloadDecodeError,
     RetryErrorPolicy,
     UrllibApiTransport,
+    checkpoint_request_value,
     decode_payload,
+    default_checkpoint_params,
     inject_auth,
+    resolve_url,
     send_with_retries,
+    split_path_and_query_params,
 )
 from janus.utils.logging import StructuredLogger, redact_url
 from janus.utils.storage import StorageLayout
@@ -244,7 +243,7 @@ class ApiStrategy(BaseStrategy):
         api_hook = hook if isinstance(hook, ApiHook) else None
         storage_layout = self.storage_layout_factory(plan)
         checkpoint_state = self.checkpoint_store.load(plan)
-        checkpoint_request_value = _checkpoint_request_value(plan, checkpoint_state)
+        request_checkpoint_value = checkpoint_request_value(plan, checkpoint_state)
         base_request = self._build_base_request(plan, checkpoint_state, api_hook)
         paginator = build_paginator(plan.source_config.access.pagination)
         throttle = HttpRequestThrottle(
@@ -395,9 +394,9 @@ class ApiStrategy(BaseStrategy):
                 bound_params = resolve_parameter_bindings(
                     parameter_bindings,
                     request_input=request_input,
-                    checkpoint_value=checkpoint_request_value,
+                    checkpoint_value=request_checkpoint_value,
                 )
-                path_params, query_bound_params = _split_path_and_query_params(
+                path_params, query_bound_params = split_path_and_query_params(
                     base_request.url, bound_params
                 )
                 request_params = merge_request_params(
@@ -885,15 +884,15 @@ class ApiStrategy(BaseStrategy):
         source_access = plan.source_config.access
         request = ApiRequest(
             method=source_access.method,
-            url=_resolve_url(plan.source_config),
+            url=resolve_url(plan.source_config, family_label="API"),
             timeout_seconds=source_access.timeout_seconds,
             headers=_freeze_string_mapping(source_access.headers or {}),
             params=(),
         )
         request = inject_auth(request, source_access.auth, env_reader=self._resolve_env_var)
 
-        checkpoint_value = _checkpoint_request_value(plan, checkpoint_state)
-        checkpoint_params = _default_checkpoint_params(plan, checkpoint_value)
+        checkpoint_value = checkpoint_request_value(plan, checkpoint_state)
+        checkpoint_params = default_checkpoint_params(plan, checkpoint_value)
         if api_hook is not None and checkpoint_value is not None:
             hook_checkpoint_params = api_hook.checkpoint_params(plan, checkpoint_value)
             if hook_checkpoint_params is not None:
@@ -1156,61 +1155,6 @@ class ApiStrategy(BaseStrategy):
         if value is not None:
             return value
         return os.getenv(name)
-
-
-def _split_path_and_query_params(
-    url: str,
-    bound_params: dict[str, str],
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Separate bound params into path params (referenced as {name} in the URL) and query params."""
-    placeholders = set(re.findall(r"\{(\w+)\}", url))
-    path_params = {k: v for k, v in bound_params.items() if k in placeholders}
-    query_params = {k: v for k, v in bound_params.items() if k not in placeholders}
-    return path_params, query_params
-
-
-def _resolve_url(source_config: SourceConfig) -> str:
-    if source_config.access.url:
-        return source_config.access.url
-
-    base_url = (source_config.access.base_url or "").strip()
-    path = (source_config.access.path or "").strip()
-    if not base_url:
-        raise ValueError("API source requires access.base_url or access.url")
-    if not path:
-        return base_url
-    return urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
-
-
-def _default_checkpoint_params(
-    plan: ExecutionPlan,
-    checkpoint_value: str | None,
-) -> dict[str, str]:
-    if checkpoint_value is None or plan.checkpoint_field is None:
-        return {}
-    return {plan.checkpoint_field: checkpoint_value}
-
-
-def _checkpoint_request_value(
-    plan: ExecutionPlan,
-    checkpoint_state: CheckpointState | None,
-) -> str | None:
-    if (
-        plan.extraction_mode != "incremental"
-        or plan.checkpoint_field is None
-        or checkpoint_state is None
-    ):
-        return None
-
-    value = checkpoint_state.checkpoint_value
-    lookback_days = plan.source_config.extraction.lookback_days
-    if not lookback_days:
-        return value
-
-    parsed_datetime = _parse_datetime(value)
-    if parsed_datetime is None:
-        return value
-    return _format_datetime(parsed_datetime - timedelta(days=lookback_days))
 
 
 def _supports_concurrent_pagination(

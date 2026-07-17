@@ -41,8 +41,8 @@ from janus.strategies.catalog.core import (
     _apply_per_input_params,
     _rediscover_catalog_input_artifacts,
     _replay_catalog_entities_from_dir,
-    _resolve_url,
 )
+from janus.strategies.http import resolve_url
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import RawArtifactWriter, SparkDatasetWriter
@@ -700,7 +700,7 @@ def _catalog_base_request(plan: ExecutionPlan) -> ApiRequest:
     source_access = plan.source_config.access
     return ApiRequest(
         method=source_access.method,
-        url=_resolve_url(plan.source_config),
+        url=resolve_url(plan.source_config, family_label="Catalog"),
         timeout_seconds=source_access.timeout_seconds,
         headers=_freeze_string_mapping(source_access.headers or {}),
         params=_freeze_string_mapping(source_access.params or {}),

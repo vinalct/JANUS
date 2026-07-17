@@ -1,4 +1,8 @@
-"""Characterization: the api and catalog module-level binding helpers.
+"""Characterization: the shared module-level binding helpers.
+
+The api and catalog copies now collapse onto one shared definition in
+``janus.strategies.http.binding``; ``resolve_url`` carries the family label that
+used to be baked into each copy's error message.
 """
 
 from __future__ import annotations
@@ -72,7 +76,7 @@ def test_resolve_url_prefers_explicit_access_url(binding, tmp_path):
         base_url="https://example.invalid",
         path="/records",
     )
-    assert binding.resolve_url(config) == "https://explicit.invalid/v2/things"
+    assert binding.resolve_url(config, family_label="API") == "https://explicit.invalid/v2/things"
 
 
 @pytest.mark.parametrize(
@@ -94,7 +98,7 @@ def test_resolve_url_joins_base_url_and_path_with_exactly_one_slash(
         base_url=base_url,
         path=path,
     )
-    assert binding.resolve_url(config) == "https://example.invalid/api/v1/records"
+    assert binding.resolve_url(config, family_label="API") == "https://example.invalid/api/v1/records"
 
 
 def test_resolve_url_returns_base_url_verbatim_when_path_is_missing(binding, tmp_path):
@@ -105,19 +109,28 @@ def test_resolve_url_returns_base_url_verbatim_when_path_is_missing(binding, tmp
         base_url="https://example.invalid/api/",
         path=None,
     )
-    assert binding.resolve_url(config) == "https://example.invalid/api/"
+    assert binding.resolve_url(config, family_label="API") == "https://example.invalid/api/"
 
 
-def test_resolve_url_without_base_url_raises_family_specific_message(binding, tmp_path):
-    config = build_source_config(binding.name, tmp_path, source_id=f"{binding.name}_no_base")
+@pytest.mark.parametrize(
+    ("family_label", "expected_message"),
+    [
+        ("API", "API source requires access.base_url or access.url"),
+        ("Catalog", "Catalog source requires access.base_url or access.url"),
+    ],
+)
+def test_resolve_url_without_base_url_raises_family_specific_message(
+    binding, tmp_path, family_label, expected_message
+):
+    config = build_source_config(
+        binding.name, tmp_path, source_id=f"{binding.name}_no_base_{family_label}"
+    )
     config = replace(config, access=replace(config.access, base_url=None, url=None, path=None))
 
     with pytest.raises(ValueError) as excinfo:
-        binding.resolve_url(config)
+        binding.resolve_url(config, family_label=family_label)
 
-    # Verified difference: the message names the family. Task 06 parameterizes
-    # the label; the two strings below must survive the refactor unchanged.
-    assert str(excinfo.value) == binding.resolve_url_missing_base_message
+    assert str(excinfo.value) == expected_message
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,12 @@ families already share; later tasks add the throttle, retry loop, decoder, and
 binding helpers here so the import idiom stays uniform.
 """
 
+from janus.strategies.http.binding import (
+    checkpoint_request_value,
+    default_checkpoint_params,
+    resolve_url,
+    split_path_and_query_params,
+)
 from janus.strategies.http.errors import HttpStrategyError
 from janus.strategies.http.payload import (
     ALL_PAYLOAD_FORMATS,
@@ -44,7 +50,11 @@ __all__ = [
     "PayloadDecodeError",
     "RetryErrorPolicy",
     "UrllibApiTransport",
+    "checkpoint_request_value",
     "decode_payload",
+    "default_checkpoint_params",
     "inject_auth",
+    "resolve_url",
     "send_with_retries",
+    "split_path_and_query_params",
 ]

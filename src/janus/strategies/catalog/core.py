@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
 
 from janus.checkpoints import (
     CheckpointState,
@@ -88,10 +86,8 @@ from janus.strategies.catalog.document import (  # noqa: F401
 from janus.strategies.common import (
     _compare_checkpoint_values,
     _default_storage_layout,
-    _format_datetime,
     _freeze_string_mapping,
     _max_checkpoint_value,
-    _parse_datetime,
     _raw_page_path,
     _raw_run_path_prefix,
     _request_input_key,
@@ -107,9 +103,13 @@ from janus.strategies.http import (
     PayloadDecodeError,
     RetryErrorPolicy,
     UrllibApiTransport,
+    checkpoint_request_value,
     decode_payload,
+    default_checkpoint_params,
     inject_auth,
+    resolve_url,
     send_with_retries,
+    split_path_and_query_params,
 )
 from janus.utils.logging import StructuredLogger, redact_url
 from janus.utils.storage import StorageLayout
@@ -331,7 +331,7 @@ class CatalogStrategy(BaseStrategy):
             entity_type: [] for entity_type in ENTITY_TYPE_ORDER
         }
         entity_indexes: dict[tuple[str, str], int] = {}
-        checkpoint_request_value = _checkpoint_request_value(plan, checkpoint_state)
+        request_checkpoint_value = checkpoint_request_value(plan, checkpoint_state)
         checkpoint_value: str | None = None
         successful_requests = 0
         total_attempts = 0
@@ -344,7 +344,7 @@ class CatalogStrategy(BaseStrategy):
                     base_request,
                     parameter_bindings,
                     request_input,
-                    checkpoint_value=checkpoint_request_value,
+                    checkpoint_value=request_checkpoint_value,
                 )
 
                 if request_input_key in completed_by_key:
@@ -758,22 +758,22 @@ class CatalogStrategy(BaseStrategy):
         source_access = plan.source_config.access
         request = ApiRequest(
             method=source_access.method,
-            url=_resolve_url(plan.source_config),
+            url=resolve_url(plan.source_config, family_label="Catalog"),
             timeout_seconds=source_access.timeout_seconds,
             headers=_freeze_string_mapping(source_access.headers or {}),
             params=_freeze_string_mapping(source_access.params or {}),
         )
         request = inject_auth(request, source_access.auth, env_reader=self._resolve_env_var)
 
-        checkpoint_value = _checkpoint_request_value(plan, checkpoint_state)
-        checkpoint_params = _default_checkpoint_params(plan, checkpoint_value)
+        checkpoint_value = checkpoint_request_value(plan, checkpoint_state)
+        checkpoint_params = default_checkpoint_params(plan, checkpoint_value)
         if catalog_hook is not None and checkpoint_value is not None:
             hook_checkpoint_params = catalog_hook.checkpoint_params(plan, checkpoint_value)
             if hook_checkpoint_params is not None:
                 checkpoint_params = _stringify_mapping(hook_checkpoint_params)
 
         if checkpoint_params:
-            path_params, query_checkpoint_params = _split_path_and_query_params(
+            path_params, query_checkpoint_params = split_path_and_query_params(
                 request.url, checkpoint_params
             )
             if path_params:
@@ -981,17 +981,6 @@ class CatalogStrategy(BaseStrategy):
         return os.getenv(name)
 
 
-def _split_path_and_query_params(
-    url: str,
-    bound_params: dict[str, str],
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Separate bound params into path params (referenced as {name} in the URL) and query params."""
-    placeholders = set(re.findall(r"\{(\w+)\}", url))
-    path_params = {k: v for k, v in bound_params.items() if k in placeholders}
-    query_params = {k: v for k, v in bound_params.items() if k not in placeholders}
-    return path_params, query_params
-
-
 def _apply_per_input_params(
     base_request: ApiRequest,
     parameter_bindings: Any,
@@ -1009,57 +998,13 @@ def _apply_per_input_params(
     )
     if not bound_params:
         return base_request
-    path_params, query_params = _split_path_and_query_params(base_request.url, bound_params)
+    path_params, query_params = split_path_and_query_params(base_request.url, bound_params)
     request = base_request
     if path_params:
         request = request.with_url(base_request.url.format_map(path_params))
     if query_params:
         request = request.with_params(query_params)
     return request
-
-
-def _resolve_url(source_config: SourceConfig) -> str:
-    if source_config.access.url:
-        return source_config.access.url
-
-    base_url = (source_config.access.base_url or "").strip()
-    path = (source_config.access.path or "").strip()
-    if not base_url:
-        raise ValueError("Catalog source requires access.base_url or access.url")
-    if not path:
-        return base_url
-    return urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
-
-
-def _default_checkpoint_params(
-    plan: ExecutionPlan,
-    checkpoint_value: str | None,
-) -> dict[str, str]:
-    if checkpoint_value is None or plan.checkpoint_field is None:
-        return {}
-    return {plan.checkpoint_field: checkpoint_value}
-
-
-def _checkpoint_request_value(
-    plan: ExecutionPlan,
-    checkpoint_state: CheckpointState | None,
-) -> str | None:
-    if (
-        plan.extraction_mode != "incremental"
-        or plan.checkpoint_field is None
-        or checkpoint_state is None
-    ):
-        return None
-
-    value = checkpoint_state.checkpoint_value
-    lookback_days = plan.source_config.extraction.lookback_days
-    if not lookback_days:
-        return value
-
-    parsed_datetime = _parse_datetime(value)
-    if parsed_datetime is None:
-        return value
-    return _format_datetime(parsed_datetime - timedelta(days=lookback_days))
 
 
 def _raw_relative_path(
