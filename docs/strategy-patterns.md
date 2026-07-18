@@ -150,6 +150,18 @@ Use `file`. The transport is HTTP, but the ingestion pattern is still file/packa
 
 Use `catalog`, even though the payload is JSON over HTTP.
 
+## Shared HTTP mechanics
+
+The `api`, `catalog`, and `file` families all speak HTTP, so the *behavioral* HTTP layer is single-sourced in `src/janus/strategies/http/` — the same way the bronze write path is single-sourced in `src/janus/runtime/materialize.py`. It is never copied into a family core:
+
+- `transport.py` — `ApiClient` / `UrllibApiTransport` / `ApiRequest` / `ApiResponse`;
+- `throttle.py` — one thread-safe `HttpRequestThrottle` for rate-limit pacing;
+- `retry.py` — one `send_with_retries` loop (retryable status codes, `Retry-After`, backoff, family error mapping);
+- `payload.py` — one `decode_payload` (`json` / `jsonl` / `text` / `binary`), shared by `api` and `catalog`;
+- `binding.py` — one each of `resolve_url`, `split_path_and_query_params`, `default_checkpoint_params`, and `checkpoint_request_value`, shared by `api` and `catalog`.
+
+New HTTP-shaped strategies **compose** these collaborators; they do not copy them. The throttle is thread-safe by construction, so any family that later adds concurrency keeps its rate-limit contract for free. Genuine family differences — which payload formats a family accepts, the error type raised on retry exhaustion, family-specific messages — are passed as explicit parameters, never forked into a private copy. The file family composes the throttle and retry loop only: it handles bytes and archives and does not JSON-decode.
+
 ## When a new pattern deserves promotion
 
 Do not create a new family or a new reusable variant just because one source is awkward.
@@ -179,6 +191,7 @@ Reject changes that do any of the following:
 - branch on `source_id` inside shared strategy loops;
 - make one family aware of another family's responsibilities;
 - duplicate request, checkpoint, or raw-write logic in source code;
+- copy a throttle, retry loop, payload decoder, or URL/param/checkpoint binding helper into a family core instead of composing `strategies/http/`;
 - use hooks as a dumping ground for unmodeled generic behavior;
 - flatten business payloads in shared runtime code when the logic is source-specific;
 - copy an existing source implementation because it is "close enough."
