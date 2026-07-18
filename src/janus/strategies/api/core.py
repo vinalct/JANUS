@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-import json
 import os
-import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import timedelta
 from hashlib import sha256
 from pathlib import Path
-from threading import Lock
 from typing import Any, TypeGuard
-from urllib.parse import urljoin
 
 from janus.checkpoints import (
     CheckpointState,
@@ -34,29 +29,34 @@ from janus.strategies.base import BaseStrategy, SourceHook
 from janus.strategies.common import (
     _compare_checkpoint_values,
     _default_storage_layout,
-    _format_datetime,
     _freeze_string_mapping,
-    _parse_datetime,
     _raw_page_path,
     _raw_run_path_prefix,
     _request_input_key,
-    _retry_delay_seconds,
     _stringify_mapping,
+)
+from janus.strategies.http import (
+    ApiClient,
+    ApiRequest,
+    ApiResponse,
+    ApiTransport,
+    HttpRequestThrottle,
+    HttpStrategyError,
+    PayloadDecodeError,
+    RetryErrorPolicy,
+    UrllibApiTransport,
+    checkpoint_request_value,
+    decode_payload,
+    default_checkpoint_params,
+    inject_auth,
+    resolve_url,
+    send_with_retries,
+    split_path_and_query_params,
 )
 from janus.utils.logging import StructuredLogger, redact_url
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 
-from .http import (
-    ApiClient,
-    ApiRequest,
-    ApiResponse,
-    ApiTransport,
-    ApiTransportError,
-    AuthResolutionError,
-    UrllibApiTransport,
-    inject_auth,
-)
 from .pagination import (
     OffsetPaginator,
     PageNumberPaginator,
@@ -73,7 +73,6 @@ from .request_inputs import (
 )
 
 SUPPORTED_API_PAYLOAD_FORMATS = frozenset({"binary", "json", "jsonl", "text"})
-RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 RAW_FILE_SUFFIXES = {
     "binary": ".bin",
     "json": ".json",
@@ -83,7 +82,7 @@ RAW_FILE_SUFFIXES = {
 DEFAULT_RECORD_KEYS = ("records", "items", "results", "data", "value")
 
 
-class ApiStrategyError(RuntimeError):
+class ApiStrategyError(HttpStrategyError):
     """Base failure for API strategy execution."""
 
 
@@ -101,6 +100,13 @@ class ApiResponseError(ApiStrategyError):
 
 class ApiPayloadError(ApiStrategyError):
     """Raised when the configured payload format cannot be decoded."""
+
+
+_RETRY_POLICY = RetryErrorPolicy(
+    transport_error_factory=ApiStrategyError,
+    response_error_factory=ApiResponseError,
+    retry_log_event="api_retry_scheduled",
+)
 
 
 class ApiHook(SourceHook):
@@ -177,33 +183,6 @@ class ApiHook(SourceHook):
         return None
 
 
-@dataclass(slots=True)
-class ApiRequestThrottle:
-    """Thread-safe request pacing aligned with JANUS safe defaults."""
-
-    requests_per_minute: int | None
-    clock: Callable[[], float]
-    sleeper: Callable[[float], None]
-    _next_allowed_at: float | None = None
-    _lock: Lock = field(default_factory=Lock, init=False, repr=False)
-
-    def wait_for_turn(self) -> None:
-        if self.requests_per_minute is None:
-            return
-
-        interval_seconds = 60 / self.requests_per_minute
-        with self._lock:
-            now = self.clock()
-            scheduled_at = now
-            if self._next_allowed_at is not None and now < self._next_allowed_at:
-                scheduled_at = self._next_allowed_at
-            self._next_allowed_at = scheduled_at + interval_seconds
-
-        delay = scheduled_at - now
-        if delay > 0:
-            self.sleeper(delay)
-
-
 @dataclass(frozen=True, slots=True)
 class SubmittedApiRequest:
     pagination_state: PaginationState
@@ -264,10 +243,10 @@ class ApiStrategy(BaseStrategy):
         api_hook = hook if isinstance(hook, ApiHook) else None
         storage_layout = self.storage_layout_factory(plan)
         checkpoint_state = self.checkpoint_store.load(plan)
-        checkpoint_request_value = _checkpoint_request_value(plan, checkpoint_state)
+        request_checkpoint_value = checkpoint_request_value(plan, checkpoint_state)
         base_request = self._build_base_request(plan, checkpoint_state, api_hook)
         paginator = build_paginator(plan.source_config.access.pagination)
-        throttle = ApiRequestThrottle(
+        throttle = HttpRequestThrottle(
             requests_per_minute=plan.source_config.access.rate_limit.requests_per_minute,
             clock=self.clock,
             sleeper=self.sleeper,
@@ -415,9 +394,9 @@ class ApiStrategy(BaseStrategy):
                 bound_params = resolve_parameter_bindings(
                     parameter_bindings,
                     request_input=request_input,
-                    checkpoint_value=checkpoint_request_value,
+                    checkpoint_value=request_checkpoint_value,
                 )
-                path_params, query_bound_params = _split_path_and_query_params(
+                path_params, query_bound_params = split_path_and_query_params(
                     base_request.url, bound_params
                 )
                 request_params = merge_request_params(
@@ -639,7 +618,7 @@ class ApiStrategy(BaseStrategy):
         checkpoint_state: CheckpointState | None,
         checkpoint_value: str | None,
         raw_writer: RawArtifactWriter,
-        throttle: ApiRequestThrottle,
+        throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
         request_input_index: int,
         request_input_count: int,
@@ -666,7 +645,7 @@ class ApiStrategy(BaseStrategy):
                     checkpoint_state=checkpoint_state,
                     logger=logger,
                 )
-                response, payload, attempts_used = self._send_with_retries(
+                response, payload, attempts_used = self._send_request(
                     plan,
                     client,
                     request,
@@ -728,7 +707,7 @@ class ApiStrategy(BaseStrategy):
         checkpoint_state: CheckpointState | None,
         checkpoint_value: str | None,
         raw_writer: RawArtifactWriter,
-        throttle: ApiRequestThrottle,
+        throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
         request_input_index: int,
         request_input_count: int,
@@ -905,15 +884,15 @@ class ApiStrategy(BaseStrategy):
         source_access = plan.source_config.access
         request = ApiRequest(
             method=source_access.method,
-            url=_resolve_url(plan.source_config),
+            url=resolve_url(plan.source_config, family_label="API"),
             timeout_seconds=source_access.timeout_seconds,
             headers=_freeze_string_mapping(source_access.headers or {}),
             params=(),
         )
         request = inject_auth(request, source_access.auth, env_reader=self._resolve_env_var)
 
-        checkpoint_value = _checkpoint_request_value(plan, checkpoint_state)
-        checkpoint_params = _default_checkpoint_params(plan, checkpoint_value)
+        checkpoint_value = checkpoint_request_value(plan, checkpoint_state)
+        checkpoint_params = default_checkpoint_params(plan, checkpoint_value)
         if api_hook is not None and checkpoint_value is not None:
             hook_checkpoint_params = api_hook.checkpoint_params(plan, checkpoint_value)
             if hook_checkpoint_params is not None:
@@ -958,61 +937,31 @@ class ApiStrategy(BaseStrategy):
         self,
         plan: ExecutionPlan,
         request: ApiRequest,
-        throttle: ApiRequestThrottle,
+        throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
     ) -> tuple[ApiResponse, Any, int]:
         with ApiClient(self.transport_factory()) as client:
-            return self._send_with_retries(
-                plan,
-                client,
-                request,
-                throttle,
-                logger,
-            )
+            return self._send_request(plan, client, request, throttle, logger)
 
-    def _send_with_retries(
+    def _send_request(
         self,
         plan: ExecutionPlan,
         client: ApiClient,
         request: ApiRequest,
-        throttle: ApiRequestThrottle,
+        throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
     ) -> tuple[ApiResponse, Any, int]:
-        retry_config = plan.source_config.extraction.retry
-        last_transport_error: Exception | None = None
-
-        for attempt in range(1, retry_config.max_attempts + 1):
-            throttle.wait_for_turn()
-            try:
-                response = client.send(request)
-            except (ApiTransportError, AuthResolutionError) as exc:
-                last_transport_error = exc
-                if attempt == retry_config.max_attempts:
-                    raise ApiStrategyError(str(exc)) from exc
-                self._sleep_for_retry(plan, attempt, response=None, logger=logger)
-                continue
-
-            if 200 <= response.status_code < 300:
-                try:
-                    payload = self._decode_payload(plan, response)
-                except ApiPayloadError:
-                    if attempt == retry_config.max_attempts:
-                        raise
-                    self._sleep_for_retry(plan, attempt, response=response, logger=logger)
-                    continue
-                return response, payload, attempt
-
-            if (
-                response.status_code not in RETRYABLE_STATUS_CODES
-                or attempt == retry_config.max_attempts
-            ):
-                raise ApiResponseError(response)
-
-            self._sleep_for_retry(plan, attempt, response=response, logger=logger)
-
-        if last_transport_error is not None:
-            raise ApiStrategyError(str(last_transport_error)) from last_transport_error
-        raise ApiStrategyError("Retry loop exited without a response or error")
+        return send_with_retries(
+            plan,
+            client,
+            request,
+            throttle,
+            logger,
+            policy=_RETRY_POLICY,
+            sleeper=self.sleeper,
+            decode=lambda response: self._decode_payload(plan, response),
+            payload_error_types=(ApiPayloadError,),
+        )
 
     def _process_response(
         self,
@@ -1096,45 +1045,15 @@ class ApiStrategy(BaseStrategy):
             next_pagination_state=next_pagination_state,
         )
 
-    def _sleep_for_retry(
-        self,
-        plan: ExecutionPlan,
-        attempt: int,
-        *,
-        response: ApiResponse | None,
-        logger: StructuredLogger | None,
-    ) -> None:
-        delay = _retry_delay_seconds(plan, attempt, response)
-        if logger is not None:
-            logger.warning(
-                "api_retry_scheduled",
-                attempt=attempt,
-                delay_seconds=delay,
-                status_code=response.status_code if response is not None else None,
-            )
-        self.sleeper(delay)
-
     def _decode_payload(self, plan: ExecutionPlan, response: ApiResponse) -> Any:
-        format_name = plan.source_config.access.format
         try:
-            if format_name == "binary":
-                return response.body
-            if format_name == "text":
-                return response.text()
-            if format_name == "json":
-                return response.json()
-            if format_name == "jsonl":
-                text = response.text()
-                if not text.strip():
-                    return []
-                return [json.loads(line) for line in text.splitlines() if line.strip()]
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ApiPayloadError(
-                "Failed to decode "
-                f"{format_name} payload from {redact_url(response.request.full_url())}"
-            ) from exc
-
-        raise ApiPayloadError(f"Unsupported API payload format: {format_name}")
+            return decode_payload(
+                plan.source_config.access.format,
+                response,
+                family_label="API",
+            )
+        except PayloadDecodeError as exc:
+            raise ApiPayloadError(str(exc)) from exc.__cause__
 
     def _extract_records(
         self,
@@ -1236,61 +1155,6 @@ class ApiStrategy(BaseStrategy):
         if value is not None:
             return value
         return os.getenv(name)
-
-
-def _split_path_and_query_params(
-    url: str,
-    bound_params: dict[str, str],
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Separate bound params into path params (referenced as {name} in the URL) and query params."""
-    placeholders = set(re.findall(r"\{(\w+)\}", url))
-    path_params = {k: v for k, v in bound_params.items() if k in placeholders}
-    query_params = {k: v for k, v in bound_params.items() if k not in placeholders}
-    return path_params, query_params
-
-
-def _resolve_url(source_config: SourceConfig) -> str:
-    if source_config.access.url:
-        return source_config.access.url
-
-    base_url = (source_config.access.base_url or "").strip()
-    path = (source_config.access.path or "").strip()
-    if not base_url:
-        raise ValueError("API source requires access.base_url or access.url")
-    if not path:
-        return base_url
-    return urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
-
-
-def _default_checkpoint_params(
-    plan: ExecutionPlan,
-    checkpoint_value: str | None,
-) -> dict[str, str]:
-    if checkpoint_value is None or plan.checkpoint_field is None:
-        return {}
-    return {plan.checkpoint_field: checkpoint_value}
-
-
-def _checkpoint_request_value(
-    plan: ExecutionPlan,
-    checkpoint_state: CheckpointState | None,
-) -> str | None:
-    if (
-        plan.extraction_mode != "incremental"
-        or plan.checkpoint_field is None
-        or checkpoint_state is None
-    ):
-        return None
-
-    value = checkpoint_state.checkpoint_value
-    lookback_days = plan.source_config.extraction.lookback_days
-    if not lookback_days:
-        return value
-
-    parsed_datetime = _parse_datetime(value)
-    if parsed_datetime is None:
-        return value
-    return _format_datetime(parsed_datetime - timedelta(days=lookback_days))
 
 
 def _supports_concurrent_pagination(

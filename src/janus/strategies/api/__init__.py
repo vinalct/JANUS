@@ -5,16 +5,6 @@ from janus.strategies.api.core import (
     ApiStrategy,
     ApiStrategyError,
 )
-from janus.strategies.api.http import (
-    ApiClient,
-    ApiRequest,
-    ApiResponse,
-    ApiTransport,
-    ApiTransportError,
-    AuthResolutionError,
-    UrllibApiTransport,
-    inject_auth,
-)
 from janus.strategies.api.pagination import (
     CursorPaginator,
     NoPaginationPaginator,
@@ -23,6 +13,16 @@ from janus.strategies.api.pagination import (
     PaginationState,
     build_paginator,
     default_cursor_from_payload,
+)
+from janus.strategies.http import (
+    ApiClient,
+    ApiRequest,
+    ApiResponse,
+    ApiTransport,
+    ApiTransportError,
+    AuthResolutionError,
+    UrllibApiTransport,
+    inject_auth,
 )
 
 __all__ = [

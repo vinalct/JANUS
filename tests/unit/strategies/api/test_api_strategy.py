@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-import janus.strategies.api.http as http_module
+import janus.strategies.http.transport as http_module
 from janus.checkpoints import CheckpointStore, DeadLetterStore, ExtractionProgressStore
 from janus.models import ExecutionPlan, RunContext, SourceConfig
 from janus.planner import StrategyCatalog

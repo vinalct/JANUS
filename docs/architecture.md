@@ -68,6 +68,7 @@ Each family owns the reusable behavior for that source pattern. Strategy code is
 
 Shared support modules keep family code small without becoming source-specific:
 
+- `janus.strategies.http` is the single-sourced *behavioral* HTTP layer shared by all three families: `transport` (`ApiClient` and the `urllib` transport), one thread-safe `HttpRequestThrottle`, one `send_with_retries` loop, one `decode_payload`, and one copy of each URL/param/checkpoint binding helper. Families **compose** it; they do not copy its mechanics. It is generic by construction and must not branch on source ids — the way `runtime/materialize.py` single-sources the bronze write path.
 - `janus.strategies.common` is the family-neutral helper layer for retry-delay calculation, checkpoint value comparison, stable request-input keys, raw page naming, immutable mapping normalization, and default storage layout resolution. It must not import concrete strategy families or branch on source ids.
 - `janus.strategies.files.formats` is the file-family source of truth for filename resolution, file-format inference, supported Spark handoff formats, archive suffix constants, and safe raw path segment rendering.
 - `janus.strategies.catalog.document` contains pure catalog document traversal, node classification, entity batching, graph node and edge shaping, payload hashing, and parse-summary helpers. It has no transport, storage, Spark, checkpoint, or dead-letter side effects; `catalog.core` orchestrates those runtime concerns.
@@ -132,7 +133,7 @@ The main implementation areas are:
 - `src/janus/models/`: source contracts and runtime contracts.
 - `src/janus/planner/`: deterministic plan construction and dispatch resolution.
 - `src/janus/scripts/`: operational helpers that still run through the planner and shared runtime contracts.
-- `src/janus/strategies/`: API, file, and catalog family behavior.
+- `src/janus/strategies/`: API, file, and catalog family behavior; `strategies/http/` single-sources the shared HTTP transport, throttle, retry, payload decode, and URL/param/checkpoint binding.
 - `src/janus/readers/`, `src/janus/writers/`, `src/janus/normalizers/`: shared runtime I/O and normalization.
 - `src/janus/quality/`: reusable validation checks and persisted reports.
 - `src/janus/checkpoints/`: rerun-safe data checkpoints, dead-letter state, and per-page extraction progress.

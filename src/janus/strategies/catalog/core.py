@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
 
 from janus.checkpoints import (
     CheckpointState,
@@ -27,16 +25,8 @@ from janus.models import (
     WriteResult,
 )
 from janus.strategies.api import (
-    ApiClient,
-    ApiRequest,
-    ApiResponse,
-    ApiTransport,
-    ApiTransportError,
-    AuthResolutionError,
     PaginationState,
-    UrllibApiTransport,
     build_paginator,
-    inject_auth,
 )
 from janus.strategies.api.pagination import _resume_pagination_state
 from janus.strategies.api.request_inputs import (
@@ -96,26 +86,40 @@ from janus.strategies.catalog.document import (  # noqa: F401
 from janus.strategies.common import (
     _compare_checkpoint_values,
     _default_storage_layout,
-    _format_datetime,
     _freeze_string_mapping,
     _max_checkpoint_value,
-    _parse_datetime,
     _raw_page_path,
     _raw_run_path_prefix,
     _request_input_key,
-    _retry_delay_seconds,
     _stringify_mapping,
+)
+from janus.strategies.http import (
+    ApiClient,
+    ApiRequest,
+    ApiResponse,
+    ApiTransport,
+    HttpRequestThrottle,
+    HttpStrategyError,
+    PayloadDecodeError,
+    RetryErrorPolicy,
+    UrllibApiTransport,
+    checkpoint_request_value,
+    decode_payload,
+    default_checkpoint_params,
+    inject_auth,
+    resolve_url,
+    send_with_retries,
+    split_path_and_query_params,
 )
 from janus.utils.logging import StructuredLogger, redact_url
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 
-RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 SUPPORTED_CATALOG_PAYLOAD_FORMATS = frozenset({"json"})
 SUPPORTED_CATALOG_INPUT_FORMATS = frozenset({"jsonl"})
 
 
-class CatalogStrategyError(RuntimeError):
+class CatalogStrategyError(HttpStrategyError):
     """Base failure for metadata/catalog strategy execution."""
 
 
@@ -133,6 +137,13 @@ class CatalogResponseError(CatalogStrategyError):
 
 class CatalogPayloadError(CatalogStrategyError):
     """Raised when a catalog payload cannot be decoded or traversed safely."""
+
+
+_RETRY_POLICY = RetryErrorPolicy(
+    transport_error_factory=CatalogStrategyError,
+    response_error_factory=CatalogResponseError,
+    retry_log_event="catalog_retry_scheduled",
+)
 
 
 class CatalogHook(SourceHook):
@@ -196,27 +207,6 @@ class CatalogHook(SourceHook):
         return None
 
 @dataclass(slots=True)
-class CatalogRequestThrottle:
-    """Single-threaded request throttle reused by metadata/catalog requests."""
-
-    requests_per_minute: int | None
-    clock: Callable[[], float]
-    sleeper: Callable[[float], None]
-    _next_allowed_at: float | None = None
-
-    def wait_for_turn(self) -> None:
-        if self.requests_per_minute is None:
-            return
-
-        interval_seconds = 60 / self.requests_per_minute
-        now = self.clock()
-        if self._next_allowed_at is not None and now < self._next_allowed_at:
-            self.sleeper(self._next_allowed_at - now)
-            now = self._next_allowed_at
-        self._next_allowed_at = now + interval_seconds
-
-
-@dataclass(slots=True)
 class CatalogStrategy(BaseStrategy):
     """Reusable metadata-first strategy for public dataset catalogs."""
 
@@ -263,7 +253,7 @@ class CatalogStrategy(BaseStrategy):
         checkpoint_state = self.checkpoint_store.load(plan)
         base_request = self._build_base_request(plan, checkpoint_state, catalog_hook)
         paginator = build_paginator(plan.source_config.access.pagination)
-        throttle = CatalogRequestThrottle(
+        throttle = HttpRequestThrottle(
             requests_per_minute=plan.source_config.access.rate_limit.requests_per_minute,
             clock=self.clock,
             sleeper=self.sleeper,
@@ -341,7 +331,7 @@ class CatalogStrategy(BaseStrategy):
             entity_type: [] for entity_type in ENTITY_TYPE_ORDER
         }
         entity_indexes: dict[tuple[str, str], int] = {}
-        checkpoint_request_value = _checkpoint_request_value(plan, checkpoint_state)
+        request_checkpoint_value = checkpoint_request_value(plan, checkpoint_state)
         checkpoint_value: str | None = None
         successful_requests = 0
         total_attempts = 0
@@ -354,7 +344,7 @@ class CatalogStrategy(BaseStrategy):
                     base_request,
                     parameter_bindings,
                     request_input,
-                    checkpoint_value=checkpoint_request_value,
+                    checkpoint_value=request_checkpoint_value,
                 )
 
                 if request_input_key in completed_by_key:
@@ -444,12 +434,16 @@ class CatalogStrategy(BaseStrategy):
                                 request_url=request.full_url(),
                             )
 
-                        response, payload, attempts_used = self._send_with_retries(
+                        response, payload, attempts_used = send_with_retries(
                             plan,
                             client,
                             request,
                             throttle,
                             logger,
+                            policy=_RETRY_POLICY,
+                            sleeper=self.sleeper,
+                            decode=lambda response: self._decode_payload(plan, response),
+                            payload_error_types=(CatalogPayloadError,),
                         )
                         request_input_total_attempts += attempts_used
                         request_input_successful_requests += 1
@@ -764,22 +758,22 @@ class CatalogStrategy(BaseStrategy):
         source_access = plan.source_config.access
         request = ApiRequest(
             method=source_access.method,
-            url=_resolve_url(plan.source_config),
+            url=resolve_url(plan.source_config, family_label="Catalog"),
             timeout_seconds=source_access.timeout_seconds,
             headers=_freeze_string_mapping(source_access.headers or {}),
             params=_freeze_string_mapping(source_access.params or {}),
         )
         request = inject_auth(request, source_access.auth, env_reader=self._resolve_env_var)
 
-        checkpoint_value = _checkpoint_request_value(plan, checkpoint_state)
-        checkpoint_params = _default_checkpoint_params(plan, checkpoint_value)
+        checkpoint_value = checkpoint_request_value(plan, checkpoint_state)
+        checkpoint_params = default_checkpoint_params(plan, checkpoint_value)
         if catalog_hook is not None and checkpoint_value is not None:
             hook_checkpoint_params = catalog_hook.checkpoint_params(plan, checkpoint_value)
             if hook_checkpoint_params is not None:
                 checkpoint_params = _stringify_mapping(hook_checkpoint_params)
 
         if checkpoint_params:
-            path_params, query_checkpoint_params = _split_path_and_query_params(
+            path_params, query_checkpoint_params = split_path_and_query_params(
                 request.url, checkpoint_params
             )
             if path_params:
@@ -788,80 +782,17 @@ class CatalogStrategy(BaseStrategy):
                 request = request.with_params(query_checkpoint_params)
         return request
 
-    def _send_with_retries(
-        self,
-        plan: ExecutionPlan,
-        client: ApiClient,
-        request: ApiRequest,
-        throttle: CatalogRequestThrottle,
-        logger: StructuredLogger | None,
-    ) -> tuple[ApiResponse, Any, int]:
-        retry_config = plan.source_config.extraction.retry
-        last_transport_error: Exception | None = None
-
-        for attempt in range(1, retry_config.max_attempts + 1):
-            throttle.wait_for_turn()
-            try:
-                response = client.send(request)
-            except (ApiTransportError, AuthResolutionError) as exc:
-                last_transport_error = exc
-                if attempt == retry_config.max_attempts:
-                    raise CatalogStrategyError(str(exc)) from exc
-                self._sleep_for_retry(plan, attempt, response=None, logger=logger)
-                continue
-
-            if 200 <= response.status_code < 300:
-                try:
-                    payload = self._decode_payload(plan, response)
-                except CatalogPayloadError:
-                    if attempt == retry_config.max_attempts:
-                        raise
-                    self._sleep_for_retry(plan, attempt, response=response, logger=logger)
-                    continue
-                return response, payload, attempt
-
-            if (
-                response.status_code not in RETRYABLE_STATUS_CODES
-                or attempt == retry_config.max_attempts
-            ):
-                raise CatalogResponseError(response)
-
-            self._sleep_for_retry(plan, attempt, response=response, logger=logger)
-
-        if last_transport_error is not None:
-            raise CatalogStrategyError(str(last_transport_error)) from last_transport_error
-        raise CatalogStrategyError("Retry loop exited without a response or error")
-
-    def _sleep_for_retry(
-        self,
-        plan: ExecutionPlan,
-        attempt: int,
-        *,
-        response: ApiResponse | None,
-        logger: StructuredLogger | None,
-    ) -> None:
-        delay = _retry_delay_seconds(plan, attempt, response)
-        if logger is not None:
-            logger.warning(
-                "catalog_retry_scheduled",
-                attempt=attempt,
-                delay_seconds=delay,
-                status_code=response.status_code if response is not None else None,
-            )
-        self.sleeper(delay)
-
     def _decode_payload(self, plan: ExecutionPlan, response: ApiResponse) -> Any:
-        if plan.source_config.access.format != "json":
-            raise CatalogPayloadError(
-                f"Unsupported catalog payload format: {plan.source_config.access.format}"
-            )
-
         try:
-            return response.json()
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise CatalogPayloadError(
-                f"Failed to decode catalog payload from {redact_url(response.request.full_url())}"
-            ) from exc
+            return decode_payload(
+                plan.source_config.access.format,
+                response,
+                allowed_formats=frozenset({"json"}),
+                family_label="catalog",
+                failure_label="catalog",
+            )
+        except PayloadDecodeError as exc:
+            raise CatalogPayloadError(str(exc)) from exc.__cause__
 
     def _persist_raw_payload(
         self,
@@ -1050,17 +981,6 @@ class CatalogStrategy(BaseStrategy):
         return os.getenv(name)
 
 
-def _split_path_and_query_params(
-    url: str,
-    bound_params: dict[str, str],
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Separate bound params into path params (referenced as {name} in the URL) and query params."""
-    placeholders = set(re.findall(r"\{(\w+)\}", url))
-    path_params = {k: v for k, v in bound_params.items() if k in placeholders}
-    query_params = {k: v for k, v in bound_params.items() if k not in placeholders}
-    return path_params, query_params
-
-
 def _apply_per_input_params(
     base_request: ApiRequest,
     parameter_bindings: Any,
@@ -1078,57 +998,13 @@ def _apply_per_input_params(
     )
     if not bound_params:
         return base_request
-    path_params, query_params = _split_path_and_query_params(base_request.url, bound_params)
+    path_params, query_params = split_path_and_query_params(base_request.url, bound_params)
     request = base_request
     if path_params:
         request = request.with_url(base_request.url.format_map(path_params))
     if query_params:
         request = request.with_params(query_params)
     return request
-
-
-def _resolve_url(source_config: SourceConfig) -> str:
-    if source_config.access.url:
-        return source_config.access.url
-
-    base_url = (source_config.access.base_url or "").strip()
-    path = (source_config.access.path or "").strip()
-    if not base_url:
-        raise ValueError("Catalog source requires access.base_url or access.url")
-    if not path:
-        return base_url
-    return urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
-
-
-def _default_checkpoint_params(
-    plan: ExecutionPlan,
-    checkpoint_value: str | None,
-) -> dict[str, str]:
-    if checkpoint_value is None or plan.checkpoint_field is None:
-        return {}
-    return {plan.checkpoint_field: checkpoint_value}
-
-
-def _checkpoint_request_value(
-    plan: ExecutionPlan,
-    checkpoint_state: CheckpointState | None,
-) -> str | None:
-    if (
-        plan.extraction_mode != "incremental"
-        or plan.checkpoint_field is None
-        or checkpoint_state is None
-    ):
-        return None
-
-    value = checkpoint_state.checkpoint_value
-    lookback_days = plan.source_config.extraction.lookback_days
-    if not lookback_days:
-        return value
-
-    parsed_datetime = _parse_datetime(value)
-    if parsed_datetime is None:
-        return value
-    return _format_datetime(parsed_datetime - timedelta(days=lookback_days))
 
 
 def _raw_relative_path(
