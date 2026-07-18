@@ -52,6 +52,7 @@ python_version = "3.13"
 files = ["src/janus"]
 warn_unused_ignores = true
 warn_redundant_casts = true
+no_implicit_optional = true
 
 [[tool.mypy.overrides]]
 module = ["pyspark.*", "yaml.*", "certifi.*"]
