@@ -1,5 +1,6 @@
 """Regression guard that the mypy type gate is wired to *fail* on a type error."""
 
+import importlib.util
 import shutil
 import subprocess
 import sys
@@ -40,11 +41,8 @@ def _run_mypy(target: Path) -> subprocess.CompletedProcess[str]:
 
 @pytest.fixture(scope="module", autouse=True)
 def _require_mypy_on_path() -> None:
-    if shutil.which("mypy") is None:
-        try:
-            import mypy 
-        except ImportError:  
-            pytest.skip("mypy is not available in this environment")
+    if shutil.which("mypy") is None and importlib.util.find_spec("mypy") is None:
+        pytest.skip("mypy is not available in this environment")
 
 
 def test_gate_fails_on_type_error(tmp_path: Path) -> None:
