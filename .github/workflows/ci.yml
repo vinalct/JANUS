@@ -28,8 +28,14 @@ jobs:
             pytest==9.0.2 \
             PyYAML==6.0.3 \
             certifi==2026.2.25
-      - name: Lint
-        run: ruff check src tests
+      - name: Lint (ruff, pinned 0.11.6)
+        run: |
+          ruff --version
+          if ! ruff --version | grep -qx 'ruff 0\.11\.6'; then
+            echo "::error::ruff version drift — expected 0.11.6 (source of truth: pyproject.toml [project.optional-dependencies].dev)"
+            exit 1
+          fi
+          ruff check src tests
       - name: Type check
         run: mypy
       - name: Unit tests (Spark tests self-skip)

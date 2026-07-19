@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -93,10 +94,8 @@ def _retry_delay_seconds(
     if response is not None:
         retry_after_header = response.headers_as_dict().get("Retry-After")
     if retry_after_header is not None:
-        try:
+        with contextlib.suppress(ValueError):
             delay = max(delay, float(retry_after_header))
-        except ValueError:
-            pass
     return float(min(delay, maximum_delay))
 
 

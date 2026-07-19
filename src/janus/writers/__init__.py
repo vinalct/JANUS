@@ -1,4 +1,5 @@
 from janus.writers.raw import (
+    SIDECAR_SUFFIX,
     SUPPORTED_FILE_OUTPUT_ZONES,
     SUPPORTED_RAW_ARTIFACT_FORMATS,
     PersistedArtifact,
@@ -7,10 +8,11 @@ from janus.writers.raw import (
 from janus.writers.spark import SUPPORTED_SPARK_WRITE_FORMATS, SparkDatasetWriter
 
 __all__ = [
-    "PersistedArtifact",
-    "RawArtifactWriter",
+    "SIDECAR_SUFFIX",
     "SUPPORTED_FILE_OUTPUT_ZONES",
     "SUPPORTED_RAW_ARTIFACT_FORMATS",
     "SUPPORTED_SPARK_WRITE_FORMATS",
+    "PersistedArtifact",
+    "RawArtifactWriter",
     "SparkDatasetWriter",
 ]

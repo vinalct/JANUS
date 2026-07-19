@@ -45,7 +45,7 @@ from janus.strategies.catalog.core import (
 from janus.strategies.http import resolve_url
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout, bronze_table_identifier
-from janus.writers import RawArtifactWriter, SparkDatasetWriter
+from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter, SparkDatasetWriter
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -443,7 +443,9 @@ def _build_extraction_result_from_raw(
     )
 
 
-def _rediscover_raw_artifacts(plan: ExecutionPlan) -> tuple[ExtractedArtifact, ...]:
+def _rediscover_raw_artifacts(
+    plan: ExecutionPlan, *, verify_checksums: bool = False
+) -> tuple[ExtractedArtifact, ...]:
     raw_root = Path(plan.raw_output.path)
     if not raw_root.exists():
         raise FileNotFoundError(f"Configured raw output path does not exist: {raw_root}")
@@ -452,9 +454,13 @@ def _rediscover_raw_artifacts(plan: ExecutionPlan) -> tuple[ExtractedArtifact, .
         ExtractedArtifact(
             path=str(path),
             format=_artifact_format_for_path(path, fallback=plan.source_config.spark.input_format),
-            checksum=_sha256(path),
+            checksum=_resolve_raw_checksum(path, verify=verify_checksums),
         )
-        for path in sorted(candidate for candidate in raw_root.rglob("*") if candidate.is_file())
+        for path in sorted(
+            candidate
+            for candidate in raw_root.rglob("*")
+            if candidate.is_file() and candidate.suffix != SIDECAR_SUFFIX
+        )
     )
     if not artifacts:
         raise FileNotFoundError(f"No raw artifacts were found under {raw_root}")
@@ -726,6 +732,33 @@ def _artifact_format_for_path(path: Path, *, fallback: str) -> str:
     if normalized_fallback in _READABLE_ARTIFACT_FORMATS:
         return normalized_fallback
     return "binary"
+
+
+def _resolve_raw_checksum(path: Path, *, verify: bool = False) -> str:
+    """Return the artifact's SHA-256, reading the ``.sha256`` sidecar when present."""
+
+    cached = _read_sidecar_checksum(path.with_name(path.name + SIDECAR_SUFFIX))
+    if cached is None:
+        return _sha256(path)
+    if verify:
+        recomputed = _sha256(path)
+        if recomputed != cached:
+            raise ValueError(
+                f"Checksum sidecar mismatch for {path}: "
+                f"sidecar={cached}, recomputed={recomputed}"
+            )
+    return cached
+
+
+def _read_sidecar_checksum(sidecar: Path) -> str | None:
+    """Read a bare-digest ``.sha256`` sidecar, or ``None`` if absent/empty."""
+
+    if not sidecar.is_file():
+        return None
+    content = sidecar.read_text(encoding="utf-8").strip()
+    if not content:
+        return None
+    return content.split()[0]
 
 
 def _sha256(path: Path) -> str:

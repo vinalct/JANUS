@@ -24,7 +24,7 @@ define RUN_COMPOSE
 	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose up ensure-up seed-ivy down status logs shell pyspark-local lint test ci run-local run-local-config docker-build docker-run clean
+.PHONY: bootstrap check-compose up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test ci run-local run-local-config docker-build docker-run clean
 
 seed-ivy:
 	@if [ ! -f "$(IVY_JAR_DEST_DIR)/$(IVY_JAR_NAME)" ]; then \
@@ -88,6 +88,9 @@ pyspark-local: ensure-up
 
 lint: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m ruff check src tests)
+
+typecheck: ensure-up
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
 
 test: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m pytest)

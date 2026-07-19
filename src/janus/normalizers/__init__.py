@@ -6,8 +6,8 @@ from janus.normalizers.base import (
 )
 
 __all__ = [
-    "BaseNormalizer",
     "NORMALIZATION_METADATA_COLUMNS",
+    "BaseNormalizer",
     "add_normalization_metadata",
     "reorder_columns",
 ]

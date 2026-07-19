@@ -30,6 +30,7 @@ from janus.models.source_config import (
 )
 
 __all__ = [
+    "SUPPORTED_OUTPUT_ZONES",
     "AccessConfig",
     "AuthConfig",
     "CombinedRequestInputsConfig",
@@ -48,7 +49,6 @@ __all__ = [
     "RequestInputsConfig",
     "RetryConfig",
     "RunContext",
-    "SUPPORTED_OUTPUT_ZONES",
     "SchemaConfig",
     "SourceConfig",
     "SourceConfigValidationError",

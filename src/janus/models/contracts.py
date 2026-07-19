@@ -128,7 +128,7 @@ class ExecutionPlan:
         normalized_note = note.strip()
         if not normalized_note:
             raise ValueError("note must not be empty")
-        return replace(self, notes=self.notes + (normalized_note,))
+        return replace(self, notes=(*self.notes, normalized_note))
 
 
 @dataclass(frozen=True, slots=True)

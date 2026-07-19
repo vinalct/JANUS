@@ -11,6 +11,7 @@ from janus.lineage.models import (
 from janus.lineage.persistence import MetadataZonePaths, read_json_mapping, write_json_atomic
 
 __all__ = [
+    "SUPPORTED_RUN_STATUSES",
     "ArtifactSnapshot",
     "ConfiguredOutput",
     "LineageRecord",
@@ -21,7 +22,6 @@ __all__ = [
     "RunMetadata",
     "RunMetadataStore",
     "RunObserver",
-    "SUPPORTED_RUN_STATUSES",
     "compute_config_version",
     "configured_outputs_from_plan",
     "read_json_mapping",

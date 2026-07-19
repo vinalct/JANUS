@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -1294,10 +1295,8 @@ def _rediscover_all_artifacts_for_input(
         stem = path.stem
         for prefix, start in (("page-", 5), ("offset-", 7), ("cursor-", 7), ("response-", 9)):
             if stem.startswith(prefix):
-                try:
+                with contextlib.suppress(ValueError):
                     candidates.append((int(stem[start:]), path))
-                except ValueError:
-                    pass
                 break
 
     artifacts = []

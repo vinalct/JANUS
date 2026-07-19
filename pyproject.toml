@@ -45,13 +45,14 @@ line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["B", "E", "F", "I", "UP"]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
 
 [tool.mypy]
 python_version = "3.13"
 files = ["src/janus"]
 warn_unused_ignores = true
 warn_redundant_casts = true
+no_implicit_optional = true
 
 [[tool.mypy.overrides]]
 module = ["pyspark.*", "yaml.*", "certifi.*"]
