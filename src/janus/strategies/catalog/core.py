@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -1168,10 +1169,8 @@ def _sorted_catalog_pages(directory: Path) -> list[Path]:
             ("response-", 9),
         ):
             if stem.startswith(prefix):
-                try:
+                with contextlib.suppress(ValueError):
                     candidates.append((int(stem[start:]), path))
-                except ValueError:
-                    pass
                 break
     return [p for _, p in sorted(candidates)]
 

@@ -14,6 +14,7 @@ from janus.checkpoints.store import (
 )
 
 __all__ = [
+    "SUPPORTED_CHECKPOINT_DECISIONS",
     "CheckpointHistoryEntry",
     "CheckpointState",
     "CheckpointStore",
@@ -22,6 +23,5 @@ __all__ = [
     "DeadLetterState",
     "DeadLetterStore",
     "ExtractionProgressStore",
-    "SUPPORTED_CHECKPOINT_DECISIONS",
     "can_continue_after_dead_letter",
 ]
