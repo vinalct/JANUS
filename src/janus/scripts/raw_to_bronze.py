@@ -266,6 +266,7 @@ class RawToBronzeLoader:
                     failure,
                     extraction_result,
                     write_results,
+                    strategy_metadata=strategy_metadata,
                 )
                 _log_error(
                     logger,
@@ -286,7 +287,12 @@ class RawToBronzeLoader:
                     error_type=type(failure).__name__,
                 )
 
-            persisted = self.observer.record_success(plan, extraction_result, write_results)
+            persisted = self.observer.record_success(
+                plan,
+                extraction_result,
+                write_results,
+                strategy_metadata=strategy_metadata,
+            )
             _log_info(
                 logger,
                 "raw_to_bronze_succeeded",
@@ -312,7 +318,13 @@ class RawToBronzeLoader:
                 failure_reason=str(exc),
                 error_type=type(exc).__name__,
             )
-            persisted = self.observer.record_failure(plan, exc, extraction_result, write_results)
+            persisted = self.observer.record_failure(
+                plan,
+                exc,
+                extraction_result,
+                write_results,
+                strategy_metadata=strategy_metadata,
+            )
             return _build_result(
                 runtime_planned_run,
                 status="failed",

@@ -256,6 +256,7 @@ class SourceExecutor:
                     failure,
                     extraction_result,
                     write_results,
+                    strategy_metadata=strategy_metadata,
                 )
                 _log_error(
                     logger,
@@ -275,7 +276,12 @@ class SourceExecutor:
                     error_type=type(failure).__name__,
                 )
 
-            persisted = self.observer.record_success(plan, extraction_result, write_results)
+            persisted = self.observer.record_success(
+                plan,
+                extraction_result,
+                write_results,
+                strategy_metadata=strategy_metadata,
+            )
             _log_info(
                 logger,
                 "source_execution_succeeded",
@@ -300,7 +306,13 @@ class SourceExecutor:
                 failure_reason=str(exc),
                 error_type=type(exc).__name__,
             )
-            persisted = self.observer.record_failure(plan, exc, extraction_result, write_results)
+            persisted = self.observer.record_failure(
+                plan,
+                exc,
+                extraction_result,
+                write_results,
+                strategy_metadata=strategy_metadata,
+            )
             return _build_executed_run(
                 runtime_planned_run,
                 status="failed",
