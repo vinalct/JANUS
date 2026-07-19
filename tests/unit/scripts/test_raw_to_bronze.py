@@ -7,6 +7,9 @@ from types import SimpleNamespace
 from typing import Any
 from zipfile import ZipFile
 
+import pytest
+
+import janus.scripts.raw_to_bronze as raw_to_bronze
 from janus.models import ExecutionPlan, RunContext, WriteResult
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
@@ -15,10 +18,12 @@ from janus.scripts.raw_to_bronze import (
     RawToBronzeLoader,
     _artifact_format_for_path,
     _rediscover_raw_artifacts,
+    _sha256,
 )
 from janus.strategies.catalog import CatalogStrategy
 from janus.strategies.files import FileStrategy
 from janus.utils.storage import StorageLayout
+from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "dados_abertos_catalog"
@@ -306,6 +311,164 @@ def test_rediscover_raw_artifacts_excludes_checksum_sidecars(tmp_path):
 
     assert [artifact.path for artifact in before] == [artifact.path for artifact in after]
     assert all(not artifact.path.endswith(".sha256") for artifact in after)
+
+
+def _rediscovery_plan(tmp_path: Path) -> ExecutionPlan:
+    source_config = load_registry(PROJECT_ROOT).get_source("federal_open_data_example")
+    source_config = replace(
+        source_config,
+        outputs=replace(
+            source_config.outputs,
+            raw=replace(source_config.outputs.raw, path=str(tmp_path / "raw")),
+        ),
+    )
+    run_context = RunContext.create(
+        run_id="run-rediscover-checksum-001",
+        environment="local",
+        project_root=tmp_path,
+        started_at=datetime(2026, 4, 17, 12, 0, tzinfo=UTC),
+    )
+    return ExecutionPlan.from_source_config(source_config, run_context)
+
+
+def _write_raw_page(pages_dir: Path, name: str, body: str) -> Path:
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    page = pages_dir / name
+    page.write_text(body, encoding="utf-8")
+    return page
+
+
+def _spy_on_sha256(monkeypatch) -> list[Path]:
+    hashed: list[Path] = []
+
+    def spy(path: Path) -> str:
+        hashed.append(Path(path))
+        return _sha256(path)
+
+    monkeypatch.setattr(raw_to_bronze, "_sha256", spy)
+    return hashed
+
+
+def test_rediscover_raw_artifacts_reads_sidecar_without_re_hashing(tmp_path, monkeypatch):
+    plan = _rediscovery_plan(tmp_path)
+    pages_dir = Path(plan.raw_output.path) / "pages"
+    page_one = _write_raw_page(pages_dir, "page-0001.json", '{"page": 1}\n')
+    page_two = _write_raw_page(pages_dir, "page-0002.json", '{"page": 2}\n')
+
+    # Sidecars hold arbitrary-but-non-empty digests so a cache hit is observable
+    # independently of what re-hashing would produce.
+    digest_one = "a" * 64
+    digest_two = "b" * 64
+    page_one.with_name(page_one.name + SIDECAR_SUFFIX).write_text(
+        f"{digest_one}\n", encoding="utf-8"
+    )
+    page_two.with_name(page_two.name + SIDECAR_SUFFIX).write_text(
+        f"{digest_two}\n", encoding="utf-8"
+    )
+
+    hashed = _spy_on_sha256(monkeypatch)
+    artifacts = _rediscover_raw_artifacts(plan)
+
+    checksums = {artifact.path: artifact.checksum for artifact in artifacts}
+    assert checksums[str(page_one)] == digest_one
+    assert checksums[str(page_two)] == digest_two
+    # sidecar-backed files are never re-hashed (no file-body read).
+    assert hashed == []
+
+
+def test_rediscover_raw_artifacts_checksums_match_direct_sha256(tmp_path):
+    plan = _rediscovery_plan(tmp_path)
+    pages_dir = Path(plan.raw_output.path) / "pages"
+    page_one = _write_raw_page(pages_dir, "page-0001.json", '{"page": 1}\n')
+    page_two = _write_raw_page(pages_dir, "page-0002.json", '{"page": 2}\n')
+
+    # Sidecars written exactly as extraction would: the real digest.
+    expected = {page_one: _sha256(page_one), page_two: _sha256(page_two)}
+    for page, digest in expected.items():
+        page.with_name(page.name + SIDECAR_SUFFIX).write_text(f"{digest}\n", encoding="utf-8")
+
+    artifacts = _rediscover_raw_artifacts(plan)
+
+    checksums = {artifact.path: artifact.checksum for artifact in artifacts}
+    # the cached digest is byte-identical to the pre-change _sha256 value.
+    assert checksums[str(page_one)] == expected[page_one]
+    assert checksums[str(page_two)] == expected[page_two]
+
+
+def test_rediscover_raw_artifacts_falls_back_to_hashing_without_sidecar(tmp_path, monkeypatch):
+    plan = _rediscovery_plan(tmp_path)
+    pages_dir = Path(plan.raw_output.path) / "pages"
+    page_one = _write_raw_page(pages_dir, "page-0001.json", '{"page": 1}\n')
+    page_two = _write_raw_page(pages_dir, "page-0002.json", '{"page": 2}\n')
+
+    hashed = _spy_on_sha256(monkeypatch)
+    artifacts = _rediscover_raw_artifacts(plan)
+
+    checksums = {artifact.path: artifact.checksum for artifact in artifacts}
+    # Legacy raw zone (no sidecars): identical behaviour to pre-change hashing.
+    assert checksums[str(page_one)] == _sha256(page_one)
+    assert checksums[str(page_two)] == _sha256(page_two)
+    assert set(hashed) == {page_one, page_two}
+
+
+def test_rediscover_raw_artifacts_hashes_only_sidecarless_files(tmp_path, monkeypatch):
+    plan = _rediscovery_plan(tmp_path)
+    pages_dir = Path(plan.raw_output.path) / "pages"
+    cached_page = _write_raw_page(pages_dir, "page-0001.json", '{"page": 1}\n')
+    legacy_page = _write_raw_page(pages_dir, "page-0002.json", '{"page": 2}\n')
+
+    cached_digest = _sha256(cached_page)
+    cached_page.with_name(cached_page.name + SIDECAR_SUFFIX).write_text(
+        f"{cached_digest}\n", encoding="utf-8"
+    )
+
+    hashed = _spy_on_sha256(monkeypatch)
+    artifacts = _rediscover_raw_artifacts(plan)
+
+    checksums = {artifact.path: artifact.checksum for artifact in artifacts}
+    assert checksums[str(cached_page)] == cached_digest
+    assert checksums[str(legacy_page)] == _sha256(legacy_page)
+    # Only the sidecarless file is re-hashed during rediscovery.
+    assert hashed == [legacy_page]
+
+
+def test_rediscover_raw_artifacts_round_trips_writer_sidecars(tmp_path, monkeypatch):
+    plan = _rediscovery_plan(tmp_path)
+    storage_layout = _storage_layout(tmp_path)
+    writer = RawArtifactWriter(storage_layout)
+
+    persisted_one = writer.write_json(plan, "pages/page-0001.json", {"page": 1})
+    persisted_two = writer.write_json(plan, "pages/page-0002.json", {"page": 2})
+
+    raw_root = Path(persisted_one.artifact.path).parents[1]
+    rediscovery_plan = replace(
+        plan, raw_output=replace(plan.raw_output, path=str(raw_root))
+    )
+
+    hashed = _spy_on_sha256(monkeypatch)
+    artifacts = _rediscover_raw_artifacts(rediscovery_plan)
+
+    checksums = {artifact.path: artifact.checksum for artifact in artifacts}
+    # The rediscovered digest equals the write-time ExtractedArtifact.checksum.
+    assert checksums[persisted_one.artifact.path] == persisted_one.artifact.checksum
+    assert checksums[persisted_two.artifact.path] == persisted_two.artifact.checksum
+    # Writer emitted sidecars, so replay never re-reads the bodies.
+    assert hashed == []
+
+
+def test_rediscover_raw_artifacts_verify_mode_detects_sidecar_mismatch(tmp_path):
+    plan = _rediscovery_plan(tmp_path)
+    pages_dir = Path(plan.raw_output.path) / "pages"
+    page = _write_raw_page(pages_dir, "page-0001.json", '{"page": 1}\n')
+    page.with_name(page.name + SIDECAR_SUFFIX).write_text("f" * 64 + "\n", encoding="utf-8")
+
+    # Default path trusts the sidecar even when it disagrees with the body.
+    trusted = _rediscover_raw_artifacts(plan)
+    assert trusted[0].checksum == "f" * 64
+
+    # Opt-in verification re-hashes and rejects the divergent sidecar.
+    with pytest.raises(ValueError, match="Checksum sidecar mismatch"):
+        _rediscover_raw_artifacts(plan, verify_checksums=True)
 
 
 def test_raw_to_bronze_loader_regenerates_catalog_jsonl_handoff_from_raw_pages(tmp_path):
