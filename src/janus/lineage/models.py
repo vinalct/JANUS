@@ -359,6 +359,7 @@ class LineageRecord:
     run_attributes: tuple[tuple[str, str], ...] = ()
     plan_notes: tuple[str, ...] = ()
     extraction_metadata: tuple[tuple[str, str], ...] = ()
+    metadata: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if self.status not in SUPPORTED_RUN_STATUSES:
@@ -397,6 +398,7 @@ class LineageRecord:
         failure_reason: str | None = None,
         error_type: str | None = None,
         emitted_at: datetime | None = None,
+        metadata: Mapping[str, str] | None = None,
     ) -> Self:
         resolved_emitted_at = emitted_at or datetime.now(tz=UTC)
         return cls(
@@ -438,10 +440,14 @@ class LineageRecord:
             extraction_metadata=(
                 extraction_result.metadata if extraction_result is not None else ()
             ),
+            metadata=_freeze_string_mapping(metadata),
         )
 
     def extraction_metadata_as_dict(self) -> dict[str, str]:
         return dict(self.extraction_metadata)
+
+    def metadata_as_dict(self) -> dict[str, str]:
+        return dict(self.metadata)
 
     def run_attributes_as_dict(self) -> dict[str, str]:
         return dict(self.run_attributes)
@@ -468,6 +474,7 @@ class LineageRecord:
             "run_attributes": self.run_attributes_as_dict(),
             "plan_notes": list(self.plan_notes),
             "extraction_metadata": self.extraction_metadata_as_dict(),
+            "metadata": self.metadata_as_dict(),
         }
         if self.checkpoint_field is not None:
             payload["checkpoint_field"] = self.checkpoint_field

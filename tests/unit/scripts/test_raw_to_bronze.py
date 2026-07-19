@@ -158,6 +158,7 @@ class FakeQualityGate:
 class FakeObserver:
     calls: list[str]
     metadata_root: Path
+    seen_strategy_metadata: Any | None = None
 
     def start_run(self, plan):
         del plan
@@ -168,7 +169,7 @@ class FakeObserver:
         del plan
         del extraction_result
         del write_results
-        del kwargs
+        self.seen_strategy_metadata = kwargs.get("strategy_metadata")
         self.calls.append("success")
         return SimpleNamespace(
             run_metadata_path=self.metadata_root / "runs" / "run-001.json",
@@ -181,6 +182,25 @@ class FakeObserver:
 
     def record_failure(self, *args, **kwargs):
         raise AssertionError("record_failure should not be called in the success test")
+
+
+@dataclass(slots=True)
+class FakeFailingObserver(FakeObserver):
+    def record_success(self, *args, **kwargs):
+        raise AssertionError("record_success should not be called in the failure test")
+
+    def record_failure(self, plan, error, extraction_result=None, write_results=(), **kwargs):
+        del plan
+        del error
+        del extraction_result
+        del write_results
+        self.seen_strategy_metadata = kwargs.get("strategy_metadata")
+        self.calls.append("failure")
+        return SimpleNamespace(
+            run_metadata_path=self.metadata_root / "runs" / "run-001.json",
+            lineage_path=self.metadata_root / "lineage" / "run-001.json",
+            checkpoint_result=None,
+        )
 
 
 def test_raw_to_bronze_loader_reuses_existing_modules_and_overrides_target_table(tmp_path):
@@ -788,6 +808,79 @@ def test_file_raw_to_bronze_writes_handoff_artifacts_in_append_batches(tmp_path)
         "overwrite",
         "append",
     ]
+
+
+def test_raw_to_bronze_loader_forwards_strategy_metadata_to_observer_on_success(tmp_path):
+    calls: list[str] = []
+    planned_run = _planned_run(tmp_path, calls)
+    raw_root = tmp_path / "data" / "raw" / "example" / "federal_open_data_example"
+    raw_root.mkdir(parents=True, exist_ok=True)
+    (raw_root / "page-0001.json").write_text('{"id": 1}\n', encoding="utf-8")
+
+    validation_report = ValidationReport.from_plan(
+        planned_run.plan,
+        [ValidationCheck.passed("output", "materialized_outputs", "ok")],
+    )
+    metadata_root = tmp_path / "data" / "metadata" / "example" / "federal_open_data_example"
+    observer = FakeObserver(calls, metadata_root)
+
+    result = RawToBronzeLoader(
+        reader=FakeReader(calls),
+        normalizer=FakeNormalizer(calls),
+        quality_gate=FakeQualityGate(
+            calls,
+            validation_report,
+            metadata_root / "validations" / "run-001.json",
+        ),
+        observer=observer,
+        writer_factory=lambda storage_layout: FakeWriter(calls),
+        storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
+    ).ingest(
+        planned_run,
+        spark=object(),
+        environment_config={},
+        bronze_table="curated.custom_table",
+    )
+
+    assert result.is_successful is True
+    assert observer.seen_strategy_metadata == {"write_result_count": 2}
+
+
+def test_raw_to_bronze_loader_forwards_strategy_metadata_on_quality_failure(tmp_path):
+    calls: list[str] = []
+    planned_run = _planned_run(tmp_path, calls)
+    raw_root = tmp_path / "data" / "raw" / "example" / "federal_open_data_example"
+    raw_root.mkdir(parents=True, exist_ok=True)
+    (raw_root / "page-0001.json").write_text('{"id": 1}\n', encoding="utf-8")
+
+    validation_report = ValidationReport.from_plan(
+        planned_run.plan,
+        [ValidationCheck.failed("data", "required_fields", "missing fields")],
+    )
+    metadata_root = tmp_path / "data" / "metadata" / "example" / "federal_open_data_example"
+    observer = FakeFailingObserver(calls, metadata_root)
+
+    result = RawToBronzeLoader(
+        reader=FakeReader(calls),
+        normalizer=FakeNormalizer(calls),
+        quality_gate=FakeQualityGate(
+            calls,
+            validation_report,
+            metadata_root / "validations" / "run-001.json",
+        ),
+        observer=observer,
+        writer_factory=lambda storage_layout: FakeWriter(calls),
+        storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
+    ).ingest(
+        planned_run,
+        spark=object(),
+        environment_config={},
+        bronze_table="curated.custom_table",
+    )
+
+    assert result.is_successful is False
+    assert calls[-1] == "failure"
+    assert observer.seen_strategy_metadata == {"write_result_count": 2}
 
 
 def _planned_run(tmp_path: Path, calls: list[str]) -> PlannedRun:

@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from janus.lineage import RunObserver
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext, WriteResult
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
@@ -169,6 +170,7 @@ class FakeObserver:
     calls: list[str]
     metadata_root: Path
     seen_metadata_output_path: str | None = None
+    seen_strategy_metadata: Any | None = None
 
     def start_run(self, plan):
         self.seen_metadata_output_path = plan.metadata_output.path
@@ -179,7 +181,7 @@ class FakeObserver:
         del plan
         del extraction_result
         del write_results
-        del kwargs
+        self.seen_strategy_metadata = kwargs.get("strategy_metadata")
         self.calls.append("success")
         return SimpleNamespace(
             run_metadata_path=self.metadata_root / "runs" / "run-001.json",
@@ -204,7 +206,7 @@ class FakeFailingObserver(FakeObserver):
         del error
         del extraction_result
         del write_results
-        del kwargs
+        self.seen_strategy_metadata = kwargs.get("strategy_metadata")
         self.calls.append("failure")
         return SimpleNamespace(
             run_metadata_path=self.metadata_root / "runs" / "run-001.json",
@@ -597,6 +599,119 @@ def test_source_executor_records_failed_status_when_quality_validation_fails(tmp
     assert executed_run.failure_reason == "Quality validation failed: data.required_fields"
     assert executed_run.error_type == "RuntimeError"
     assert calls[-1] == "failure"
+    observer = executor.observer
+    assert isinstance(observer, FakeFailingObserver)
+    assert observer.seen_strategy_metadata == {"emitted": True}
+
+
+def test_source_executor_forwards_strategy_metadata_to_observer_on_success(tmp_path):
+    calls: list[str] = []
+    planned_run = _planned_run(tmp_path, calls)
+    validation_report = ValidationReport.from_plan(
+        planned_run.plan,
+        [ValidationCheck.passed("output", "materialized_outputs", "ok")],
+    )
+    metadata_root = tmp_path / "data" / "metadata" / "example" / "federal_open_data_example"
+    bronze_path = tmp_path / "data" / "bronze" / "example" / "federal_open_data_example"
+    observer = FakeObserver(calls, metadata_root)
+
+    executor = SourceExecutor(
+        reader=FakeReader(calls),
+        normalizer=FakeNormalizer(calls),
+        quality_gate=FakeQualityGate(
+            calls,
+            validation_report,
+            metadata_root / "validations" / "run-001.json",
+        ),
+        observer=observer,
+        writer_factory=lambda storage_layout: FakeWriter(calls, bronze_path),
+        storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
+    )
+
+    executed_run = executor.execute(planned_run, spark=object(), environment_config={})
+
+    assert executed_run.is_successful is True
+    assert observer.seen_strategy_metadata == {"emitted": True}
+
+
+def test_source_executor_persists_strategy_metadata_with_real_observer(tmp_path):
+    calls: list[str] = []
+    planned_run = _planned_run(tmp_path, calls)
+    validation_report = ValidationReport.from_plan(
+        planned_run.plan,
+        [ValidationCheck.passed("output", "materialized_outputs", "ok")],
+    )
+    metadata_root = tmp_path / "data" / "metadata" / "example" / "federal_open_data_example"
+    bronze_path = tmp_path / "data" / "bronze" / "example" / "federal_open_data_example"
+
+    executor = SourceExecutor(
+        reader=FakeReader(calls),
+        normalizer=FakeNormalizer(calls),
+        quality_gate=FakeQualityGate(
+            calls,
+            validation_report,
+            metadata_root / "validations" / "run-001.json",
+        ),
+        observer=RunObserver(),
+        writer_factory=lambda storage_layout: FakeWriter(calls, bronze_path),
+        storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
+    )
+
+    executed_run = executor.execute(planned_run, spark=object(), environment_config={})
+
+    assert executed_run.is_successful is True
+    run_metadata = json.loads(executed_run.run_metadata_path.read_text(encoding="utf-8"))
+    lineage = json.loads(executed_run.lineage_path.read_text(encoding="utf-8"))
+    assert run_metadata["metadata"]["strategy.emitted"] == "true"
+    assert lineage["metadata"]["strategy.emitted"] == "true"
+
+
+def test_source_executor_persists_empty_strategy_metadata_on_early_exception(tmp_path):
+    @dataclass(slots=True)
+    class ExplodingStrategy(FakeStrategy):
+        def extract(self, plan, hook=None, *, spark=None):
+            del plan
+            del hook
+            del spark
+            self.calls.append("extract")
+            raise RuntimeError("extract boom")
+
+    calls: list[str] = []
+    source_config = load_registry(PROJECT_ROOT).get_source("federal_open_data_example")
+    run_context = RunContext.create(
+        run_id="run-001",
+        environment="local",
+        project_root=tmp_path,
+        started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
+    )
+    planned_run = PlannedRun(
+        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        strategy=ExplodingStrategy(calls),
+        hook=None,
+    )
+    metadata_root = tmp_path / "data" / "metadata" / "example" / "federal_open_data_example"
+    bronze_path = tmp_path / "data" / "bronze" / "example" / "federal_open_data_example"
+    observer = FakeFailingObserver(calls, metadata_root)
+
+    executor = SourceExecutor(
+        reader=FakeReader(calls),
+        normalizer=FakeNormalizer(calls),
+        quality_gate=FakeQualityGate(
+            calls,
+            ValidationReport.from_plan(planned_run.plan, []),
+            metadata_root / "validations" / "run-001.json",
+        ),
+        observer=observer,
+        writer_factory=lambda storage_layout: FakeWriter(calls, bronze_path),
+        storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
+    )
+
+    executed_run = executor.execute(planned_run, spark=object(), environment_config={})
+
+    assert executed_run.is_successful is False
+    assert executed_run.failure_reason == "extract boom"
+    assert executed_run.error_type == "RuntimeError"
+    assert observer.seen_strategy_metadata == {}
 
 
 def test_plan_with_storage_layout_outputs_preserves_bronze_namespace_and_table(tmp_path):
