@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -10,9 +11,10 @@ import pytest
 
 from janus.models import ExecutionPlan, RunContext
 from janus.registry import load_registry
+from janus.strategies.files.core import _read_checksum_sidecar
 from janus.utils.environment import ICEBERG_CATALOG_IMPL, ICEBERG_SESSION_EXTENSIONS
 from janus.utils.storage import StorageLayout, bronze_table_identifier
-from janus.writers import RawArtifactWriter, SparkDatasetWriter
+from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter, SparkDatasetWriter
 from janus.writers.spark import _rebalance_for_write
 
 if TYPE_CHECKING:
@@ -123,6 +125,76 @@ def test_raw_artifact_writer_persists_json_payload_with_checksum(tmp_path):
     assert persisted.write_result.zone == "raw"
     assert persisted.write_result.records_written == 1
     assert persisted.write_result.metadata_as_dict()["source"] == "unit-test"
+
+
+def test_raw_artifact_writer_writes_checksum_sidecar_for_every_write_method(tmp_path):
+    plan = _build_plan(
+        tmp_path,
+        run_id="run-writer-sidecar-001",
+        started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
+    )
+    storage_layout = _build_storage_layout(tmp_path)
+    writer = RawArtifactWriter(storage_layout)
+
+    persisted_artifacts = [
+        writer.write_bytes(plan, "bytes.bin", b"\x00\x01payload"),
+        writer.write_text(plan, "text.txt", "hello sidecar"),
+        writer.write_json(plan, "doc.json", {"page": 1, "records": [{"id": "1"}]}),
+        writer.write_json_lines(plan, "rows.jsonl", [{"id": "1"}, {"id": "2"}]),
+    ]
+
+    for persisted in persisted_artifacts:
+        persisted_path = Path(persisted.write_result.path)
+        sidecar = persisted_path.with_name(persisted_path.name + SIDECAR_SUFFIX)
+
+        on_disk_digest = sha256(persisted_path.read_bytes()).hexdigest()
+        assert sidecar.exists()
+        assert sidecar.read_text(encoding="utf-8") == f"{persisted.artifact.checksum}\n"
+        assert persisted.artifact.checksum == on_disk_digest
+        assert _read_checksum_sidecar(sidecar) == persisted.artifact.checksum
+
+
+def test_raw_artifact_writer_refreshes_sidecar_in_ignore_mode_without_touching_payload(tmp_path):
+    plan = _build_plan(
+        tmp_path,
+        run_id="run-writer-sidecar-ignore-001",
+        started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
+    )
+    storage_layout = _build_storage_layout(tmp_path)
+    writer = RawArtifactWriter(storage_layout)
+
+    first = writer.write_bytes(plan, "keep.bin", b"original bytes", mode="overwrite")
+    persisted_path = Path(first.write_result.path)
+    sidecar = persisted_path.with_name(persisted_path.name + SIDECAR_SUFFIX)
+    sidecar.unlink()
+
+    second = writer.write_bytes(plan, "keep.bin", b"ignored replacement", mode="ignore")
+
+    assert persisted_path.read_bytes() == b"original bytes"
+    expected_digest = sha256(b"original bytes").hexdigest()
+    assert second.artifact.checksum == expected_digest
+    assert sidecar.read_text(encoding="utf-8") == f"{expected_digest}\n"
+
+
+def test_raw_artifact_writer_sidecar_tracks_final_bytes_after_append(tmp_path):
+    plan = _build_plan(
+        tmp_path,
+        run_id="run-writer-sidecar-append-001",
+        started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
+    )
+    storage_layout = _build_storage_layout(tmp_path)
+    writer = RawArtifactWriter(storage_layout)
+
+    writer.write_bytes(plan, "log.bin", b"first-", mode="append")
+    second = writer.write_bytes(plan, "log.bin", b"second", mode="append")
+
+    persisted_path = Path(second.write_result.path)
+    sidecar = persisted_path.with_name(persisted_path.name + SIDECAR_SUFFIX)
+
+    expected_digest = sha256(b"first-second").hexdigest()
+    assert persisted_path.read_bytes() == b"first-second"
+    assert second.artifact.checksum == expected_digest
+    assert sidecar.read_text(encoding="utf-8") == f"{expected_digest}\n"
 
 
 def test_raw_artifact_writer_can_scope_raw_payloads_under_a_run_prefix(tmp_path):

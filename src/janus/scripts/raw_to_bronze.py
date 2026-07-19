@@ -45,7 +45,7 @@ from janus.strategies.catalog.core import (
 from janus.strategies.http import resolve_url
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout, bronze_table_identifier
-from janus.writers import RawArtifactWriter, SparkDatasetWriter
+from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter, SparkDatasetWriter
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -454,7 +454,11 @@ def _rediscover_raw_artifacts(plan: ExecutionPlan) -> tuple[ExtractedArtifact, .
             format=_artifact_format_for_path(path, fallback=plan.source_config.spark.input_format),
             checksum=_sha256(path),
         )
-        for path in sorted(candidate for candidate in raw_root.rglob("*") if candidate.is_file())
+        for path in sorted(
+            candidate
+            for candidate in raw_root.rglob("*")
+            if candidate.is_file() and candidate.suffix != SIDECAR_SUFFIX
+        )
     )
     if not artifacts:
         raise FileNotFoundError(f"No raw artifacts were found under {raw_root}")

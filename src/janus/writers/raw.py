@@ -14,6 +14,11 @@ SUPPORTED_RAW_ARTIFACT_FORMATS = frozenset({"binary", "json", "jsonl", "text"})
 SUPPORTED_FILE_OUTPUT_ZONES = frozenset({"metadata", "raw"})
 SUPPORTED_FILE_WRITE_MODES = frozenset({"append", "ignore", "overwrite"})
 
+# Suffix of the per-artifact checksum sidecar written next to every raw payload.
+# Replay discovery (`scripts/raw_to_bronze.py`) must skip files ending with this
+# so a sidecar is never mistaken for a data artifact.
+SIDECAR_SUFFIX = ".sha256"
+
 
 @dataclass(frozen=True, slots=True)
 class PersistedArtifact:
@@ -154,6 +159,7 @@ class RawArtifactWriter:
         target = self.storage_layout.resolve_output(plan, zone)
         path = target.child(self._relative_path_for_zone(zone, relative_path))
         checksum, persisted_path = _write_bytes(path, payload, mode)
+        _write_checksum_sidecar(persisted_path, checksum)
 
         resolved_metadata = dict(metadata or {})
         resolved_metadata.setdefault("checksum", checksum)
@@ -193,6 +199,19 @@ def _write_bytes(path: Path, payload: bytes, mode: str) -> tuple[str, Path]:
     else:
         path.write_bytes(payload)
     return sha256(path.read_bytes()).hexdigest(), path
+
+
+def _write_checksum_sidecar(path: Path, checksum: str) -> None:
+    """Persist ``checksum`` next to ``path`` as ``<path>.sha256`` (bare digest).
+
+    The digest is the identical string returned as ``ExtractedArtifact.checksum``
+    for the same write; replay reads it instead of re-hashing the payload. The
+    format matches the file family's integrity sidecars, so
+    ``_read_checksum_sidecar`` can parse it.
+    """
+
+    sidecar = path.with_name(path.name + SIDECAR_SUFFIX)
+    sidecar.write_text(f"{checksum}\n", encoding="utf-8")
 
 
 def _validate_output_zone(zone: str) -> None:

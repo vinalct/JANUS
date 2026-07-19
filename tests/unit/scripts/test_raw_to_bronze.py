@@ -11,7 +11,11 @@ from janus.models import ExecutionPlan, RunContext, WriteResult
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
 from janus.registry import load_registry
-from janus.scripts.raw_to_bronze import RawToBronzeLoader, _artifact_format_for_path
+from janus.scripts.raw_to_bronze import (
+    RawToBronzeLoader,
+    _artifact_format_for_path,
+    _rediscover_raw_artifacts,
+)
 from janus.strategies.catalog import CatalogStrategy
 from janus.strategies.files import FileStrategy
 from janus.utils.storage import StorageLayout
@@ -268,6 +272,40 @@ def test_artifact_format_inference_uses_file_suffix_before_fallback():
     assert _artifact_format_for_path(Path("dataset.jsonl"), fallback="json") == "jsonl"
     assert _artifact_format_for_path(Path("download.zip"), fallback="csv") == "binary"
     assert _artifact_format_for_path(Path("data.unknown"), fallback="parquet") == "parquet"
+
+
+def test_rediscover_raw_artifacts_excludes_checksum_sidecars(tmp_path):
+    source_config = load_registry(PROJECT_ROOT).get_source("federal_open_data_example")
+    source_config = replace(
+        source_config,
+        outputs=replace(
+            source_config.outputs,
+            raw=replace(source_config.outputs.raw, path=str(tmp_path / "raw")),
+        ),
+    )
+    run_context = RunContext.create(
+        run_id="run-rediscover-sidecar-001",
+        environment="local",
+        project_root=tmp_path,
+        started_at=datetime(2026, 4, 17, 12, 0, tzinfo=UTC),
+    )
+    plan = ExecutionPlan.from_source_config(source_config, run_context)
+
+    raw_root = Path(plan.raw_output.path)
+    (raw_root / "pages").mkdir(parents=True, exist_ok=True)
+    (raw_root / "pages" / "page-0001.json").write_text('{"page": 1}\n', encoding="utf-8")
+    (raw_root / "pages" / "page-0002.json").write_text('{"page": 2}\n', encoding="utf-8")
+
+    before = _rediscover_raw_artifacts(plan)
+
+    # Sidecars added by the writer must not change the rediscovered artifact set.
+    (raw_root / "pages" / "page-0001.json.sha256").write_text("deadbeef\n", encoding="utf-8")
+    (raw_root / "pages" / "page-0002.json.sha256").write_text("cafef00d\n", encoding="utf-8")
+
+    after = _rediscover_raw_artifacts(plan)
+
+    assert [artifact.path for artifact in before] == [artifact.path for artifact in after]
+    assert all(not artifact.path.endswith(".sha256") for artifact in after)
 
 
 def test_raw_to_bronze_loader_regenerates_catalog_jsonl_handoff_from_raw_pages(tmp_path):
