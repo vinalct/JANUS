@@ -203,7 +203,7 @@ def _coerce_metadata_value(value: Any) -> tuple[str | None, str]:
         return None, "none_value"
     if isinstance(value, bool):
         return ("true" if value else "false"), ""
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return str(value), ""
     if isinstance(value, str):
         stripped = value.strip()
