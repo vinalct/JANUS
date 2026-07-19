@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import logging
 import re
 from collections.abc import Sequence
@@ -324,18 +325,14 @@ def _parse_propfind_response(
         size_bytes: int | None = None
         size_el = response_el.find(f".//{{{_DAV_NS}}}getcontentlength")
         if size_el is not None and size_el.text:
-            try:
+            with contextlib.suppress(ValueError):
                 size_bytes = int(size_el.text.strip())
-            except ValueError:
-                pass
 
         modified_at = None
         modtime_el = response_el.find(f".//{{{_DAV_NS}}}getlastmodified")
         if modtime_el is not None and modtime_el.text:
-            try:
+            with contextlib.suppress(TypeError, ValueError, IndexError, OverflowError):
                 modified_at = parsedate_to_datetime(modtime_el.text.strip())
-            except (TypeError, ValueError, IndexError, OverflowError):
-                pass
 
         files.append(
             DiscoveredFile(

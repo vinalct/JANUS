@@ -44,7 +44,7 @@ def test_shared_throttle_grants_unique_spaced_slots_under_concurrency():
     #     every later slot is a distinct whole-interval delay.
     assert sorted(sleeps) == [slot * interval for slot in range(1, total_calls)]
 
-    # (b) Total granted slots == N×M — the zero-delay slot plus every sleep.
+    # (b) Total granted slots == N*M — the zero-delay slot plus every sleep.
     assert len(sleeps) + 1 == total_calls
 
 
