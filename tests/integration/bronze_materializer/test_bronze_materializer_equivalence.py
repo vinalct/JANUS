@@ -11,7 +11,7 @@ import yaml
 from janus.models import RunContext, SourceConfig
 from janus.planner import PlannedRun
 from janus.registry import load_registry
-from janus.runtime import SourceExecutor
+from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.scripts import ingest_raw_to_bronze
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.strategies.files import FileStrategy
@@ -137,7 +137,9 @@ def file_family_runs(spark, tmp_path_factory):
     plan = strategy.plan(source_config, run_context)
     planned_run = PlannedRun(plan=plan, strategy=strategy)
 
-    executed = SourceExecutor().execute(planned_run, spark, ENVIRONMENT_CONFIG)
+    executed = SourceExecutor().execute(
+        planned_run, SparkSessionProvider.wrapping(spark), ENVIRONMENT_CONFIG
+    )
     assert executed.status == "succeeded", executed.failure_reason
     assert executed.strategy_metadata["archive_member_count"] == str(ARCHIVE_MEMBER_COUNT)
 
@@ -211,7 +213,9 @@ def test_api_family_replay_produces_identical_bronze(spark, tmp_path, monkeypatc
     plan = strategy.plan(source_config, run_context)
     planned_run = PlannedRun(plan=plan, strategy=strategy)
 
-    executed = SourceExecutor().execute(planned_run, spark, ENVIRONMENT_CONFIG)
+    executed = SourceExecutor().execute(
+        planned_run, SparkSessionProvider.wrapping(spark), ENVIRONMENT_CONFIG
+    )
     assert executed.status == "succeeded", executed.failure_reason
 
     ingested = ingest_raw_to_bronze(

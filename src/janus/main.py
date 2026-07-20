@@ -10,7 +10,7 @@ from pathlib import Path
 
 from janus.planner import Planner, PlannerError, PlanningRequest
 from janus.registry import SourceNotFoundError
-from janus.runtime import SourceExecutor
+from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.scripts import ingest_raw_to_bronze
 from janus.utils.environment import build_spark_session, load_environment_config, prepare_runtime
 from janus.utils.logging import build_structured_logger
@@ -213,41 +213,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             include_disabled=args.include_disabled,
         )
 
+        spark_provider = SparkSessionProvider(config, resolved_paths, execution_logger)
         try:
-            execution_logger.info(
-                "spark_session_starting",
-                app_name=config.get("spark", {}).get("app_name"),
-                master=config.get("spark", {}).get("master"),
-            )
-            spark = build_spark_session(config, resolved_paths)
-        except Exception as exc:  # pragma: no cover - defensive entrypoint guard
-            execution_logger.exception(
-                "spark_session_failed",
-                failure_reason=str(exc),
-                error_type=type(exc).__name__,
-            )
-            print(str(exc), file=sys.stderr)
-            return 1
-
-        try:
-            summary["spark_session"] = {
-                "app_name": spark.sparkContext.appName,
-                "master": spark.sparkContext.master,
-            }
-            execution_logger.info(
-                "spark_session_started",
-                app_name=spark.sparkContext.appName,
-                master=spark.sparkContext.master,
-            )
             executed_run = SourceExecutor(logger=execution_logger).execute(
                 planned_run,
-                spark,
+                spark_provider,
                 config,
             )
             summary["executed_run"] = executed_run.to_summary()
+            if spark_provider.was_started:
+                summary["spark_session"] = spark_provider.session_info
         finally:
-            spark.stop()
-            execution_logger.info("spark_session_stopped")
+            # The executor already stops in its own finally; this is the backstop for
+            # a session acquired outside that span.
+            spark_provider.stop()
 
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0 if executed_run.is_successful else 1

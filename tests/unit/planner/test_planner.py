@@ -388,6 +388,7 @@ def test_main_executes_source_through_framework_runtime(tmp_path, capsys, monkey
         include_environment=True,
     )
     stopped = []
+    built = []
 
     class FakeSparkSession:
         sparkContext = SimpleNamespace(appName="janus-exec-test", master="local[1]")
@@ -409,13 +410,22 @@ def test_main_executes_source_through_framework_runtime(tmp_path, capsys, monkey
         def __init__(self, logger=None):
             self.logger = logger
 
-        def execute(self, planned_run, spark, environment_config):
+        def execute(self, planned_run, spark_provider, environment_config):
             assert planned_run.plan.source.source_id == "cli_source"
-            assert spark.sparkContext.appName == "janus-exec-test"
             assert environment_config["name"] == "local"
+            # The CLI hands over a provider, not a session: nothing is built until the
+            # executor reaches its materialization boundary.
+            assert built == []
+            assert spark_provider.get().sparkContext.appName == "janus-exec-test"
             return FakeExecutedRun()
 
-    monkeypatch.setattr("janus.main.build_spark_session", lambda config, paths: FakeSparkSession())
+    def _build_session(config, paths):
+        del config
+        del paths
+        built.append(True)
+        return FakeSparkSession()
+
+    monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _build_session)
     monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
 
     exit_code = main(
