@@ -96,9 +96,15 @@ class SparkSessionProvider:
         legitimately acquires, stops, acquires and stops again.
         """
 
+        if not self._owns_session:
+            # Externally owned: releasing is a no-op *and* keeps the session
+            # available, so a scoped acquire/release cannot strand a caller that
+            # still needs it. Only its owner decides when it dies.
+            return
+
         session = self._session
         self._session = None
-        if session is None or not self._owns_session:
+        if session is None:
             return
 
         try:

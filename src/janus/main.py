@@ -7,6 +7,7 @@ import sys
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from janus.planner import Planner, PlannerError, PlanningRequest
 from janus.registry import SourceNotFoundError
@@ -60,6 +61,13 @@ def format_runtime_permission_error(exc: PermissionError) -> str:
             "applied correctly."
         )
     return message
+
+
+def record_spark_session(summary: dict[str, Any], provider: SparkSessionProvider) -> None:
+    """Report the session block from what actually happened, not from intent."""
+
+    if provider.was_started:
+        summary["spark_session"] = provider.session_info
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -221,8 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config,
             )
             summary["executed_run"] = executed_run.to_summary()
-            if spark_provider.was_started:
-                summary["spark_session"] = spark_provider.session_info
+            record_spark_session(summary, spark_provider)
         finally:
             # The executor already stops in its own finally; this is the backstop for
             # a session acquired outside that span.
@@ -248,43 +255,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             bronze_table=args.bronze_table,
         )
 
+        spark_provider = SparkSessionProvider(config, resolved_paths, execution_logger)
         try:
-            execution_logger.info(
-                "spark_session_starting",
-                app_name=config.get("spark", {}).get("app_name"),
-                master=config.get("spark", {}).get("master"),
-            )
-            spark = build_spark_session(config, resolved_paths)
-        except Exception as exc:  # pragma: no cover - defensive entrypoint guard
-            execution_logger.exception(
-                "spark_session_failed",
-                failure_reason=str(exc),
-                error_type=type(exc).__name__,
-            )
-            print(str(exc), file=sys.stderr)
-            return 1
-
-        try:
-            summary["spark_session"] = {
-                "app_name": spark.sparkContext.appName,
-                "master": spark.sparkContext.master,
-            }
-            execution_logger.info(
-                "spark_session_started",
-                app_name=spark.sparkContext.appName,
-                master=spark.sparkContext.master,
-            )
             raw_to_bronze_run = ingest_raw_to_bronze(
                 planned_run,
-                spark,
+                spark_provider,
                 config,
                 bronze_table=args.bronze_table,
                 logger=execution_logger,
             )
             summary["raw_to_bronze_run"] = raw_to_bronze_run.to_summary()
+            record_spark_session(summary, spark_provider)
         finally:
-            spark.stop()
-            execution_logger.info("spark_session_stopped")
+            # Same backstop as --execute: the loader stops in its own finally, this
+            # covers a session acquired outside that span.
+            spark_provider.stop()
 
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0 if raw_to_bronze_run.is_successful else 1

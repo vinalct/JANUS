@@ -33,6 +33,7 @@ from janus.runtime.materialize import (
     _quality_failure_message,
     _raw_write_results,
 )
+from janus.runtime.spark_lifecycle import SparkSessionProvider, scoped_request_input_session
 from janus.strategies.api import ApiRequest, build_paginator
 from janus.strategies.api.request_inputs import load_request_inputs
 from janus.strategies.catalog.core import (
@@ -157,11 +158,19 @@ class RawToBronzeLoader:
     def ingest(
         self,
         planned_run: PlannedRun,
-        spark: SparkSession,
+        spark: SparkSessionProvider | SparkSession,
         environment_config: Mapping[str, Any],
         *,
         bronze_table: str,
     ) -> RawToBronzeRun:
+        # Replay converges on the live path's lifecycle: rediscovery and rehydration
+        # are pure Python, so Spark starts only where BronzeMaterializer needs it.
+        # A caller that hands over a live session keeps owning it.
+        spark_provider = (
+            spark
+            if isinstance(spark, SparkSessionProvider)
+            else SparkSessionProvider.wrapping(spark)
+        )
         storage_layout = self.storage_layout_resolver(planned_run.plan, environment_config)
         plan = _plan_with_storage_layout_outputs(planned_run.plan, storage_layout)
         plan = _override_bronze_output(plan, bronze_table)
@@ -175,142 +184,153 @@ class RawToBronzeLoader:
         strategy_metadata: dict[str, Any] = {}
 
         try:
-            _log_info(
-                logger,
-                "raw_to_bronze_started",
-                raw_output_path=plan.raw_output.path,
-                bronze_output_path=plan.bronze_output.path,
-                target_table=_bronze_target_identifier(plan),
-            )
-
-            self.observer.start_run(plan)
-            _log_info(logger, "run_observation_started")
-
-            extraction_result = _build_extraction_result_from_raw(
-                runtime_planned_run,
-                plan,
-                spark,
-                storage_layout,
-            )
-            write_results = _raw_write_results(plan, extraction_result)
-            _log_info(
-                logger,
-                "raw_artifacts_rediscovered",
-                artifact_count=len(extraction_result.artifacts),
-                raw_output_path=plan.raw_output.path,
-            )
-
-            handoff = runtime_planned_run.strategy.build_normalization_handoff(
-                plan,
-                extraction_result,
-                hook=runtime_planned_run.hook,
-            )
-            _log_info(
-                logger,
-                "normalization_handoff_prepared",
-                artifact_count=len(handoff.artifacts),
-                is_empty=handoff.is_empty,
-            )
-
-            normalized_dataframe = None
-            if not handoff.is_empty:
-                materializer = BronzeMaterializer(
-                    reader=self.reader,
-                    normalizer=self.normalizer,
-                    writer_factory=self.writer_factory,
+            try:
+                _log_info(
+                    logger,
+                    "raw_to_bronze_started",
+                    raw_output_path=plan.raw_output.path,
+                    bronze_output_path=plan.bronze_output.path,
+                    target_table=_bronze_target_identifier(plan),
                 )
-                bronze_results, normalized_dataframe = materializer.materialize(
+
+                self.observer.start_run(plan)
+                _log_info(logger, "run_observation_started")
+
+                extraction_result = _build_extraction_result_from_raw(
                     runtime_planned_run,
                     plan,
-                    spark,
-                    handoff,
+                    spark_provider,
                     storage_layout,
-                    logger,
-                    bronze_target_identifier=_bronze_target_identifier(plan),
                 )
-                write_results = write_results + bronze_results
+                write_results = _raw_write_results(plan, extraction_result)
+                _log_info(
+                    logger,
+                    "raw_artifacts_rediscovered",
+                    artifact_count=len(extraction_result.artifacts),
+                    raw_output_path=plan.raw_output.path,
+                )
 
-            strategy_metadata = dict(
-                runtime_planned_run.strategy.emit_metadata(
+                handoff = runtime_planned_run.strategy.build_normalization_handoff(
                     plan,
                     extraction_result,
-                    write_results,
                     hook=runtime_planned_run.hook,
                 )
-            )
-            _log_info(
-                logger,
-                "strategy_metadata_emitted",
-                metadata_keys=sorted(strategy_metadata),
-            )
+                _log_info(
+                    logger,
+                    "normalization_handoff_prepared",
+                    artifact_count=len(handoff.artifacts),
+                    is_empty=handoff.is_empty,
+                )
 
-            _log_info(logger, "quality_validation_started")
-            validation_report = self.quality_gate.validate_and_store(
-                plan,
-                dataframe=normalized_dataframe,
-                write_results=write_results,
-                raise_on_failure=False,
-            )
-            _log_info(
-                logger,
-                "quality_validation_finished",
-                is_successful=validation_report.report.is_successful,
-                summary=validation_report.report.summary(),
-                validation_report_path=str(validation_report.path),
-            )
+                normalized_dataframe = None
+                if not handoff.is_empty:
+                    materializer = BronzeMaterializer(
+                        reader=self.reader,
+                        normalizer=self.normalizer,
+                        writer_factory=self.writer_factory,
+                    )
+                    bronze_results, normalized_dataframe = materializer.materialize(
+                        runtime_planned_run,
+                        plan,
+                        spark_provider.get(),
+                        handoff,
+                        storage_layout,
+                        logger,
+                        bronze_target_identifier=_bronze_target_identifier(plan),
+                    )
+                    write_results = write_results + bronze_results
+                else:
+                    _log_info(logger, "spark_session_skipped")
 
-            if not validation_report.report.is_successful:
-                failure = RuntimeError(_quality_failure_message(validation_report))
-                persisted = self.observer.record_failure(
+                strategy_metadata = dict(
+                    runtime_planned_run.strategy.emit_metadata(
+                        plan,
+                        extraction_result,
+                        write_results,
+                        hook=runtime_planned_run.hook,
+                    )
+                )
+                _log_info(
+                    logger,
+                    "strategy_metadata_emitted",
+                    metadata_keys=sorted(strategy_metadata),
+                )
+
+                _log_info(logger, "quality_validation_started")
+                validation_report = self.quality_gate.validate_and_store(
                     plan,
-                    failure,
+                    dataframe=normalized_dataframe,
+                    write_results=write_results,
+                    raise_on_failure=False,
+                )
+                _log_info(
+                    logger,
+                    "quality_validation_finished",
+                    is_successful=validation_report.report.is_successful,
+                    summary=validation_report.report.summary(),
+                    validation_report_path=str(validation_report.path),
+                )
+                # Mirrors the executor boundary: quality validation was the last
+                # consumer of the session-bound DataFrame, so observation and
+                # metadata persistence below run session-free.
+                spark_provider.stop()
+
+                if not validation_report.report.is_successful:
+                    failure = RuntimeError(_quality_failure_message(validation_report))
+                    persisted = self.observer.record_failure(
+                        plan,
+                        failure,
+                        extraction_result,
+                        write_results,
+                        strategy_metadata=strategy_metadata,
+                    )
+                    _log_error(
+                        logger,
+                        "raw_to_bronze_failed",
+                        failure_reason=str(failure),
+                        error_type=type(failure).__name__,
+                    )
+                    return _build_result(
+                        runtime_planned_run,
+                        status="failed",
+                        extraction_result=extraction_result,
+                        handoff=handoff,
+                        write_results=write_results,
+                        validation_report=validation_report,
+                        strategy_metadata=strategy_metadata,
+                        persisted=persisted,
+                        failure_reason=str(failure),
+                        error_type=type(failure).__name__,
+                    )
+
+                persisted = self.observer.record_success(
+                    plan,
                     extraction_result,
                     write_results,
                     strategy_metadata=strategy_metadata,
                 )
-                _log_error(
+                _log_info(
                     logger,
-                    "raw_to_bronze_failed",
-                    failure_reason=str(failure),
-                    error_type=type(failure).__name__,
+                    "raw_to_bronze_succeeded",
+                    raw_artifact_count=len(extraction_result.artifacts),
+                    handoff_artifact_count=len(handoff.artifacts),
+                    materialized_output_count=len(write_results),
+                    target_table=_bronze_target_identifier(plan),
                 )
                 return _build_result(
                     runtime_planned_run,
-                    status="failed",
+                    status="succeeded",
                     extraction_result=extraction_result,
                     handoff=handoff,
                     write_results=write_results,
                     validation_report=validation_report,
                     strategy_metadata=strategy_metadata,
                     persisted=persisted,
-                    failure_reason=str(failure),
-                    error_type=type(failure).__name__,
                 )
-
-            persisted = self.observer.record_success(
-                plan,
-                extraction_result,
-                write_results,
-                strategy_metadata=strategy_metadata,
-            )
-            _log_info(
-                logger,
-                "raw_to_bronze_succeeded",
-                raw_artifact_count=len(extraction_result.artifacts),
-                handoff_artifact_count=len(handoff.artifacts),
-                materialized_output_count=len(write_results),
-                target_table=_bronze_target_identifier(plan),
-            )
-            return _build_result(
-                runtime_planned_run,
-                status="succeeded",
-                extraction_result=extraction_result,
-                handoff=handoff,
-                write_results=write_results,
-                validation_report=validation_report,
-                strategy_metadata=strategy_metadata,
-                persisted=persisted,
-            )
+            finally:
+                # Idempotent, so the release above is not repeated; this guarantees
+                # one on the paths that bypassed it.
+                spark_provider.stop()
         except Exception as exc:
             _log_exception(
                 logger,
@@ -341,7 +361,7 @@ class RawToBronzeLoader:
 
 def ingest_raw_to_bronze(
     planned_run: PlannedRun,
-    spark: SparkSession,
+    spark: SparkSessionProvider | SparkSession,
     environment_config: Mapping[str, Any],
     *,
     bronze_table: str,
@@ -425,14 +445,14 @@ def _override_bronze_output(plan: ExecutionPlan, bronze_table: str) -> Execution
 def _build_extraction_result_from_raw(
     planned_run: PlannedRun,
     plan: ExecutionPlan,
-    spark: SparkSession,
+    spark_provider: SparkSessionProvider,
     storage_layout: StorageLayout,
 ) -> ExtractionResult:
     if isinstance(planned_run.strategy, CatalogStrategy):
         return _build_catalog_extraction_result_from_raw(
             planned_run,
             plan,
-            spark,
+            spark_provider,
             storage_layout,
         )
 
@@ -613,15 +633,17 @@ def _download_version(raw_root: Path, artifact_path: Path) -> str:
 def _build_catalog_extraction_result_from_raw(
     planned_run: PlannedRun,
     plan: ExecutionPlan,
-    spark: SparkSession,
+    spark_provider: SparkSessionProvider,
     storage_layout: StorageLayout,
 ) -> ExtractionResult:
     strategy = planned_run.strategy
     assert isinstance(strategy, CatalogStrategy)
 
-    request_inputs = tuple(
-        load_request_inputs(plan.source_config.access.request_inputs, spark=spark)
-    )
+    # Same scoped seam the live catalog strategy uses: only `iceberg_rows` inputs
+    # open a session here, and it is stopped before the replay walk begins.
+    request_inputs_config = plan.source_config.access.request_inputs
+    with scoped_request_input_session(spark_provider, request_inputs_config) as session:
+        request_inputs = tuple(load_request_inputs(request_inputs_config, spark=session))
     if not request_inputs:
         request_inputs = (None,)
 

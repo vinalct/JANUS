@@ -135,6 +135,23 @@ def test_wrapping_never_stops_the_session_it_does_not_own():
     assert provider.session_info is None
 
 
+def test_wrapping_keeps_the_session_available_after_a_scoped_release():
+    session = StubSession()
+    provider = SparkSessionProvider.wrapping(session)
+    request_inputs = IcebergRowsRequestInputsConfig(
+        type="iceberg_rows",
+        namespace="bronze",
+        table_name="empresas",
+        columns={"cnpj": "cnpj_basico"},
+    )
+
+    with scoped_request_input_session(provider, request_inputs) as scoped:
+        assert scoped is session
+
+    assert session.stop_calls == 0
+    assert provider.get() is session
+
+
 def test_provider_logs_the_session_lifecycle_events():
     stream = StringIO()
     logger = build_structured_logger("janus.tests.spark_lifecycle", stream=stream)
