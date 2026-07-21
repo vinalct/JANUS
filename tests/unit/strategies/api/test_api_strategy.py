@@ -34,6 +34,8 @@ class FakeTransport:
         self.requests = []
         self.opened = False
         self.closed = False
+        # Optional shared trail, so session lifecycle and requests can be ordered together.
+        self.events: list[str] | None = None
 
     def open(self) -> None:
         self.opened = True
@@ -43,6 +45,8 @@ class FakeTransport:
 
     def send(self, request):
         self.requests.append(request)
+        if self.events is not None:
+            self.events.append("request")
         if not self._responses:
             raise AssertionError("No fake responses remain for this transport")
 
@@ -968,6 +972,169 @@ def test_api_strategy_hook_can_override_checkpoint_params_and_record_extraction(
     assert "updated_at" not in query
     assert result.records_extracted == 1
     assert result.checkpoint_value == "2026-04-11T00:00:00Z"
+
+
+def test_api_strategy_scopes_the_session_to_the_request_input_lookup(
+    tmp_path,
+    spy_spark_provider,
+):
+    events: list[str] = []
+    plan = _build_plan(
+        tmp_path,
+        source_id="scoped_iceberg_source",
+        pagination_type="none",
+        request_inputs={
+            "type": "iceberg_rows",
+            "namespace": "bronze_test",
+            "table_name": "ids",
+            "columns": {"entity_id": "id"},
+        },
+        parameter_bindings={"id": {"from": "request_input.entity_id"}},
+        requests_per_minute=None,
+    )
+    provider = spy_spark_provider(
+        {"bronze_test.ids": [{"id": "alpha"}, {"id": "beta"}]},
+        events,
+    )
+    strategy, transport = _build_strategy(
+        tmp_path,
+        [
+            ResponseSpec(200, {"records": [{"id": "alpha"}]}),
+            ResponseSpec(200, {"records": [{"id": "beta"}]}),
+        ],
+    )
+    transport.events = events
+
+    result = strategy.extract(plan, spark=provider)
+
+    queries = [parse_qs(urlsplit(request.full_url()).query) for request in transport.requests]
+    assert [query["id"] for query in queries] == [["alpha"], ["beta"]]
+    assert result.records_extracted == 2
+    # The download is the long part of the run; the session must be gone before it starts.
+    assert events == ["spark_start", "spark_stop", "request", "request"]
+    assert provider.start_count == 1
+    assert provider.stop_count == 1
+
+
+def test_api_strategy_scopes_one_session_for_combined_request_inputs(
+    tmp_path,
+    spy_spark_provider,
+):
+    events: list[str] = []
+    plan = _build_plan(
+        tmp_path,
+        source_id="scoped_combined_source",
+        pagination_type="none",
+        request_inputs={
+            "type": "combined",
+            "inputs": [
+                {
+                    "type": "date_window",
+                    "start": date(2025, 1, 1),
+                    "end": date(2025, 2, 28),
+                    "step": "month",
+                },
+                {
+                    "type": "iceberg_rows",
+                    "namespace": "bronze_test",
+                    "table_name": "ids",
+                    "columns": {"entity_id": "id"},
+                },
+            ],
+        },
+        parameter_bindings={
+            "id": {"from": "request_input.entity_id"},
+            "mesAno": {"from": "request_input.window_end", "format": "%Y%m"},
+        },
+        requests_per_minute=None,
+    )
+    provider = spy_spark_provider(
+        {"bronze_test.ids": [{"id": "alpha"}, {"id": "beta"}]},
+        events,
+    )
+    strategy, transport = _build_strategy(
+        tmp_path,
+        [ResponseSpec(200, {"records": [{"id": "1"}]}) for _ in range(4)],
+    )
+    transport.events = events
+
+    result = strategy.extract(plan, spark=provider)
+
+    # Four contexts in the Cartesian product, but the whole product resolves inside a
+    # single scoped acquire — sub-inputs never reopen a session of their own.
+    assert len(transport.requests) == 4
+    assert result.records_extracted == 4
+    assert events[:2] == ["spark_start", "spark_stop"]
+    assert events.count("spark_start") == 1
+    assert provider.stop_count == 1
+
+
+def test_api_strategy_never_touches_the_provider_for_date_window_inputs(
+    tmp_path,
+    spy_spark_provider,
+):
+    events: list[str] = []
+    plan = _build_plan(
+        tmp_path,
+        source_id="session_free_source",
+        pagination_type="none",
+        request_inputs={
+            "type": "date_window",
+            "start": date(2025, 1, 1),
+            "end": date(2025, 2, 28),
+            "step": "month",
+        },
+        parameter_bindings={"mesAno": {"from": "request_input.window_end", "format": "%Y%m"}},
+        requests_per_minute=None,
+    )
+    provider = spy_spark_provider({}, events)
+    strategy, transport = _build_strategy(
+        tmp_path,
+        [
+            ResponseSpec(200, {"records": [{"id": "1"}]}),
+            ResponseSpec(200, {"records": [{"id": "2"}]}),
+        ],
+    )
+
+    result = strategy.extract(plan, spark=provider)
+
+    assert result.records_extracted == 2
+    assert len(transport.requests) == 2
+    assert events == []
+    assert provider.was_started is False
+
+
+def test_api_strategy_stops_the_scoped_session_when_the_lookup_fails(
+    tmp_path,
+    spy_spark_provider,
+):
+    import pytest
+
+    from janus.strategies.api.request_inputs import ApiRequestInputLoadError
+
+    events: list[str] = []
+    plan = _build_plan(
+        tmp_path,
+        source_id="missing_table_source",
+        pagination_type="none",
+        request_inputs={
+            "type": "iceberg_rows",
+            "namespace": "bronze_test",
+            "table_name": "absent",
+            "columns": {"entity_id": "id"},
+        },
+        parameter_bindings={"id": {"from": "request_input.entity_id"}},
+        requests_per_minute=None,
+    )
+    provider = spy_spark_provider({}, events)
+    strategy, transport = _build_strategy(tmp_path, [])
+
+    with pytest.raises(ApiRequestInputLoadError):
+        strategy.extract(plan, spark=provider)
+
+    assert transport.requests == []
+    assert events == ["spark_start", "spark_stop"]
+    assert provider.stop_count == 1
 
 
 def _build_strategy(

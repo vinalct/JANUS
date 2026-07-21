@@ -170,16 +170,13 @@ class SourceExecutor:
                     pagination_type=plan.source_config.access.pagination.type,
                     auth_type=plan.source_config.access.auth.type,
                 )
-                # Temporary bridge: only request inputs that read
-                # an upstream table need a session during extraction. Every other source
-                # extracts session-free, which is the whole point of the deferred start.
-                extraction_session = None
-                if plan.source_config.access.request_inputs.requires_spark:
-                    extraction_session = spark_provider.get()
+                # The provider — never a live session — crosses into extract(). Only the
+                # api/catalog request-input lookup materializes one from it, scoped to
+                # that lookup; the download itself always runs session-free.
                 extraction_result = planned_run.strategy.extract(
                     plan,
                     hook=planned_run.hook,
-                    spark=extraction_session,
+                    spark=spark_provider,
                 )
                 _log_info(
                     logger,

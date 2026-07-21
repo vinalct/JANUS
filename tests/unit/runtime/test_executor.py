@@ -951,10 +951,19 @@ def test_executor_stops_the_session_when_materialization_raises(tmp_path):
     assert calls.index("spark_stop") < calls.index("failure")
 
 
-def test_executor_acquires_a_session_before_extraction_for_iceberg_rows_inputs(tmp_path):
-    # Pins the temporary eager bridge. replaces with a scoped session.
+def test_executor_hands_the_provider_to_extract_without_starting_a_session(tmp_path):
+    @dataclass(slots=True)
+    class ProviderCapturingStrategy(FakeStrategy):
+        seen_spark: Any = None
+
+        def extract(self, plan, hook=None, *, spark=None):
+            # Explicit base call: zero-arg super() is unavailable in a slots dataclass.
+            self.seen_spark = spark
+            return FakeStrategy.extract(self, plan, hook, spark=spark)
+
     calls: list[str] = []
     planned_run = _planned_run(tmp_path, calls)
+    strategy = ProviderCapturingStrategy(calls)
     source_config = replace(
         planned_run.plan.source_config,
         access=replace(
@@ -970,6 +979,7 @@ def test_executor_acquires_a_session_before_extraction_for_iceberg_rows_inputs(t
     planned_run = replace(
         planned_run,
         plan=replace(planned_run.plan, source_config=source_config),
+        strategy=strategy,
     )
     provider = SpySparkSessionProvider(calls)
     executor = _boundary_executor(tmp_path, calls, _passing_report(planned_run.plan))
@@ -977,10 +987,10 @@ def test_executor_acquires_a_session_before_extraction_for_iceberg_rows_inputs(t
     executed_run = executor.execute(planned_run, provider, environment_config={})
 
     assert executed_run.is_successful is True
-    assert calls.index("spark_start") < calls.index("extract")
-    # One live session spans the whole run under the bridge: started once, reused.
+    assert strategy.seen_spark is provider
+    # The only session the executor itself starts is the materialization one.
+    assert calls.index("extract") < calls.index("spark_start")
     assert provider.start_count == 1
-    assert provider.get_calls == 2
     assert provider.stop_calls == 1
 
 

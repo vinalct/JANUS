@@ -4,7 +4,11 @@ import json
 from dataclasses import dataclass, field
 from io import StringIO
 
+import pytest
+
+from janus.models import IcebergRowsRequestInputsConfig, RequestInputsConfig
 from janus.runtime import SparkSessionProvider
+from janus.runtime.spark_lifecycle import scoped_request_input_session
 from janus.utils.logging import build_structured_logger
 
 ENVIRONMENT_CONFIG = {
@@ -159,6 +163,67 @@ def test_provider_logs_the_session_lifecycle_events():
         "app_name": "janus-tests",
         "master": "local[*]",
     }
+
+
+def test_scoped_request_input_session_yields_nothing_when_spark_is_not_needed():
+    factory = StubSessionFactory()
+    provider = SparkSessionProvider(ENVIRONMENT_CONFIG, {}, session_factory=factory)
+
+    with scoped_request_input_session(provider, RequestInputsConfig(type="none")) as session:
+        assert session is None
+
+    assert factory.sessions == []
+
+
+def test_scoped_request_input_session_stops_the_session_it_opened():
+    factory = StubSessionFactory()
+    provider = SparkSessionProvider(ENVIRONMENT_CONFIG, {}, session_factory=factory)
+    request_inputs = IcebergRowsRequestInputsConfig(
+        type="iceberg_rows",
+        namespace="bronze",
+        table_name="empresas",
+        columns={"cnpj": "cnpj_basico"},
+    )
+
+    with scoped_request_input_session(provider, request_inputs) as session:
+        assert session is factory.sessions[0]
+
+    assert factory.sessions[0].stop_calls == 1
+
+
+def test_scoped_request_input_session_stops_the_session_when_the_lookup_raises():
+    factory = StubSessionFactory()
+    provider = SparkSessionProvider(ENVIRONMENT_CONFIG, {}, session_factory=factory)
+    request_inputs = IcebergRowsRequestInputsConfig(
+        type="iceberg_rows",
+        namespace="bronze",
+        table_name="empresas",
+        columns={"cnpj": "cnpj_basico"},
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="lookup boom"),
+        scoped_request_input_session(provider, request_inputs),
+    ):
+        raise RuntimeError("lookup boom")
+
+    assert factory.sessions[0].stop_calls == 1
+
+
+def test_scoped_request_input_session_passes_an_external_session_through_untouched():
+    session = StubSession()
+    request_inputs = IcebergRowsRequestInputsConfig(
+        type="iceberg_rows",
+        namespace="bronze",
+        table_name="empresas",
+        columns={"cnpj": "cnpj_basico"},
+    )
+
+    with scoped_request_input_session(session, request_inputs) as scoped:
+        assert scoped is session
+
+    # Lifetime belongs to whoever built it — embedding callers and tests keep control.
+    assert session.stop_calls == 0
 
 
 def test_stop_failure_is_logged_and_swallowed():

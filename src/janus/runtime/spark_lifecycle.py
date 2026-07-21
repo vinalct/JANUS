@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from janus.models.source_config import RequestInputsConfig
 from janus.utils.environment import build_spark_session
 from janus.utils.logging import StructuredLogger
 
@@ -121,6 +123,35 @@ class SparkSessionProvider:
     def _log_exception(self, event: str, **fields: Any) -> None:
         if self._logger is not None:
             self._logger.exception(event, **fields)
+
+
+@contextmanager
+def scoped_request_input_session(
+    spark: SparkSessionProvider | SparkSession | None,
+    request_inputs: RequestInputsConfig,
+) -> Iterator[SparkSession | None]:
+    """Yield a session for request-input loading, alive only for that lookup.
+
+    Every strategy family that loads request inputs uses this one block, so the
+    acquire/release pattern exists exactly once. ``iceberg_rows`` inputs — including
+    those nested in ``combined`` — read an upstream table and get a short-lived session
+    that is stopped before the caller sends its first request; every other input type is
+    synthesized in pure Python and never touches the provider at all.
+    """
+
+    if not isinstance(spark, SparkSessionProvider):
+        yield spark
+        return
+
+    if not request_inputs.requires_spark:
+        yield None
+        return
+
+    try:
+        yield spark.get()
+    finally:
+        # Stops on the failure path too, so a bad lookup never leaks a session.
+        spark.stop()
 
 
 def _describe_session(session: SparkSession) -> dict[str, Any]:
