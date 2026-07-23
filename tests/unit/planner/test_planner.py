@@ -388,6 +388,7 @@ def test_main_executes_source_through_framework_runtime(tmp_path, capsys, monkey
         include_environment=True,
     )
     stopped = []
+    built = []
 
     class FakeSparkSession:
         sparkContext = SimpleNamespace(appName="janus-exec-test", master="local[1]")
@@ -409,13 +410,22 @@ def test_main_executes_source_through_framework_runtime(tmp_path, capsys, monkey
         def __init__(self, logger=None):
             self.logger = logger
 
-        def execute(self, planned_run, spark, environment_config):
+        def execute(self, planned_run, spark_provider, environment_config):
             assert planned_run.plan.source.source_id == "cli_source"
-            assert spark.sparkContext.appName == "janus-exec-test"
             assert environment_config["name"] == "local"
+            # The CLI hands over a provider, not a session: nothing is built until the
+            # executor reaches its materialization boundary.
+            assert built == []
+            assert spark_provider.get().sparkContext.appName == "janus-exec-test"
             return FakeExecutedRun()
 
-    monkeypatch.setattr("janus.main.build_spark_session", lambda config, paths: FakeSparkSession())
+    def _build_session(config, paths):
+        del config
+        del paths
+        built.append(True)
+        return FakeSparkSession()
+
+    monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _build_session)
     monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
 
     exit_code = main(
@@ -448,6 +458,165 @@ def test_main_executes_source_through_framework_runtime(tmp_path, capsys, monkey
     assert payload["planned_run"]["run"]["run_id"] == "run-cli-exec-001"
     assert payload["executed_run"]["status"] == "succeeded"
     assert payload["spark_session"]["app_name"] == "janus-exec-test"
+    
+    assert sorted(payload["spark_session"]) == ["app_name", "master"]
+    assert stopped == [True]
+
+
+def test_main_execute_omits_the_spark_summary_when_no_session_was_started(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    project_root = _create_project(
+        tmp_path,
+        _source_yaml("cli_source", variant="page_number_api"),
+        include_environment=True,
+    )
+
+    class FakeExecutedRun:
+        is_successful = True
+
+        def to_summary(self):
+            return {"status": "succeeded", "artifact_count": 0}
+
+    class FakeSourceExecutor:
+        def __init__(self, logger=None):
+            self.logger = logger
+
+        def execute(self, planned_run, spark_provider, environment_config):
+            del planned_run, spark_provider, environment_config
+            # An empty handoff: the run never reaches the materialization boundary.
+            return FakeExecutedRun()
+
+    def _refuse_to_build(config, paths):
+        del config, paths
+        raise AssertionError("a run with nothing to materialize must not start Spark")
+
+    monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _refuse_to_build)
+    monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
+
+    exit_code = main(
+        [
+            "--environment",
+            "local",
+            "--project-root",
+            str(project_root),
+            "--source-id",
+            "cli_source",
+            "--execute",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    # A session that never existed cannot be truthfully reported.
+    assert "spark_session" not in payload
+
+
+def test_main_execute_reports_a_failed_run_without_bypassing_observability(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    project_root = _create_project(
+        tmp_path,
+        _source_yaml("cli_source", variant="page_number_api"),
+        include_environment=True,
+    )
+
+    class FakeExecutedRun:
+        is_successful = False
+
+        def to_summary(self):
+            return {
+                "status": "failed",
+                "failure_reason": "spark session build failed",
+                "error_type": "RuntimeError",
+                "metadata_outputs": {"run_metadata_path": "/data/metadata/runs/run-001.json"},
+            }
+
+    class FakeSourceExecutor:
+        def __init__(self, logger=None):
+            self.logger = logger
+
+        def execute(self, planned_run, spark_provider, environment_config):
+            del planned_run, environment_config
+            # With lazy startup a build failure surfaces inside the run, and the
+            # executor records it like any other failure.
+            spark_provider.stop()
+            return FakeExecutedRun()
+
+    def _failing_build(config, paths):
+        del config, paths
+        raise RuntimeError("spark session build failed")
+
+    monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _failing_build)
+    monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
+
+    exit_code = main(
+        [
+            "--environment",
+            "local",
+            "--project-root",
+            str(project_root),
+            "--source-id",
+            "cli_source",
+            "--execute",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert payload["executed_run"]["failure_reason"] == "spark session build failed"
+    assert payload["executed_run"]["metadata_outputs"]["run_metadata_path"] is not None
+    assert "spark_session" not in payload
+
+
+def test_main_execute_stops_the_session_when_the_run_raises(tmp_path, monkeypatch):
+    project_root = _create_project(
+        tmp_path,
+        _source_yaml("cli_source", variant="page_number_api"),
+        include_environment=True,
+    )
+    stopped = []
+
+    class FakeSparkSession:
+        sparkContext = SimpleNamespace(appName="janus-exec-test", master="local[1]")
+
+        def stop(self):
+            stopped.append(True)
+
+    class FakeSourceExecutor:
+        def __init__(self, logger=None):
+            self.logger = logger
+
+        def execute(self, planned_run, spark_provider, environment_config):
+            del planned_run, environment_config
+            spark_provider.get()
+            raise RuntimeError("escaped the executor guard")
+
+    monkeypatch.setattr(
+        "janus.runtime.spark_lifecycle.build_spark_session",
+        lambda config, paths: FakeSparkSession(),
+    )
+    monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
+
+    with pytest.raises(RuntimeError, match="escaped the executor guard"):
+        main(
+            [
+                "--environment",
+                "local",
+                "--project-root",
+                str(project_root),
+                "--source-id",
+                "cli_source",
+                "--execute",
+            ]
+        )
+
     assert stopped == [True]
 
 
@@ -462,6 +631,7 @@ def test_main_ingests_existing_raw_artifacts_into_requested_bronze_table(
         include_environment=True,
     )
     stopped = []
+    built = []
 
     class FakeSparkSession:
         sparkContext = SimpleNamespace(appName="janus-raw-to-bronze-test", master="local[1]")
@@ -479,15 +649,26 @@ def test_main_ingests_existing_raw_artifacts_into_requested_bronze_table(
                 "raw_artifact_count": 2,
             }
 
-    def fake_ingest_raw_to_bronze(planned_run, spark, environment_config, *, bronze_table, logger):
+    def fake_ingest_raw_to_bronze(
+        planned_run, spark_provider, environment_config, *, bronze_table, logger
+    ):
         assert planned_run.plan.source.source_id == "cli_source"
-        assert spark.sparkContext.appName == "janus-raw-to-bronze-test"
         assert environment_config["name"] == "local"
+        # Replay converges on the live shape: the CLI hands over a provider, and
+        # rediscovery/rehydration runs before anything is built.
+        assert built == []
+        assert spark_provider.get().sparkContext.appName == "janus-raw-to-bronze-test"
         assert bronze_table == "curated.cli_source_reloaded"
         assert logger is not None
         return FakeRawToBronzeRun()
 
-    monkeypatch.setattr("janus.main.build_spark_session", lambda config, paths: FakeSparkSession())
+    def _build_session(config, paths):
+        del config
+        del paths
+        built.append(True)
+        return FakeSparkSession()
+
+    monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _build_session)
     monkeypatch.setattr("janus.main.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
 
     exit_code = main(
@@ -523,6 +704,103 @@ def test_main_ingests_existing_raw_artifacts_into_requested_bronze_table(
     assert payload["raw_to_bronze_run"]["status"] == "succeeded"
     assert payload["raw_to_bronze_run"]["target_table"] == "curated.cli_source_reloaded"
     assert payload["spark_session"]["app_name"] == "janus-raw-to-bronze-test"
+    assert sorted(payload["spark_session"]) == ["app_name", "master"]
+    assert stopped == [True]
+
+
+def test_main_raw_to_bronze_omits_the_spark_summary_when_no_session_was_started(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    project_root = _create_project(
+        tmp_path,
+        _source_yaml("cli_source", variant="page_number_api"),
+        include_environment=True,
+    )
+
+    class FakeRawToBronzeRun:
+        is_successful = True
+
+        def to_summary(self):
+            return {"status": "succeeded", "raw_artifact_count": 0}
+
+    def fake_ingest_raw_to_bronze(
+        planned_run, spark_provider, environment_config, *, bronze_table, logger
+    ):
+        del planned_run, spark_provider, environment_config, bronze_table, logger
+        # An empty raw zone: rehydration fails before the materializer needs Spark.
+        return FakeRawToBronzeRun()
+
+    def _refuse_to_build(config, paths):
+        del config, paths
+        raise AssertionError("replaying an empty raw zone must not start Spark")
+
+    monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _refuse_to_build)
+    monkeypatch.setattr("janus.main.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
+
+    exit_code = main(
+        [
+            "--environment",
+            "local",
+            "--project-root",
+            str(project_root),
+            "--source-id",
+            "cli_source",
+            "--ingest-raw-to-bronze",
+            "--bronze-table",
+            "curated.cli_source_reloaded",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert "spark_session" not in payload
+
+
+def test_main_raw_to_bronze_stops_the_session_when_the_run_raises(tmp_path, monkeypatch):
+    project_root = _create_project(
+        tmp_path,
+        _source_yaml("cli_source", variant="page_number_api"),
+        include_environment=True,
+    )
+    stopped = []
+
+    class FakeSparkSession:
+        sparkContext = SimpleNamespace(appName="janus-raw-to-bronze-test", master="local[1]")
+
+        def stop(self):
+            stopped.append(True)
+
+    def fake_ingest_raw_to_bronze(
+        planned_run, spark_provider, environment_config, *, bronze_table, logger
+    ):
+        del planned_run, environment_config, bronze_table, logger
+        spark_provider.get()
+        raise RuntimeError("escaped the loader guard")
+
+    monkeypatch.setattr(
+        "janus.runtime.spark_lifecycle.build_spark_session",
+        lambda config, paths: FakeSparkSession(),
+    )
+    monkeypatch.setattr("janus.main.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
+
+    with pytest.raises(RuntimeError, match="escaped the loader guard"):
+        main(
+            [
+                "--environment",
+                "local",
+                "--project-root",
+                str(project_root),
+                "--source-id",
+                "cli_source",
+                "--ingest-raw-to-bronze",
+                "--bronze-table",
+                "curated.cli_source_reloaded",
+            ]
+        )
+
     assert stopped == [True]
 
 

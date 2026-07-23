@@ -25,6 +25,7 @@ from janus.models import (
     SourceConfig,
     WriteResult,
 )
+from janus.runtime.spark_lifecycle import scoped_request_input_session
 from janus.strategies.api import (
     PaginationState,
     build_paginator,
@@ -266,7 +267,14 @@ class CatalogStrategy(BaseStrategy):
         parameter_bindings = plan.source_config.access.parameter_bindings
 
         try:
-            request_inputs = load_request_inputs(request_inputs_config, spark=spark)
+            with scoped_request_input_session(
+                spark,
+                request_inputs_config,
+            ) as request_input_session:
+                request_inputs = load_request_inputs(
+                    request_inputs_config,
+                    spark=request_input_session,
+                )
         except ApiRequestInputLoadError:
             if logger is not None:
                 logger.exception(

@@ -32,6 +32,8 @@ class FakeTransport:
         self.requests = []
         self.opened = False
         self.closed = False
+        # Optional shared trail, so session lifecycle and requests can be ordered together.
+        self.events: list[str] | None = None
 
     def open(self) -> None:
         self.opened = True
@@ -41,6 +43,8 @@ class FakeTransport:
 
     def send(self, request):
         self.requests.append(request)
+        if self.events is not None:
+            self.events.append("request")
         if not self._responses:
             raise AssertionError("No fake responses remain for this transport")
 
@@ -560,6 +564,46 @@ def test_catalog_strategy_resume_clears_progress_on_success(tmp_path):
     assert strategy.progress_store.load(plan) is None
 
 
+def test_catalog_strategy_scopes_the_session_to_the_request_input_lookup(
+    tmp_path,
+    spy_spark_provider,
+):
+    events: list[str] = []
+    plan = _build_plan(
+        tmp_path,
+        source_id="scoped_catalog_source",
+        pagination_type="none",
+        request_inputs={
+            "type": "iceberg_rows",
+            "namespace": "bronze_test",
+            "table_name": "orgaos",
+            "columns": {"org_id": "id"},
+        },
+        parameter_bindings={"id": {"from": "request_input.org_id"}},
+    )
+    provider = spy_spark_provider(
+        {"bronze_test.orgaos": [{"id": "alpha"}, {"id": "beta"}]},
+        events,
+    )
+    strategy, transport = _build_strategy(
+        tmp_path,
+        [
+            ResponseSpec(200, {"result": {"results": [{"id": "ds-1", "title": "DS 1"}]}}),
+            ResponseSpec(200, {"result": {"results": [{"id": "ds-2", "title": "DS 2"}]}}),
+        ],
+    )
+    transport.events = events
+
+    result = strategy.extract(plan, spark=provider)
+
+    queries = [parse_qs(urlsplit(request.full_url()).query) for request in transport.requests]
+    assert [query["id"] for query in queries] == [["alpha"], ["beta"]]
+    assert result.records_extracted == 2
+    assert events == ["spark_start", "spark_stop", "request", "request"]
+    assert provider.start_count == 1
+    assert provider.stop_count == 1
+
+
 def _build_source_config_with_url(
     tmp_path,
     *,
@@ -654,6 +698,8 @@ def _build_plan(
     lookback_days: int | None = None,
     page_size: int = 100,
     dead_letter_max_items: int = 0,
+    request_inputs: dict[str, Any] | None = None,
+    parameter_bindings: dict[str, Any] | None = None,
 ) -> ExecutionPlan:
     source_config = _build_source_config(
         tmp_path,
@@ -666,6 +712,8 @@ def _build_plan(
         lookback_days=lookback_days,
         page_size=page_size,
         dead_letter_max_items=dead_letter_max_items,
+        request_inputs=request_inputs,
+        parameter_bindings=parameter_bindings,
     )
     run_context = RunContext.create(
         run_id=f"run-{source_id}",
@@ -688,7 +736,27 @@ def _build_source_config(
     lookback_days: int | None = None,
     page_size: int = 100,
     dead_letter_max_items: int = 0,
+    request_inputs: dict[str, Any] | None = None,
+    parameter_bindings: dict[str, Any] | None = None,
 ) -> SourceConfig:
+    access: dict[str, Any] = {
+        "base_url": "https://example.invalid",
+        "path": "/catalog",
+        "method": "GET",
+        "format": "json",
+        "timeout_seconds": 30,
+        "auth": {"type": "none"},
+        "pagination": _pagination_block(pagination_type, page_size),
+        "rate_limit": {
+            "requests_per_minute": 10,
+            "concurrency": 1,
+            "backoff_seconds": 5,
+        },
+    }
+    if request_inputs is not None:
+        access["request_inputs"] = request_inputs
+    if parameter_bindings is not None:
+        access["parameter_bindings"] = parameter_bindings
     return SourceConfig.from_mapping(
         {
             "source_id": source_id,
@@ -701,20 +769,7 @@ def _build_source_config(
             "federation_level": "federal",
             "domain": "example",
             "public_access": True,
-            "access": {
-                "base_url": "https://example.invalid",
-                "path": "/catalog",
-                "method": "GET",
-                "format": "json",
-                "timeout_seconds": 30,
-                "auth": {"type": "none"},
-                "pagination": _pagination_block(pagination_type, page_size),
-                "rate_limit": {
-                    "requests_per_minute": 10,
-                    "concurrency": 1,
-                    "backoff_seconds": 5,
-                },
-            },
+            "access": access,
             "extraction": {
                 "mode": extraction_mode,
                 "checkpoint_field": checkpoint_field,

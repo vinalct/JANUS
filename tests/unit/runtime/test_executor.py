@@ -10,10 +10,11 @@ from typing import Any
 
 from janus.lineage import RunObserver
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext, WriteResult
+from janus.models.source_config import IcebergRowsRequestInputsConfig
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
 from janus.registry import load_registry
-from janus.runtime import SourceExecutor
+from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.runtime.executor import _plan_with_storage_layout_outputs
 from janus.utils.logging import build_structured_logger
 from janus.utils.storage import StorageLayout
@@ -242,7 +243,11 @@ def test_source_executor_runs_framework_pipeline_and_returns_summary(tmp_path):
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     )
 
-    executed_run = executor.execute(planned_run, spark=object(), environment_config={})
+    executed_run = executor.execute(
+        planned_run,
+        SparkSessionProvider.wrapping(object()),
+        environment_config={},
+    )
 
     assert calls == [
         "start",
@@ -303,7 +308,11 @@ def test_source_executor_passes_spark_read_options_from_source_config(tmp_path):
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     )
 
-    executed_run = executor.execute(planned_run, spark=object(), environment_config={})
+    executed_run = executor.execute(
+        planned_run,
+        SparkSessionProvider.wrapping(object()),
+        environment_config={},
+    )
 
     assert executed_run.is_successful is True
     assert reader.seen_options == read_options
@@ -381,7 +390,7 @@ def test_source_executor_passes_explicit_schema_for_headerless_csv_sources(tmp_p
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     ).execute(
         planned_run,
-        spark=object(),
+        SparkSessionProvider.wrapping(object()),
         environment_config={},
     )
 
@@ -467,7 +476,7 @@ def test_source_executor_reads_using_handoff_format_instead_of_source_config_for
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     ).execute(
         planned_run,
-        spark=object(),
+        SparkSessionProvider.wrapping(object()),
         environment_config={},
     )
 
@@ -558,7 +567,7 @@ def test_source_executor_batches_file_handoff_artifacts_and_appends_after_overwr
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     ).execute(
         planned_run,
-        spark=object(),
+        SparkSessionProvider.wrapping(object()),
         environment_config={},
     )
 
@@ -593,7 +602,11 @@ def test_source_executor_records_failed_status_when_quality_validation_fails(tmp
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     )
 
-    executed_run = executor.execute(planned_run, spark=object(), environment_config={})
+    executed_run = executor.execute(
+        planned_run,
+        SparkSessionProvider.wrapping(object()),
+        environment_config={},
+    )
 
     assert executed_run.is_successful is False
     assert executed_run.failure_reason == "Quality validation failed: data.required_fields"
@@ -628,7 +641,11 @@ def test_source_executor_forwards_strategy_metadata_to_observer_on_success(tmp_p
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     )
 
-    executed_run = executor.execute(planned_run, spark=object(), environment_config={})
+    executed_run = executor.execute(
+        planned_run,
+        SparkSessionProvider.wrapping(object()),
+        environment_config={},
+    )
 
     assert executed_run.is_successful is True
     assert observer.seen_strategy_metadata == {"emitted": True}
@@ -657,7 +674,11 @@ def test_source_executor_persists_strategy_metadata_with_real_observer(tmp_path)
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     )
 
-    executed_run = executor.execute(planned_run, spark=object(), environment_config={})
+    executed_run = executor.execute(
+        planned_run,
+        SparkSessionProvider.wrapping(object()),
+        environment_config={},
+    )
 
     assert executed_run.is_successful is True
     run_metadata = json.loads(executed_run.run_metadata_path.read_text(encoding="utf-8"))
@@ -706,7 +727,11 @@ def test_source_executor_persists_empty_strategy_metadata_on_early_exception(tmp
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     )
 
-    executed_run = executor.execute(planned_run, spark=object(), environment_config={})
+    executed_run = executor.execute(
+        planned_run,
+        SparkSessionProvider.wrapping(object()),
+        environment_config={},
+    )
 
     assert executed_run.is_successful is False
     assert executed_run.failure_reason == "extract boom"
@@ -767,6 +792,206 @@ def _planned_run(
         strategy=FakeStrategy(calls),
         hook=None,
     )
+
+
+@dataclass(slots=True)
+class SpySparkSessionProvider:
+    """Records when the executor asks for and releases a session.
+
+    Mirrors the real provider's semantics — lazy build, same session on repeat
+    ``get()``, idempotent ``stop()`` — so call counts mean what they mean in
+    production: ``start_count`` is how many sessions the run actually paid for.
+    """
+
+    calls: list[str]
+    session: Any | None = None
+    get_calls: int = 0
+    start_count: int = 0
+    stop_calls: int = 0
+
+    def get(self) -> Any:
+        self.get_calls += 1
+        if self.session is None:
+            self.session = object()
+            self.start_count += 1
+            self.calls.append("spark_start")
+        return self.session
+
+    def stop(self) -> None:
+        if self.session is None:
+            return
+        self.session = None
+        self.stop_calls += 1
+        self.calls.append("spark_stop")
+
+
+def _boundary_executor(tmp_path: Path, calls: list[str], validation_report, **overrides):
+    metadata_root = tmp_path / "data" / "metadata" / "example" / "federal_open_data_example"
+    bronze_path = tmp_path / "data" / "bronze" / "example" / "federal_open_data_example"
+    defaults: dict[str, Any] = {
+        "reader": FakeReader(calls),
+        "normalizer": FakeNormalizer(calls),
+        "quality_gate": FakeQualityGate(
+            calls,
+            validation_report,
+            metadata_root / "validations" / "run-001.json",
+        ),
+        "observer": FakeObserver(calls, metadata_root),
+        "writer_factory": lambda storage_layout: FakeWriter(calls, bronze_path),
+        "storage_layout_resolver": lambda plan, config: _storage_layout(tmp_path),
+    }
+    defaults.update(overrides)
+    return SourceExecutor(**defaults)
+
+
+def _passing_report(plan) -> ValidationReport:
+    return ValidationReport.from_plan(
+        plan,
+        [ValidationCheck.passed("output", "materialized_outputs", "ok")],
+    )
+
+
+def test_executor_acquires_no_session_until_extraction_has_finished(tmp_path):
+    calls: list[str] = []
+    planned_run = _planned_run(tmp_path, calls)
+    provider = SpySparkSessionProvider(calls)
+    executor = _boundary_executor(tmp_path, calls, _passing_report(planned_run.plan))
+
+    executed_run = executor.execute(planned_run, provider, environment_config={})
+
+    assert executed_run.is_successful is True
+    # Exactly one session, started only after extraction is complete.
+    assert provider.start_count == 1
+    assert calls.index("extract") < calls.index("spark_start")
+    assert calls.index("spark_start") < calls.index("read")
+    assert provider.stop_calls == 1
+
+
+def test_executor_keeps_the_session_alive_through_quality_validation(tmp_path):
+    calls: list[str] = []
+    planned_run = _planned_run(tmp_path, calls)
+    provider = SpySparkSessionProvider(calls)
+    executor = _boundary_executor(tmp_path, calls, _passing_report(planned_run.plan))
+
+    executor.execute(planned_run, provider, environment_config={})
+
+    # The normalized DataFrame belongs to the session, so validation precedes the stop —
+    # and the observer runs session-free after it.
+    assert calls.index("validate") < calls.index("spark_stop")
+    assert calls.index("spark_stop") < calls.index("success")
+
+
+def test_executor_never_starts_a_session_for_an_empty_handoff(tmp_path):
+    @dataclass(slots=True)
+    class EmptyHandoffStrategy(FakeStrategy):
+        def extract(self, plan, hook=None, *, spark=None):
+            del hook
+            del spark
+            self.calls.append("extract")
+            return ExtractionResult.from_plan(plan, artifacts=(), records_extracted=0)
+
+    calls: list[str] = []
+    source_config = load_registry(PROJECT_ROOT).get_source("federal_open_data_example")
+    run_context = RunContext.create(
+        run_id="run-empty-handoff-001",
+        environment="local",
+        project_root=tmp_path,
+        started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
+    )
+    planned_run = PlannedRun(
+        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        strategy=EmptyHandoffStrategy(calls),
+        hook=None,
+    )
+    provider = SpySparkSessionProvider(calls)
+    stream = StringIO()
+    executor = _boundary_executor(
+        tmp_path,
+        calls,
+        _passing_report(planned_run.plan),
+        logger=build_structured_logger("janus.tests.executor.empty_handoff", stream=stream),
+    )
+
+    executed_run = executor.execute(planned_run, provider, environment_config={})
+
+    assert executed_run.is_successful is True
+    assert provider.start_count == 0
+    assert executed_run.write_results == ()
+    events = [json.loads(line)["event"] for line in stream.getvalue().splitlines() if line.strip()]
+    assert "spark_session_skipped" in events
+
+
+def test_executor_stops_the_session_when_materialization_raises(tmp_path):
+    @dataclass(slots=True)
+    class ExplodingReader(FakeReader):
+        def read_extraction_result(self, *args, **kwargs):
+            del args
+            del kwargs
+            self.calls.append("read")
+            raise RuntimeError("materialize boom")
+
+    calls: list[str] = []
+    planned_run = _planned_run(tmp_path, calls)
+    metadata_root = tmp_path / "data" / "metadata" / "example" / "federal_open_data_example"
+    provider = SpySparkSessionProvider(calls)
+    executor = _boundary_executor(
+        tmp_path,
+        calls,
+        _passing_report(planned_run.plan),
+        reader=ExplodingReader(calls),
+        observer=FakeFailingObserver(calls, metadata_root),
+    )
+
+    executed_run = executor.execute(planned_run, provider, environment_config={})
+
+    assert executed_run.is_successful is False
+    assert executed_run.failure_reason == "materialize boom"
+    assert provider.stop_calls == 1
+    # The release happens before the failure is recorded, and the outcome still surfaces.
+    assert calls.index("spark_stop") < calls.index("failure")
+
+
+def test_executor_hands_the_provider_to_extract_without_starting_a_session(tmp_path):
+    @dataclass(slots=True)
+    class ProviderCapturingStrategy(FakeStrategy):
+        seen_spark: Any = None
+
+        def extract(self, plan, hook=None, *, spark=None):
+            # Explicit base call: zero-arg super() is unavailable in a slots dataclass.
+            self.seen_spark = spark
+            return FakeStrategy.extract(self, plan, hook, spark=spark)
+
+    calls: list[str] = []
+    planned_run = _planned_run(tmp_path, calls)
+    strategy = ProviderCapturingStrategy(calls)
+    source_config = replace(
+        planned_run.plan.source_config,
+        access=replace(
+            planned_run.plan.source_config.access,
+            request_inputs=IcebergRowsRequestInputsConfig(
+                type="iceberg_rows",
+                namespace="bronze",
+                table_name="empresas",
+                columns={"cnpj": "cnpj_basico"},
+            ),
+        ),
+    )
+    planned_run = replace(
+        planned_run,
+        plan=replace(planned_run.plan, source_config=source_config),
+        strategy=strategy,
+    )
+    provider = SpySparkSessionProvider(calls)
+    executor = _boundary_executor(tmp_path, calls, _passing_report(planned_run.plan))
+
+    executed_run = executor.execute(planned_run, provider, environment_config={})
+
+    assert executed_run.is_successful is True
+    assert strategy.seen_spark is provider
+    # The only session the executor itself starts is the materialization one.
+    assert calls.index("extract") < calls.index("spark_start")
+    assert provider.start_count == 1
+    assert provider.stop_calls == 1
 
 
 def _source_config_with_absolute_schema(source_config):

@@ -14,6 +14,7 @@ from janus.models import ExecutionPlan, RunContext, WriteResult
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
 from janus.registry import load_registry
+from janus.runtime import SparkSessionProvider
 from janus.scripts.raw_to_bronze import (
     RawToBronzeLoader,
     _artifact_format_for_path,
@@ -201,6 +202,97 @@ class FakeFailingObserver(FakeObserver):
             lineage_path=self.metadata_root / "lineage" / "run-001.json",
             checkpoint_result=None,
         )
+
+
+def test_raw_to_bronze_loader_starts_spark_only_at_the_materialization_boundary(tmp_path):
+    calls: list[str] = []
+    planned_run = _planned_run(tmp_path, calls)
+    raw_root = tmp_path / "data" / "raw" / "example" / "federal_open_data_example"
+    raw_root.mkdir(parents=True, exist_ok=True)
+    (raw_root / "page-0001.json").write_text('{"id": 1}\n', encoding="utf-8")
+
+    validation_report = ValidationReport.from_plan(
+        planned_run.plan,
+        [ValidationCheck.passed("output", "materialized_outputs", "ok")],
+    )
+    metadata_root = tmp_path / "data" / "metadata" / "example" / "federal_open_data_example"
+
+    class TrackingSession:
+        def stop(self) -> None:
+            calls.append("spark_stopped")
+
+    def session_factory() -> Any:
+        calls.append("spark_started")
+        return TrackingSession()
+
+    provider = SparkSessionProvider({}, {}, session_factory=session_factory)
+
+    result = RawToBronzeLoader(
+        reader=FakeReader(calls),
+        normalizer=FakeNormalizer(calls),
+        quality_gate=FakeQualityGate(
+            calls,
+            validation_report,
+            metadata_root / "validations" / "run-001.json",
+        ),
+        observer=FakeObserver(calls, metadata_root),
+        writer_factory=lambda storage_layout: FakeWriter(calls),
+        storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
+    ).ingest(
+        planned_run,
+        spark=provider,
+        environment_config={},
+        bronze_table="curated.custom_table",
+    )
+
+    assert result.is_successful is True
+    # Rediscovery and rehydration precede the session; observation follows its stop.
+    assert calls == [
+        "start",
+        "handoff",
+        "spark_started",
+        "read",
+        "normalize",
+        "write",
+        "metadata",
+        "validate",
+        "spark_stopped",
+        "success",
+    ]
+
+
+def test_raw_to_bronze_loader_never_starts_a_session_for_an_empty_raw_zone(tmp_path):
+    calls: list[str] = []
+    planned_run = _planned_run(tmp_path, calls)
+    raw_root = tmp_path / "data" / "raw" / "example" / "federal_open_data_example"
+    raw_root.mkdir(parents=True, exist_ok=True)
+
+    metadata_root = tmp_path / "data" / "metadata" / "example" / "federal_open_data_example"
+    built: list[str] = []
+
+    def session_factory() -> Any:
+        built.append("spark")
+        raise AssertionError("an empty raw zone must never start a session")
+
+    provider = SparkSessionProvider({}, {}, session_factory=session_factory)
+
+    result = RawToBronzeLoader(
+        reader=FakeReader(calls),
+        normalizer=FakeNormalizer(calls),
+        observer=FakeFailingObserver(calls, metadata_root),
+        writer_factory=lambda storage_layout: FakeWriter(calls),
+        storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
+    ).ingest(
+        planned_run,
+        spark=provider,
+        environment_config={},
+        bronze_table="curated.custom_table",
+    )
+
+    assert result.is_successful is False
+    assert result.error_type == "FileNotFoundError"
+    assert built == []
+    assert provider.was_started is False
 
 
 def test_raw_to_bronze_loader_reuses_existing_modules_and_overrides_target_table(tmp_path):

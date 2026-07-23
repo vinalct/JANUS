@@ -26,6 +26,7 @@ from janus.models import (
     SourceConfig,
     WriteResult,
 )
+from janus.runtime.spark_lifecycle import scoped_request_input_session
 from janus.strategies.base import BaseStrategy, SourceHook
 from janus.strategies.common import (
     _compare_checkpoint_values,
@@ -258,10 +259,14 @@ class ApiStrategy(BaseStrategy):
         dead_letter_max_items = plan.source_config.extraction.dead_letter_max_items
 
         try:
-            request_inputs = load_request_inputs(
+            with scoped_request_input_session(
+                spark,
                 plan.source_config.access.request_inputs,
-                spark=spark,
-            )
+            ) as request_input_session:
+                request_inputs = load_request_inputs(
+                    plan.source_config.access.request_inputs,
+                    spark=request_input_session,
+                )
         except ApiRequestInputLoadError:
             if logger is not None:
                 logger.exception(

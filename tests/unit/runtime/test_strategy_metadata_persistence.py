@@ -16,7 +16,7 @@ from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, Run
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
 from janus.registry import load_registry
-from janus.runtime import SourceExecutor
+from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.runtime.executor import ExecutedRun
 from janus.strategies.base import SourceHook
 from janus.utils.logging import StructuredLogger, build_structured_logger
@@ -381,7 +381,11 @@ def _run(
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     )
 
-    return executor.execute(planned_run, spark=object(), environment_config={})
+    return executor.execute(
+        planned_run,
+        SparkSessionProvider.wrapping(object()),
+        environment_config={},
+    )
 
 
 def _read(path: Path | None) -> dict[str, Any]:

@@ -10,6 +10,8 @@ from janus.models.source_config import SourceConfig
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
+    from janus.runtime.spark_lifecycle import SparkSessionProvider
+
 
 class SourceHook:
     """Small, optional extension points for one source without changing a strategy family."""
@@ -63,9 +65,16 @@ class BaseStrategy(ABC):
         plan: ExecutionPlan,
         hook: SourceHook | None = None,
         *,
-        spark: SparkSession | None = None,
+        spark: SparkSessionProvider | SparkSession | None = None,
     ) -> ExtractionResult:
-        """Perform source-family extraction and return the raw-artifact handoff contract."""
+        """Perform source-family extraction and return the raw-artifact handoff contract.
+
+        ``spark`` carries a :class:`SparkSessionProvider` when the executor runs the
+        strategy: extraction is driver-only work, so no live session is held across it.
+        Families that load request inputs materialize a session from the provider only
+        for that lookup (see ``scoped_request_input_session``). An externally-owned
+        ``SparkSession`` is still accepted for embedding callers and tests.
+        """
 
     @abstractmethod
     def build_normalization_handoff(

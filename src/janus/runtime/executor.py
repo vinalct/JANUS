@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from janus.lineage import RunObserver
 from janus.models import ExecutionPlan, ExtractionResult, WriteResult
@@ -22,12 +22,10 @@ from janus.runtime.materialize import (
     _quality_failure_message,
     _raw_write_results,
 )
+from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout
 from janus.writers import SparkDatasetWriter
-
-if TYPE_CHECKING:
-    from pyspark.sql import SparkSession
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +135,7 @@ class SourceExecutor:
     def execute(
         self,
         planned_run: PlannedRun,
-        spark: SparkSession,
+        spark_provider: SparkSessionProvider,
         environment_config: Mapping[str, Any],
     ) -> ExecutedRun:
         storage_layout = self.storage_layout_resolver(planned_run.plan, environment_config)
@@ -152,153 +150,169 @@ class SourceExecutor:
         strategy_metadata: dict[str, Any] = {}
 
         try:
-            _log_info(
-                logger,
-                "source_execution_started",
-                extraction_mode=plan.extraction_mode,
-                checkpoint_strategy=plan.checkpoint_strategy,
-                raw_output_path=plan.raw_output.path,
-                bronze_output_path=plan.bronze_output.path,
-                metadata_output_path=plan.metadata_output.path,
-            )
-
-            self.observer.start_run(plan)
-            _log_info(logger, "run_observation_started")
-
-            _log_info(
-                logger,
-                "source_extraction_started",
-                pagination_type=plan.source_config.access.pagination.type,
-                auth_type=plan.source_config.access.auth.type,
-            )
-            extraction_result = planned_run.strategy.extract(
-                plan,
-                hook=planned_run.hook,
-                spark=spark,
-            )
-            _log_info(
-                logger,
-                "source_extraction_finished",
-                records_extracted=extraction_result.records_extracted or 0,
-                artifact_count=len(extraction_result.artifacts),
-                checkpoint_value=extraction_result.checkpoint_value,
-            )
-
-            raw_write_results = _raw_write_results(plan, extraction_result)
-            write_results = raw_write_results
-            _log_info(
-                logger,
-                "raw_outputs_materialized",
-                artifact_count=len(raw_write_results),
-            )
-
-            handoff = planned_run.strategy.build_normalization_handoff(
-                plan,
-                extraction_result,
-                hook=planned_run.hook,
-            )
-            _log_info(
-                logger,
-                "normalization_handoff_prepared",
-                artifact_count=len(handoff.artifacts),
-                is_empty=handoff.is_empty,
-            )
-
-            normalized_dataframe = None
-            if not handoff.is_empty:
-                materializer = BronzeMaterializer(
-                    reader=self.reader,
-                    normalizer=self.normalizer,
-                    writer_factory=self.writer_factory,
-                )
-                bronze_results, normalized_dataframe = materializer.materialize(
-                    runtime_planned_run,
-                    plan,
-                    spark,
-                    handoff,
-                    storage_layout,
+            try:
+                _log_info(
                     logger,
+                    "source_execution_started",
+                    extraction_mode=plan.extraction_mode,
+                    checkpoint_strategy=plan.checkpoint_strategy,
+                    raw_output_path=plan.raw_output.path,
+                    bronze_output_path=plan.bronze_output.path,
+                    metadata_output_path=plan.metadata_output.path,
                 )
-                write_results = raw_write_results + bronze_results
 
-            strategy_metadata = dict(
-                planned_run.strategy.emit_metadata(
+                self.observer.start_run(plan)
+                _log_info(logger, "run_observation_started")
+
+                _log_info(
+                    logger,
+                    "source_extraction_started",
+                    pagination_type=plan.source_config.access.pagination.type,
+                    auth_type=plan.source_config.access.auth.type,
+                )
+                # The provider — never a live session — crosses into extract(). Only the
+                # api/catalog request-input lookup materializes one from it, scoped to
+                # that lookup; the download itself always runs session-free.
+                extraction_result = planned_run.strategy.extract(
+                    plan,
+                    hook=planned_run.hook,
+                    spark=spark_provider,
+                )
+                _log_info(
+                    logger,
+                    "source_extraction_finished",
+                    records_extracted=extraction_result.records_extracted or 0,
+                    artifact_count=len(extraction_result.artifacts),
+                    checkpoint_value=extraction_result.checkpoint_value,
+                )
+
+                raw_write_results = _raw_write_results(plan, extraction_result)
+                write_results = raw_write_results
+                _log_info(
+                    logger,
+                    "raw_outputs_materialized",
+                    artifact_count=len(raw_write_results),
+                )
+
+                handoff = planned_run.strategy.build_normalization_handoff(
                     plan,
                     extraction_result,
-                    write_results,
                     hook=planned_run.hook,
                 )
-            )
-            _log_info(
-                logger,
-                "strategy_metadata_emitted",
-                metadata_keys=sorted(strategy_metadata),
-            )
+                _log_info(
+                    logger,
+                    "normalization_handoff_prepared",
+                    artifact_count=len(handoff.artifacts),
+                    is_empty=handoff.is_empty,
+                )
 
-            _log_info(logger, "quality_validation_started")
-            validation_report = self.quality_gate.validate_and_store(
-                plan,
-                dataframe=normalized_dataframe,
-                write_results=write_results,
-                raise_on_failure=False,
-            )
-            _log_info(
-                logger,
-                "quality_validation_finished",
-                is_successful=validation_report.report.is_successful,
-                summary=validation_report.report.summary(),
-                validation_report_path=str(validation_report.path),
-            )
-            if not validation_report.report.is_successful:
-                failure = RuntimeError(_quality_failure_message(validation_report))
-                persisted = self.observer.record_failure(
+                normalized_dataframe = None
+                if not handoff.is_empty:
+                    materializer = BronzeMaterializer(
+                        reader=self.reader,
+                        normalizer=self.normalizer,
+                        writer_factory=self.writer_factory,
+                    )
+                    bronze_results, normalized_dataframe = materializer.materialize(
+                        runtime_planned_run,
+                        plan,
+                        spark_provider.get(),
+                        handoff,
+                        storage_layout,
+                        logger,
+                    )
+                    write_results = raw_write_results + bronze_results
+                else:
+                    _log_info(logger, "spark_session_skipped")
+
+                strategy_metadata = dict(
+                    planned_run.strategy.emit_metadata(
+                        plan,
+                        extraction_result,
+                        write_results,
+                        hook=planned_run.hook,
+                    )
+                )
+                _log_info(
+                    logger,
+                    "strategy_metadata_emitted",
+                    metadata_keys=sorted(strategy_metadata),
+                )
+
+                _log_info(logger, "quality_validation_started")
+                validation_report = self.quality_gate.validate_and_store(
                     plan,
-                    failure,
+                    dataframe=normalized_dataframe,
+                    write_results=write_results,
+                    raise_on_failure=False,
+                )
+                _log_info(
+                    logger,
+                    "quality_validation_finished",
+                    is_successful=validation_report.report.is_successful,
+                    summary=validation_report.report.summary(),
+                    validation_report_path=str(validation_report.path),
+                )
+                # Quality validation was the last consumer of the session-bound
+                # DataFrame; everything below — observation, checkpointing, metadata
+                # persistence — runs session-free. The outer `finally` is the backstop
+                # for paths that never reach this point.
+                spark_provider.stop()
+
+                if not validation_report.report.is_successful:
+                    failure = RuntimeError(_quality_failure_message(validation_report))
+                    persisted = self.observer.record_failure(
+                        plan,
+                        failure,
+                        extraction_result,
+                        write_results,
+                        strategy_metadata=strategy_metadata,
+                    )
+                    _log_error(
+                        logger,
+                        "source_execution_failed",
+                        failure_reason=str(failure),
+                        error_type=type(failure).__name__,
+                    )
+                    return _build_executed_run(
+                        runtime_planned_run,
+                        status="failed",
+                        persisted=persisted,
+                        extraction_result=extraction_result,
+                        write_results=write_results,
+                        validation_report=validation_report,
+                        strategy_metadata=strategy_metadata,
+                        failure_reason=str(failure),
+                        error_type=type(failure).__name__,
+                    )
+
+                persisted = self.observer.record_success(
+                    plan,
                     extraction_result,
                     write_results,
                     strategy_metadata=strategy_metadata,
                 )
-                _log_error(
+                _log_info(
                     logger,
-                    "source_execution_failed",
-                    failure_reason=str(failure),
-                    error_type=type(failure).__name__,
+                    "source_execution_succeeded",
+                    records_extracted=extraction_result.records_extracted or 0,
+                    materialized_output_count=len(write_results),
+                    run_metadata_path=str(getattr(persisted, "run_metadata_path", "")),
+                    lineage_path=str(getattr(persisted, "lineage_path", "")),
                 )
                 return _build_executed_run(
                     runtime_planned_run,
-                    status="failed",
+                    status="succeeded",
                     persisted=persisted,
                     extraction_result=extraction_result,
                     write_results=write_results,
                     validation_report=validation_report,
                     strategy_metadata=strategy_metadata,
-                    failure_reason=str(failure),
-                    error_type=type(failure).__name__,
                 )
-
-            persisted = self.observer.record_success(
-                plan,
-                extraction_result,
-                write_results,
-                strategy_metadata=strategy_metadata,
-            )
-            _log_info(
-                logger,
-                "source_execution_succeeded",
-                records_extracted=extraction_result.records_extracted or 0,
-                materialized_output_count=len(write_results),
-                run_metadata_path=str(getattr(persisted, "run_metadata_path", "")),
-                lineage_path=str(getattr(persisted, "lineage_path", "")),
-            )
-            return _build_executed_run(
-                runtime_planned_run,
-                status="succeeded",
-                persisted=persisted,
-                extraction_result=extraction_result,
-                write_results=write_results,
-                validation_report=validation_report,
-                strategy_metadata=strategy_metadata,
-            )
+            finally:
+                # Idempotent, so the release above is not repeated; this guarantees one
+                # on the paths that bypassed it — extraction, materialization
+                spark_provider.stop()
         except Exception as exc:
             _log_exception(
                 logger,

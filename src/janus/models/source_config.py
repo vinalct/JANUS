@@ -92,6 +92,16 @@ class RateLimitConfig:
 class RequestInputsConfig:
     type: str
 
+    @property
+    def requires_spark(self) -> bool:
+        """Return whether loading these request inputs needs a live SparkSession.
+
+        Answered from config alone, before any session exists, so callers can decide
+        whether extraction must hold compute at all. ``none`` and ``date_window`` are
+        synthesized in pure Python and never need one.
+        """
+        return False
+
 
 @dataclass(frozen=True, slots=True)
 class DateWindowRequestInputsConfig(RequestInputsConfig):
@@ -107,10 +117,20 @@ class IcebergRowsRequestInputsConfig(RequestInputsConfig):
     columns: dict[str, str]
     distinct: bool = False
 
+    @property
+    def requires_spark(self) -> bool:
+        """Return True: the projected rows are read from an upstream Iceberg table."""
+        return True
+
 
 @dataclass(frozen=True, slots=True)
 class CombinedRequestInputsConfig(RequestInputsConfig):
     inputs: tuple[RequestInputsConfig, ...]
+
+    @property
+    def requires_spark(self) -> bool:
+        """Return True when any sub-input needs Spark, since all of them are loaded."""
+        return any(sub_input.requires_spark for sub_input in self.inputs)
 
 
 @dataclass(frozen=True, slots=True)
