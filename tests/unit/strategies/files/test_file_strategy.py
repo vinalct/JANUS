@@ -552,7 +552,10 @@ def _build_source_config(
     rate_limit_backoff_seconds: int | None = 5,
     requests_per_minute: int | None = 10,
     dead_letter_max_items: int = 0,
+    unique_fields: tuple[str, ...] | None = None,
 ) -> SourceConfig:
+    if unique_fields is None:
+        unique_fields = ("id",) if extraction_mode == "incremental" else ()
     access_block: dict[str, Any] = {
         "method": "GET",
         "format": access_format,
@@ -608,7 +611,10 @@ def _build_source_config(
                 "bronze": {"path": f"data/bronze/example/{source_id}", "format": "iceberg"},
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
-            "quality": {"allow_schema_evolution": True},
+            "quality": {
+                "allow_schema_evolution": True,
+                **({"unique_fields": list(unique_fields)} if unique_fields else {}),
+            },
         },
         tmp_path / "conf" / "sources" / f"{source_id}.yaml",
     )

@@ -458,12 +458,20 @@ def _assert_generic_sidra_source_contract(
     assert source_config.schema.mode == "infer"
     assert source_config.schema.path is None
     assert source_config.spark.input_format == "jsonl"
+    assert source_config.spark.write_mode == "append"
     assert source_config.outputs.bronze.path == expected_bronze_path
     assert source_config.quality.required_fields == (
         "aggregate_id",
         "value",
         "sidra_dimension_count",
         "sidra_attribute_count",
+        "sidra_period_code",
+        "sidra_variable_code",
+    )
+    assert source_config.quality.unique_fields == (
+        "aggregate_id",
+        "sidra_period_code",
+        "sidra_variable_code",
     )
 
 
@@ -694,6 +702,8 @@ def _cloned_source_config(tmp_path: Path, source_id: str, config_file_name: str)
                 "value",
                 "sidra_dimension_count",
                 "sidra_attribute_count",
+                "sidra_period_code",
+                "sidra_variable_code",
             ),
         ),
     )

@@ -49,7 +49,8 @@ sources:
     mode: infer
   spark:
     input_format: jsonl
-    write_mode: overwrite
+    # append resolves to merge_on_keys under: bronze now accumulates windows
+    write_mode: append
     repartition: 1
     partition_by:
     - ingestion_date
@@ -69,6 +70,12 @@ sources:
     - value
     - sidra_dimension_count
     - sidra_attribute_count
+    - sidra_period_code
+    - sidra_variable_code
+    unique_fields:
+    - aggregate_id
+    - sidra_period_code
+    - sidra_variable_code
     allow_schema_evolution: true
 - source_id: ibge_agro_abacaxi_pronaf
   name: IBGE - Quantidade produzida de abacaxi em estabelecimentos agropecuarios
@@ -122,7 +129,7 @@ sources:
     mode: infer
   spark:
     input_format: jsonl
-    write_mode: overwrite
+    write_mode: append
     repartition: 1
     partition_by:
     - ingestion_date
@@ -142,4 +149,10 @@ sources:
     - value
     - sidra_dimension_count
     - sidra_attribute_count
+    - sidra_period_code
+    - sidra_variable_code
+    unique_fields:
+    - aggregate_id
+    - sidra_period_code
+    - sidra_variable_code
     allow_schema_evolution: true

@@ -1228,7 +1228,10 @@ def _build_source_config(
     request_inputs: dict[str, Any] | None = None,
     parameter_bindings: dict[str, Any] | None = None,
     dead_letter_max_items: int = 0,
+    unique_fields: tuple[str, ...] | None = None,
 ) -> SourceConfig:
+    if unique_fields is None:
+        unique_fields = ("id",) if extraction_mode == "incremental" else ()
     return SourceConfig.from_mapping(
         {
             "source_id": source_id,
@@ -1280,7 +1283,10 @@ def _build_source_config(
                 "bronze": {"path": f"data/bronze/example/{source_id}", "format": "iceberg"},
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
-            "quality": {"allow_schema_evolution": True},
+            "quality": {
+                "allow_schema_evolution": True,
+                **({"unique_fields": list(unique_fields)} if unique_fields else {}),
+            },
         },
         tmp_path / "conf" / "sources" / f"{source_id}.yaml",
     )
