@@ -25,6 +25,7 @@ import yaml
 from janus.models import RunContext, SourceConfig
 from janus.planner import PlannedRun
 from janus.runtime import SourceExecutor, SparkSessionProvider
+from janus.scripts import ingest_raw_to_bronze
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.utils.environment import ICEBERG_CATALOG_IMPL, ICEBERG_SESSION_EXTENSIONS
 from janus.utils.storage import StorageLayout, bronze_table_identifier
@@ -221,6 +222,56 @@ def test_reingesting_the_lookback_window_does_not_duplicate_bronze_rows(
         assert unique_check.outcome == "passed"
 
 
+def test_replay_over_the_same_raw_zone_is_idempotent_on_bronze(tmp_path, session_factory):
+    """Replay is the pairing: the fix lives in the shared materializer.
+
+    A live ``--execute`` writes bronze, then ``ingest_raw_to_bronze`` re-materializes the
+    *same* raw zone into the *same* bronze table. Because the write intent is resolved once
+    in the materializer both entry points share, the replay MERGEs the already-committed
+    rows back onto their keys and changes nothing — same key set, same row count, green
+    quality. This is the replay analogue of the bronze-materializer equivalence suite.
+    """
+
+    executed, _ = _run_once(
+        tmp_path,
+        session_factory,
+        run_id=RUN_ONE_RUN_ID,
+        started_at=RUN_ONE_STARTED_AT,
+        records=RUN_ONE_RECORDS,
+    )
+    assert executed.status == "succeeded", executed.failure_reason
+
+    live_rows = _read_bronze(session_factory)
+
+    live_business = _business_projection(live_rows)
+    assert len(live_business) == len(RUN_ONE_RECORDS)
+
+    replay_planned_run = _replay_planned_run(tmp_path)
+    session = session_factory()
+    try:
+        replay = ingest_raw_to_bronze(
+            replay_planned_run,
+            session,
+            ENVIRONMENT_CONFIG,
+            # Same table name + namespace => the replay lands on the live bronze table.
+            bronze_table=BRONZE_TABLE_NAME,
+        )
+    finally:
+        session.stop()
+    assert replay.status == "succeeded", replay.failure_reason
+
+    replay_rows = _read_bronze(session_factory)
+    replay_business = _business_projection(replay_rows)
+
+    # AC-1 / AC-4 — re-materializing the same raw zone leaves one row per key, unchanged.
+    assert len(replay_rows) == len(live_rows)
+    assert replay_business == live_business
+
+    # AC-2 — the quality gate stays green on the replay.
+    assert replay.validation_report is not None
+    assert replay.validation_report.report.is_successful is True
+
+
 def _run_once(
     tmp_path: Path,
     session_factory,
@@ -251,6 +302,30 @@ def _run_once(
 
     executed = SourceExecutor().execute(planned_run, provider, ENVIRONMENT_CONFIG)
     return executed, transport
+
+
+def _replay_planned_run(tmp_path: Path) -> PlannedRun:
+    """Build the replay's planned run; its strategy rehydrates the handoff from raw."""
+
+    storage_layout = StorageLayout.from_environment_config(ENVIRONMENT_CONFIG, tmp_path)
+    strategy = ApiStrategy(
+        transport_factory=lambda: FixtureTransport(payloads=[]),
+        storage_layout_factory=lambda plan: storage_layout,
+        sleeper=lambda seconds: None,
+        clock=lambda: 0.0,
+    )
+    run_context = RunContext.create(
+        run_id="run-incremental-replay-001",
+        environment="local",
+        project_root=tmp_path,
+        started_at=RUN_TWO_STARTED_AT,
+    )
+    plan = strategy.plan(_source_config(tmp_path), run_context)
+    return PlannedRun(plan=plan, strategy=strategy)
+
+
+def _business_projection(rows: list[dict[str, Any]]) -> dict[str, tuple[Any, Any]]:
+    return {row["event_id"]: (row["event_date"], row["amount"]) for row in rows}
 
 
 def _read_bronze(session_factory) -> list[dict[str, Any]]:

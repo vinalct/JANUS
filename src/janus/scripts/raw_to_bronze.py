@@ -413,6 +413,7 @@ def _build_result(
 
 
 def _override_bronze_output(plan: ExecutionPlan, bronze_table: str) -> ExecutionPlan:
+    """Redirect the bronze target to ``bronze_table`` for a replay."""
     normalized_target = bronze_table.strip()
     if not normalized_target:
         raise ValueError("bronze_table must not be empty")

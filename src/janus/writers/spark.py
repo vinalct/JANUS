@@ -17,6 +17,14 @@ if TYPE_CHECKING:
 
 SUPPORTED_SPARK_WRITE_FORMATS = frozenset({"csv", "json", "jsonl", "parquet", "text"})
 
+# Every non-merge bronze strategy maps to exactly one Iceberg write mode
+_BRONZE_STRATEGY_ICEBERG_MODE = {
+    "skip_if_exists": "ignore",
+    "insert": "append",
+    "create": "append",
+    "replace_table": "overwrite",
+}
+
 # Transient columns the source-side dedup stamps on the batch and
 # drops again before the MERGE — never persisted to bronze.
 _MERGE_SEQUENCE_COLUMN = "_janus_merge_seq"
@@ -48,12 +56,13 @@ class SparkDatasetWriter:
     ) -> WriteResult:
         """Write ``dataframe`` to ``zone``.
 
-        For bronze Iceberg writes the resolved :class:`BronzeWriteIntent` decides how the
-        table is written. ``intent`` may be passed explicitly (the materializer does so);
-        when it is not, the writer derives it from the plan via
+        For bronze Iceberg writes the resolved :class:`BronzeWriteIntent` is the *only*
+        thing that decides how the table is written. ``intent`` may be passed explicitly
+        (the materializer does so); when it is not, the writer derives it from the plan via
         :func:`resolve_bronze_write_intent`, so a hand-rolled ``write(df, plan, "bronze")``
-        is idempotent too. ``mode`` is only consulted for the non-upsert bronze branches and
-        for non-bronze zones. Non-bronze / non-iceberg zones ignore ``intent`` entirely.
+        is idempotent too. ``mode`` is ignored for bronze Iceberg writes — the intent always
+        wins — and is only consulted for non-bronze / non-iceberg zones, which ignore
+        ``intent`` entirely.
         """
         resolved_target = self.storage_layout.resolve_output(plan, zone)
         resolved_format = format_name or resolved_target.format
@@ -62,7 +71,6 @@ class SparkDatasetWriter:
                 dataframe,
                 plan,
                 configured_format=resolved_format,
-                mode=mode,
                 intent=intent,
                 partition_by=partition_by,
                 metadata=metadata,
@@ -114,7 +122,6 @@ class SparkDatasetWriter:
         plan: ExecutionPlan,
         *,
         configured_format: str,
-        mode: str | None,
         intent: BronzeWriteIntent | None,
         partition_by: tuple[str, ...] | None,
         metadata: Mapping[str, str] | None,
@@ -126,7 +133,6 @@ class SparkDatasetWriter:
             raise ValueError("bronze outputs must use the 'iceberg' format")
 
         resolved_intent = intent or resolve_bronze_write_intent(plan)
-        write_mode = mode or plan.source_config.spark.write_mode
         partition_columns = partition_by or plan.source_config.spark.partition_by
 
         prepared_frame = _rebalance_for_write(
@@ -156,6 +162,12 @@ class SparkDatasetWriter:
                 count_records=count_records,
             )
 
+        effective_mode = _BRONZE_STRATEGY_ICEBERG_MODE.get(resolved_intent.strategy)
+        if effective_mode is None:
+            raise ValueError(
+                f"unsupported bronze write strategy: {resolved_intent.strategy!r}"
+            )
+
         resolved_records_written = records_written
         if count_records and resolved_records_written is None:
             resolved_records_written = prepared_frame.count()
@@ -174,30 +186,21 @@ class SparkDatasetWriter:
             partition_clause = _partition_clause(partition_columns)
             table_exists = spark.catalog.tableExists(table_identifier)
 
-            if write_mode == "ignore" and table_exists:
+            if effective_mode == "ignore" and table_exists:
                 pass
-            elif write_mode == "append":
-                if table_exists:
-                    spark.sql(f"INSERT INTO {quoted_table} SELECT * FROM {quoted_temp_view}")
-                else:
-                    spark.sql(
-                        f"CREATE TABLE {quoted_table} USING iceberg "
-                        f"{partition_clause} AS SELECT * FROM {quoted_temp_view}"
-                    )
-            elif write_mode == "overwrite":
-                if table_exists:
-                    spark.sql(
-                        f"REPLACE TABLE {quoted_table} USING iceberg "
-                        f"{partition_clause} AS SELECT * FROM {quoted_temp_view}"
-                    )
-                else:
-                    spark.sql(
-                        f"CREATE TABLE {quoted_table} USING iceberg "
-                        f"{partition_clause} AS SELECT * FROM {quoted_temp_view}"
-                    )
+            elif effective_mode == "overwrite" and table_exists:
+                spark.sql(
+                    f"REPLACE TABLE {quoted_table} USING iceberg "
+                    f"{partition_clause} AS SELECT * FROM {quoted_temp_view}"
+                )
+            elif effective_mode == "append" and table_exists:
+                spark.sql(f"INSERT INTO {quoted_table} SELECT * FROM {quoted_temp_view}")
             else:
-                allowed = ", ".join(sorted({"append", "ignore", "overwrite"}))
-                raise ValueError(f"mode must be one of: {allowed}")
+                # A first write for any of ignore/append/overwrite creates the table.
+                spark.sql(
+                    f"CREATE TABLE {quoted_table} USING iceberg "
+                    f"{partition_clause} AS SELECT * FROM {quoted_temp_view}"
+                )
         finally:
             spark.catalog.dropTempView(temp_view_name)
 
@@ -206,7 +209,7 @@ class SparkDatasetWriter:
             "bronze",
             path=table_identifier,
             format_name="iceberg",
-            mode=write_mode,
+            mode=effective_mode,
             records_written=resolved_records_written,
             partition_by=partition_columns,
             metadata=metadata,

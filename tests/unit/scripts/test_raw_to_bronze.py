@@ -120,15 +120,25 @@ class FakeWriter:
         )
 
 
+_STRATEGY_MODE = {
+    "replace_table": "overwrite",
+    "insert": "append",
+    "create": "append",
+    "skip_if_exists": "ignore",
+}
+
+
 @dataclass(slots=True)
 class RecordingWriter:
     modes: list[str]
     paths: list[str]
 
-    def write(self, dataframe, plan, zone, **kwargs):
+    def write(self, dataframe, plan, zone, *, intent=None, **kwargs):
         del dataframe
+        del kwargs
         assert zone == "bronze"
-        mode = kwargs.get("mode") or plan.source_config.spark.write_mode
+        assert intent is not None, "materializer must pass the resolved intent for bronze"
+        mode = _STRATEGY_MODE[intent.strategy]
         path = f"{plan.bronze_output.namespace}.{plan.bronze_output.table_name}"
         self.modes.append(mode)
         self.paths.append(path)
