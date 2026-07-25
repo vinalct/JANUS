@@ -176,6 +176,38 @@ def test_every_non_incremental_source_keeps_its_configured_write_mode() -> None:
     assert checked > 0, "expected at least one non-incremental source in conf/sources"
 
 
+# --- 2b. Partition-overwrite is unreachable for every current config  -----
+
+
+def test_no_current_source_resolves_to_partition_overwrite() -> None:
+    """`overwrite_partitions` is gated off for every source in conf/sources/**.
+
+    Every source partitions bronze on `ingestion_date` (a normalization run stamp), so the
+    alignment predicate returns `False` everywhere and `merge_on_keys` is the effective
+    default for incremental sources.
+    """
+    registry = load_registry(PROJECT_ROOT)
+    incremental_checked = 0
+    for source_config in registry.list_sources(enabled_only=False):
+        run_context = RunContext.create(
+            run_id="run-fastpath-001",
+            environment="local",
+            project_root=PROJECT_ROOT,
+            started_at=datetime(2026, 7, 24, 12, 0, tzinfo=UTC),
+        )
+        plan = ExecutionPlan.from_source_config(source_config, run_context)
+
+        intent = resolve_bronze_write_intent(plan)
+
+        assert intent.strategy != "overwrite_partitions", source_config.source_id
+        if source_config.extraction.mode == "incremental":
+            assert intent.strategy in {"merge_on_keys", "replace_table"}, source_config.source_id
+            if intent.is_upsert:
+                incremental_checked += 1
+
+    assert incremental_checked > 0, "expected at least one incremental upsert source"
+
+
 # --- 3. Alignment predicate ------------------------------------------------------------
 
 
