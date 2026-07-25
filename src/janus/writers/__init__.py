@@ -5,7 +5,12 @@ from janus.writers.raw import (
     PersistedArtifact,
     RawArtifactWriter,
 )
-from janus.writers.spark import SUPPORTED_SPARK_WRITE_FORMATS, SparkDatasetWriter
+from janus.writers.spark import (
+    SUPPORTED_SPARK_WRITE_FORMATS,
+    SparkDatasetWriter,
+    build_add_columns_sql,
+    build_merge_sql,
+)
 
 __all__ = [
     "SIDECAR_SUFFIX",
@@ -15,4 +20,6 @@ __all__ = [
     "PersistedArtifact",
     "RawArtifactWriter",
     "SparkDatasetWriter",
+    "build_add_columns_sql",
+    "build_merge_sql",
 ]
