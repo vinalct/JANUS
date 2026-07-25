@@ -30,6 +30,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "dados_abertos_catalog"
 
 
+class _ReplaySession:
+    """Borrowed-session stand-in for replay tests.
+
+    The loader now reads the committed bronze table for the output-phase uniqueness oracle,
+    so a session handed to ``ingest`` must answer ``table``. The frame is a token — the fake
+    quality gate never inspects it.
+    """
+
+    def table(self, identifier: str) -> Any:
+        del identifier
+        return object()
+
+
 @dataclass(slots=True)
 class FakeStrategy:
     calls: list[str]
@@ -228,6 +241,10 @@ def test_raw_to_bronze_loader_starts_spark_only_at_the_materialization_boundary(
     metadata_root = tmp_path / "data" / "metadata" / "example" / "federal_open_data_example"
 
     class TrackingSession:
+        def table(self, identifier: str) -> Any:
+            del identifier
+            return object()
+
         def stop(self) -> None:
             calls.append("spark_stopped")
 
@@ -333,7 +350,7 @@ def test_raw_to_bronze_loader_reuses_existing_modules_and_overrides_target_table
 
     result = loader.ingest(
         planned_run,
-        spark=object(),
+        spark=_ReplaySession(),
         environment_config={},
         bronze_table="curated.custom_table",
     )
@@ -384,7 +401,7 @@ def test_raw_to_bronze_loader_uses_latest_run_scoped_raw_root(tmp_path):
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     ).ingest(
         planned_run,
-        spark=object(),
+        spark=_ReplaySession(),
         environment_config={},
         bronze_table="curated.custom_table",
     )
@@ -657,7 +674,7 @@ def test_raw_to_bronze_loader_regenerates_catalog_jsonl_handoff_from_raw_pages(t
 
     result = loader.ingest(
         planned_run,
-        spark=object(),
+        spark=_ReplaySession(),
         environment_config={},
         bronze_table="curated.custom_table",
     )
@@ -727,7 +744,7 @@ def test_raw_to_bronze_loader_reads_using_handoff_format_instead_of_source_confi
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     ).ingest(
         planned_run,
-        spark=object(),
+        spark=_ReplaySession(),
         environment_config={},
         bronze_table="bronze__receita_federal.cnpj_jsonl",
     )
@@ -803,7 +820,7 @@ def test_raw_to_bronze_loader_rehydrates_file_archive_members_from_raw_downloads
 
     result = loader.ingest(
         planned_run,
-        spark=object(),
+        spark=_ReplaySession(),
         environment_config={},
         bronze_table="bronze__receita_federal.cnpj_empresas",
     )
@@ -898,7 +915,7 @@ def test_file_raw_to_bronze_writes_handoff_artifacts_in_append_batches(tmp_path)
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     ).ingest(
         planned_run,
-        spark=object(),
+        spark=_ReplaySession(),
         environment_config={},
         bronze_table="bronze__receita_federal.cnpj_empresas",
     )
@@ -939,7 +956,7 @@ def test_raw_to_bronze_loader_forwards_strategy_metadata_to_observer_on_success(
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     ).ingest(
         planned_run,
-        spark=object(),
+        spark=_ReplaySession(),
         environment_config={},
         bronze_table="curated.custom_table",
     )
@@ -975,7 +992,7 @@ def test_raw_to_bronze_loader_forwards_strategy_metadata_on_quality_failure(tmp_
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     ).ingest(
         planned_run,
-        spark=object(),
+        spark=_ReplaySession(),
         environment_config={},
         bronze_table="curated.custom_table",
     )

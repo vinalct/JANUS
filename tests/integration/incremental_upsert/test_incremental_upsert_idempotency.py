@@ -221,6 +221,101 @@ def test_reingesting_the_lookback_window_does_not_duplicate_bronze_rows(
         unique_check = _check(executed, phase="data", name="unique_fields")
         assert unique_check.outcome == "passed"
 
+        bronze_check = _check(executed, phase="output", name="bronze_key_uniqueness")
+        assert bronze_check.outcome == "passed"
+        assert bronze_check.details_as_dict()["scan_scope"] == "run_keys"
+
+
+def test_a_duplicate_injected_into_bronze_fails_the_next_run(tmp_path, session_factory):
+    """The sabotage path: the regression net exists to hang.
+
+    Run once, then inject a duplicate straight into the committed table for ``e2`` — a key
+    the *next* run re-fetches. Before this task the run went green over the doubled row,
+    because the quality gate only ever saw the last normalized batch, never the table. Now
+    the output-phase ``bronze_key_uniqueness`` check reads the table, scoped to the keys the
+    run wrote, and must fail the run. This is the test that would have caught the §5.4 bug.
+    """
+
+    run_one, _ = _run_once(
+        tmp_path,
+        session_factory,
+        run_id=RUN_ONE_RUN_ID,
+        started_at=RUN_ONE_STARTED_AT,
+        records=RUN_ONE_RECORDS,
+    )
+    assert run_one.status == "succeeded", run_one.failure_reason
+
+    # e2 is re-fetched by run two, so it lands in that run's key set.
+    _inject_bronze_duplicate(session_factory, event_id="e2")
+
+    run_two, _ = _run_once(
+        tmp_path,
+        session_factory,
+        run_id="run-incremental-002",
+        started_at=RUN_TWO_STARTED_AT,
+        records=RUN_TWO_RECORDS,
+    )
+
+    # The run fails, and it fails on exactly the output-phase oracle this task added.
+    assert run_two.status == "failed"
+    assert run_two.validation_report is not None
+    assert run_two.validation_report.report.is_successful is False
+    failed_names = [
+        f"{check.phase}.{check.name}"
+        for check in run_two.validation_report.report.failed_checks
+    ]
+    assert "output.bronze_key_uniqueness" in failed_names
+
+    bronze_check = _check(run_two, phase="output", name="bronze_key_uniqueness")
+    assert bronze_check.outcome == "failed"
+    assert int(bronze_check.details_as_dict()["duplicate_groups"]) >= 1
+    assert "e2" in bronze_check.details_as_dict()["sample_duplicates"]
+
+    # The failure is recorded by the observer, not merely returned in memory.
+    assert run_two.failure_reason is not None
+    assert "bronze_key_uniqueness" in run_two.failure_reason
+    assert run_two.run_metadata_path is not None
+    assert run_two.run_metadata_path.exists()
+
+
+def test_a_preexisting_duplicate_on_an_untouched_key_does_not_fail_the_run(
+    tmp_path, session_factory
+):
+    """§2.2's deliberate limit, asserted as behaviour: the scan is scoped to run keys.
+
+    A duplicate on ``e1`` — which run two does *not* re-fetch — is historical damage. The
+    check flags only keys this run wrote, so the run stays green and the pre-existing
+    duplicate is left for the migration runbook rather than failing every future run.
+    """
+
+    run_one, _ = _run_once(
+        tmp_path,
+        session_factory,
+        run_id=RUN_ONE_RUN_ID,
+        started_at=RUN_ONE_STARTED_AT,
+        records=RUN_ONE_RECORDS,
+    )
+    assert run_one.status == "succeeded", run_one.failure_reason
+
+    # e1 is only in run one; run two's window is e2, e3, e4.
+    _inject_bronze_duplicate(session_factory, event_id="e1")
+
+    run_two, _ = _run_once(
+        tmp_path,
+        session_factory,
+        run_id="run-incremental-002",
+        started_at=RUN_TWO_STARTED_AT,
+        records=RUN_TWO_RECORDS,
+    )
+
+    assert run_two.status == "succeeded", run_two.failure_reason
+    bronze_check = _check(run_two, phase="output", name="bronze_key_uniqueness")
+    assert bronze_check.outcome == "passed"
+
+    # The untouched duplicate is deliberately still there — scope, not accident.
+    key_counts = Counter(row["event_id"] for row in _read_bronze(session_factory))
+    assert key_counts["e1"] == 2
+
 
 def test_replay_over_the_same_raw_zone_is_idempotent_on_bronze(tmp_path, session_factory):
     """Replay is the pairing: the fix lives in the shared materializer.
@@ -338,6 +433,23 @@ def _read_bronze(session_factory) -> list[dict[str, Any]]:
     session = session_factory()
     try:
         return [row.asDict(recursive=True) for row in session.table(BRONZE_TABLE).collect()]
+    finally:
+        session.stop()
+
+
+def _inject_bronze_duplicate(session_factory, *, event_id: str) -> None:
+    """Duplicate one committed bronze row directly, through a session the runs don't hold.
+
+    This forges the state a blind ``INSERT INTO`` used to leave behind, so the next run's
+    output-phase check has something to catch.
+    """
+
+    session = session_factory()
+    try:
+        session.sql(
+            f"INSERT INTO {BRONZE_TABLE} "
+            f"SELECT * FROM {BRONZE_TABLE} WHERE event_id = '{event_id}'"
+        )
     finally:
         session.stop()
 

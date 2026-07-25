@@ -21,6 +21,7 @@ from janus.runtime.materialize import (
     _log_info,
     _quality_failure_message,
     _raw_write_results,
+    read_committed_bronze,
 )
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.utils.logging import StructuredLogger
@@ -207,13 +208,15 @@ class SourceExecutor:
                 )
 
                 normalized_dataframe = None
+                bronze_dataframe = None
+                run_keys = None
                 if not handoff.is_empty:
                     materializer = BronzeMaterializer(
                         reader=self.reader,
                         normalizer=self.normalizer,
                         writer_factory=self.writer_factory,
                     )
-                    bronze_results, normalized_dataframe = materializer.materialize(
+                    bronze_results, normalized_dataframe, run_keys = materializer.materialize(
                         runtime_planned_run,
                         plan,
                         spark_provider.get(),
@@ -222,6 +225,11 @@ class SourceExecutor:
                         logger,
                     )
                     write_results = raw_write_results + bronze_results
+                    # Read the committed table for the bronze uniqueness oracle while the
+                    # session is still live — this is not a new lifetime.
+                    bronze_dataframe = read_committed_bronze(
+                        spark_provider.get(), bronze_results
+                    )
                 else:
                     _log_info(logger, "spark_session_skipped")
 
@@ -244,6 +252,8 @@ class SourceExecutor:
                     plan,
                     dataframe=normalized_dataframe,
                     write_results=write_results,
+                    bronze_dataframe=bronze_dataframe,
+                    run_keys=run_keys,
                     raise_on_failure=False,
                 )
                 _log_info(

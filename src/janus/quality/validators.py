@@ -5,7 +5,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from janus.models import ExecutionPlan, QualityConfig, WriteResult
+from janus.models import (
+    ExecutionPlan,
+    QualityConfig,
+    WriteResult,
+    resolve_bronze_write_intent,
+)
 from janus.normalizers import NORMALIZATION_METADATA_COLUMNS
 from janus.quality.models import QualityValidationError, ValidationCheck, ValidationReport
 from janus.quality.store import PersistedValidationReport, ValidationReportStore
@@ -43,6 +48,8 @@ class QualityGate:
         write_results: Sequence[WriteResult] = (),
         expected_fields: Sequence[str] | None = None,
         output_columns: Sequence[str] = NORMALIZATION_METADATA_COLUMNS,
+        bronze_dataframe: DataFrame | None = None,
+        run_keys: DataFrame | None = None,
         raise_on_failure: bool = False,
     ) -> ValidationReport:
         schema_expectation = resolve_schema_expectation(plan, expected_fields=expected_fields)
@@ -54,6 +61,7 @@ class QualityGate:
             validate_schema_expectations(plan, dataframe, schema_expectation),
             validate_output_columns(dataframe, output_columns),
             validate_materialized_outputs(plan, write_results),
+            validate_bronze_key_uniqueness(plan, bronze_dataframe, run_keys),
         )
         report = ValidationReport.from_plan(
             plan,
@@ -75,6 +83,8 @@ class QualityGate:
         write_results: Sequence[WriteResult] = (),
         expected_fields: Sequence[str] | None = None,
         output_columns: Sequence[str] = NORMALIZATION_METADATA_COLUMNS,
+        bronze_dataframe: DataFrame | None = None,
+        run_keys: DataFrame | None = None,
         raise_on_failure: bool = False,
     ) -> PersistedValidationReport:
         if self.report_store is None:
@@ -86,6 +96,8 @@ class QualityGate:
             write_results=write_results,
             expected_fields=expected_fields,
             output_columns=output_columns,
+            bronze_dataframe=bronze_dataframe,
+            run_keys=run_keys,
             raise_on_failure=False,
         )
         persisted_path = self.report_store.write(plan, report)
@@ -278,6 +290,75 @@ def validate_unique_fields(
         "unique_fields",
         "Configured unique_fields are unique in the provided dataframe.",
         details={"unique_field_count": len(unique_fields)},
+    )
+
+
+def validate_bronze_key_uniqueness(
+    plan: ExecutionPlan,
+    bronze_dataframe: DataFrame | None,
+    run_keys: DataFrame | None,
+) -> ValidationCheck:
+    """Assert the committed bronze table holds one row per key this run wrote."""
+    
+    unique_fields = plan.source_config.quality.unique_fields
+    if not unique_fields:
+        return ValidationCheck.skipped(
+            "output",
+            "bronze_key_uniqueness",
+            "No unique_fields were configured.",
+        )
+
+    intent = resolve_bronze_write_intent(plan)
+    if not intent.is_upsert:
+        return ValidationCheck.skipped(
+            "output",
+            "bronze_key_uniqueness",
+            f"Write strategy {intent.strategy!r} is not an upsert; the whole table was "
+            "rewritten from the frame the in-flight uniqueness check already covered.",
+            details={"write_strategy": intent.strategy},
+        )
+
+    if bronze_dataframe is None or run_keys is None:
+        return ValidationCheck.skipped(
+            "output",
+            "bronze_key_uniqueness",
+            "No committed bronze table frame was provided for uniqueness validation.",
+        )
+
+    missing_columns = [field for field in unique_fields if field not in bronze_dataframe.columns]
+    if missing_columns:
+        return ValidationCheck.failed(
+            "output",
+            "bronze_key_uniqueness",
+            "Bronze uniqueness validation cannot run because fields are missing: "
+            + ", ".join(missing_columns),
+            details={"missing_fields": ",".join(missing_columns)},
+        )
+
+    duplicate_groups, sample_duplicates, keys_checked = _bronze_duplicate_key_groups(
+        bronze_dataframe, run_keys, unique_fields
+    )
+    if duplicate_groups:
+        return ValidationCheck.failed(
+            "output",
+            "bronze_key_uniqueness",
+            "Committed bronze holds duplicate rows for keys this run wrote.",
+            details={
+                "duplicate_groups": duplicate_groups,
+                "sample_duplicates": json.dumps(sample_duplicates, sort_keys=True),
+                "scan_scope": "run_keys",
+                "keys_checked": keys_checked,
+            },
+        )
+
+    return ValidationCheck.passed(
+        "output",
+        "bronze_key_uniqueness",
+        "Committed bronze holds one row per key among the keys this run wrote.",
+        details={
+            "keys_checked": keys_checked,
+            "scan_scope": "run_keys",
+        },
     )
 
 
@@ -514,6 +595,30 @@ def _duplicate_key_groups(
     duplicate_groups = duplicates.count()
     sample_duplicates = [row.asDict(recursive=True) for row in duplicates.limit(5).collect()]
     return duplicate_groups, sample_duplicates
+
+
+def _bronze_duplicate_key_groups(
+    bronze_dataframe: DataFrame,
+    run_keys: DataFrame,
+    fields: Sequence[str],
+) -> tuple[int, list[dict[str, Any]], int]:
+    """Find duplicate key groups in bronze, scoped to the keys this run wrote.
+
+    A ``left_semi`` join keeps only bronze rows whose key the run touched, so the
+    ``groupBy`` cost is bounded by the batch size rather than the whole table, and Iceberg
+    can prune on the join keys when they align with partitioning. Returns the duplicate
+    group count, up to five sample keys, and the number of distinct keys examined.
+    """
+    from pyspark.sql.functions import col
+
+    key_columns = list(fields)
+    scoped_keys = run_keys.select(*key_columns).distinct()
+    suspects = bronze_dataframe.join(scoped_keys, on=key_columns, how="left_semi")
+    duplicates = suspects.groupBy(*key_columns).count().where(col("count") > 1)
+    duplicate_groups = duplicates.count()
+    sample_duplicates = [row.asDict(recursive=True) for row in duplicates.limit(5).collect()]
+    keys_checked = scoped_keys.count()
+    return duplicate_groups, sample_duplicates, keys_checked
 
 
 def _duplicate_fields(fields: Sequence[str]) -> list[str]:

@@ -8,7 +8,7 @@ it must not import from either caller.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
@@ -53,7 +53,7 @@ class BronzeMaterializer:
         logger: StructuredLogger | None,
         *,
         bronze_target_identifier: str | None = None,
-    ) -> tuple[tuple[WriteResult, ...], Any | None]:
+    ) -> tuple[tuple[WriteResult, ...], Any | None, Any | None]:
         batches = _normalization_handoff_batches(planned_run, handoff)
         if len(batches) > 1:
             _log_info(
@@ -66,9 +66,13 @@ class BronzeMaterializer:
 
         # Resolve the write intent exactly once per run
         run_intent = resolve_bronze_write_intent(plan)
+        # Keys the run wrote, accumulated across every batch so the bronze uniqueness
+        # oracle covers rows from batches 1..n-1, not only the last one it validates.
+        unique_fields = plan.source_config.quality.unique_fields
         writer = self.writer_factory(storage_layout)
         bronze_results: list[WriteResult] = []
         normalized_dataframe = None
+        run_keys = None
         for batch_index, batch_artifacts in enumerate(batches, start=1):
             batch_handoff = replace(handoff, artifacts=batch_artifacts).with_metadata(
                 "normalization_artifact_count",
@@ -110,6 +114,8 @@ class BronzeMaterializer:
             normalized_dataframe = self.normalizer.normalize(raw_dataframe, plan)
             _log_info(logger, "normalization_finished", **batch_metadata)
 
+            run_keys = _accumulate_run_keys(run_keys, normalized_dataframe, unique_fields)
+
             batch_intent = run_intent.for_batch(batch_index)
             intent_fields = _intent_log_fields(batch_intent)
             started_fields: dict[str, Any] = {
@@ -147,7 +153,9 @@ class BronzeMaterializer:
                 batch_count=len(batches),
                 materialized_output_count=len(bronze_results),
             )
-        return tuple(bronze_results), normalized_dataframe
+        if run_keys is not None:
+            run_keys = run_keys.distinct()
+        return tuple(bronze_results), normalized_dataframe, run_keys
 
 
 def _normalization_handoff_batches(
@@ -163,6 +171,50 @@ def _normalization_handoff_batches(
 
     limit = _FILE_HANDOFF_ARTIFACTS_PER_BATCH
     return tuple(artifacts[index : index + limit] for index in range(0, len(artifacts), limit))
+
+
+def _accumulate_run_keys(
+    run_keys: Any | None,
+    normalized_dataframe: Any,
+    unique_fields: tuple[str, ...],
+) -> Any | None:
+    """Union this batch's distinct key frame into the run-level key set."""
+    
+    if not unique_fields:
+        return run_keys
+    columns = getattr(normalized_dataframe, "columns", ())
+    if any(field not in columns for field in unique_fields):
+        return run_keys
+    batch_keys = normalized_dataframe.select(*unique_fields).distinct()
+    if run_keys is None:
+        return batch_keys
+    return run_keys.unionByName(batch_keys)
+
+
+def read_committed_bronze(
+    spark: SparkSession,
+    bronze_results: Sequence[WriteResult],
+) -> Any | None:
+    """Return the committed bronze Iceberg table frame, or ``None`` when there is none.
+
+    Both entry points call this between materialization and quality validation, inside the
+    live session window, so ``spark`` is the already-open session and no new lifetime is
+    created. The identifier is the bronze write result's own ``path`` — the writer sets it
+    to the resolved table identifier — so there is one derivation, not a re-computation.
+    Path-based (non-iceberg) bronze and runs that wrote no bronze return ``None``, leaving
+    the bronze uniqueness oracle to skip.
+    """
+    bronze_result = next(
+        (
+            result
+            for result in bronze_results
+            if result.zone == "bronze" and result.format.strip().lower() == "iceberg"
+        ),
+        None,
+    )
+    if bronze_result is None:
+        return None
+    return spark.table(bronze_result.path)
 
 
 def _intent_log_fields(intent: BronzeWriteIntent) -> dict[str, Any]:

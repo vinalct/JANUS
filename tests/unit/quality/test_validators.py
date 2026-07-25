@@ -15,6 +15,7 @@ from janus.quality import (
     QualityValidationError,
     ValidationReportStore,
     load_expected_fields_from_schema_path,
+    validate_bronze_key_uniqueness,
 )
 from janus.registry import load_registry
 from janus.utils.storage import bronze_table_identifier
@@ -81,8 +82,11 @@ def test_quality_gate_persists_successful_validation_report(spark: SparkSession,
     )
 
     payload = json.loads(persisted.path.read_text(encoding="utf-8"))
-    assert payload["summary"] == {"failed": 0, "passed": 7, "skipped": 0}
+    # bronze_key_uniqueness skips here: no committed bronze frame is supplied to the gate.
+    assert payload["summary"] == {"failed": 0, "passed": 7, "skipped": 1}
     assert payload["checks"][4]["name"] == "schema_expectations"
+    assert payload["checks"][7]["name"] == "bronze_key_uniqueness"
+    assert payload["checks"][7]["outcome"] == "skipped"
 
 
 def test_quality_gate_raises_with_actionable_dataset_errors(spark: SparkSession, tmp_path):
@@ -233,6 +237,60 @@ def test_schema_field_loader_supports_spark_style_schema_json(tmp_path):
     )
 
     assert load_expected_fields_from_schema_path(schema_path) == ("id", "updated_at")
+
+
+def test_bronze_key_uniqueness_skips_without_unique_fields(tmp_path):
+    source_config = _base_source_config()
+    plan = _build_plan(
+        tmp_path,
+        run_id="run-bronze-uniqueness-001",
+        started_at=datetime(2026, 4, 9, 15, 0, tzinfo=UTC),
+        source_config=replace(
+            source_config,
+            quality=replace(source_config.quality, unique_fields=()),
+        ),
+    )
+
+    check = validate_bronze_key_uniqueness(plan, None, None)
+
+    assert check.phase == "output"
+    assert check.name == "bronze_key_uniqueness"
+    assert check.outcome == "skipped"
+    assert "unique_fields" in check.message
+
+
+def test_bronze_key_uniqueness_skips_without_a_bronze_frame(tmp_path):
+    # The base example source is incremental+append with a key, so its intent is an upsert;
+    # the skip here is only because no committed bronze frame was handed to the check.
+    plan = _build_plan(
+        tmp_path,
+        run_id="run-bronze-uniqueness-002",
+        started_at=datetime(2026, 4, 9, 15, 15, tzinfo=UTC),
+    )
+
+    check = validate_bronze_key_uniqueness(plan, None, None)
+
+    assert check.outcome == "skipped"
+    assert "committed bronze" in check.message
+
+
+def test_bronze_key_uniqueness_skips_for_a_non_upsert_run(tmp_path):
+    source_config = _base_source_config()
+    plan = _build_plan(
+        tmp_path,
+        run_id="run-bronze-uniqueness-003",
+        started_at=datetime(2026, 4, 9, 15, 30, tzinfo=UTC),
+        source_config=replace(
+            source_config,
+            extraction=replace(source_config.extraction, mode="full_refresh"),
+        ),
+    )
+
+    check = validate_bronze_key_uniqueness(plan, None, None)
+
+    assert check.outcome == "skipped"
+    assert "not an upsert" in check.message
+    assert check.details_as_dict()["write_strategy"] == "insert"
 
 
 def _base_source_config() -> SourceConfig:
