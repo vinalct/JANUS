@@ -402,7 +402,7 @@ def _reject_complex_merge_keys(frame: DataFrame, merge_keys: tuple[str, ...]) ->
     offending = [
         key
         for key in merge_keys
-        if isinstance(field_types.get(key), (ArrayType, MapType, StructType))
+        if isinstance(field_types.get(key), ArrayType | MapType | StructType)
     ]
     if offending:
         raise ValueError(
