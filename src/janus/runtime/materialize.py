@@ -8,11 +8,18 @@ it must not import from either caller.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
-from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, WriteResult
+from janus.models import (
+    BronzeWriteIntent,
+    ExecutionPlan,
+    ExtractedArtifact,
+    ExtractionResult,
+    WriteResult,
+    resolve_bronze_write_intent,
+)
 from janus.normalizers import BaseNormalizer
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport
@@ -46,7 +53,7 @@ class BronzeMaterializer:
         logger: StructuredLogger | None,
         *,
         bronze_target_identifier: str | None = None,
-    ) -> tuple[tuple[WriteResult, ...], Any | None]:
+    ) -> tuple[tuple[WriteResult, ...], Any | None, Any | None]:
         batches = _normalization_handoff_batches(planned_run, handoff)
         if len(batches) > 1:
             _log_info(
@@ -57,9 +64,15 @@ class BronzeMaterializer:
                 batch_artifact_limit=_FILE_HANDOFF_ARTIFACTS_PER_BATCH,
             )
 
+        # Resolve the write intent exactly once per run
+        run_intent = resolve_bronze_write_intent(plan)
+        # Keys the run wrote, accumulated across every batch so the bronze uniqueness
+        # oracle covers rows from batches 1..n-1, not only the last one it validates.
+        unique_fields = plan.source_config.quality.unique_fields
         writer = self.writer_factory(storage_layout)
         bronze_results: list[WriteResult] = []
         normalized_dataframe = None
+        run_keys = None
         for batch_index, batch_artifacts in enumerate(batches, start=1):
             batch_handoff = replace(handoff, artifacts=batch_artifacts).with_metadata(
                 "normalization_artifact_count",
@@ -101,10 +114,13 @@ class BronzeMaterializer:
             normalized_dataframe = self.normalizer.normalize(raw_dataframe, plan)
             _log_info(logger, "normalization_finished", **batch_metadata)
 
-            write_mode = _write_mode_for_batch(plan, batch_index)
+            run_keys = _accumulate_run_keys(run_keys, normalized_dataframe, unique_fields)
+
+            batch_intent = run_intent.for_batch(batch_index)
+            intent_fields = _intent_log_fields(batch_intent)
             started_fields: dict[str, Any] = {
                 "bronze_output_path": plan.bronze_output.path,
-                "write_mode": write_mode,
+                **intent_fields,
                 **batch_metadata,
             }
             if bronze_target_identifier is not None:
@@ -114,7 +130,7 @@ class BronzeMaterializer:
                 normalized_dataframe,
                 plan,
                 "bronze",
-                mode=write_mode,
+                intent=batch_intent,
                 count_records=_should_count_records_for_handoff(planned_run),
             )
             bronze_results.append(bronze_result)
@@ -126,6 +142,7 @@ class BronzeMaterializer:
                 mode=bronze_result.mode,
                 records_written=bronze_result.records_written,
                 partition_by=list(bronze_result.partition_by),
+                **intent_fields,
                 **batch_metadata,
             )
 
@@ -136,7 +153,9 @@ class BronzeMaterializer:
                 batch_count=len(batches),
                 materialized_output_count=len(bronze_results),
             )
-        return tuple(bronze_results), normalized_dataframe
+        if run_keys is not None:
+            run_keys = run_keys.distinct()
+        return tuple(bronze_results), normalized_dataframe, run_keys
 
 
 def _normalization_handoff_batches(
@@ -154,11 +173,60 @@ def _normalization_handoff_batches(
     return tuple(artifacts[index : index + limit] for index in range(0, len(artifacts), limit))
 
 
-def _write_mode_for_batch(plan: ExecutionPlan, batch_index: int) -> str:
-    write_mode = plan.source_config.spark.write_mode
-    if batch_index > 1 and write_mode == "overwrite":
-        return "append"
-    return write_mode
+def _accumulate_run_keys(
+    run_keys: Any | None,
+    normalized_dataframe: Any,
+    unique_fields: tuple[str, ...],
+) -> Any | None:
+    """Union this batch's distinct key frame into the run-level key set."""
+    
+    if not unique_fields:
+        return run_keys
+    columns = getattr(normalized_dataframe, "columns", ())
+    if any(field not in columns for field in unique_fields):
+        return run_keys
+    batch_keys = normalized_dataframe.select(*unique_fields).distinct()
+    if run_keys is None:
+        return batch_keys
+    return run_keys.unionByName(batch_keys)
+
+
+def read_committed_bronze(
+    spark: SparkSession,
+    bronze_results: Sequence[WriteResult],
+) -> Any | None:
+    """Return the committed bronze Iceberg table frame, or ``None`` when there is none.
+
+    Both entry points call this between materialization and quality validation, inside the
+    live session window, so ``spark`` is the already-open session and no new lifetime is
+    created. The identifier is the bronze write result's own ``path`` — the writer sets it
+    to the resolved table identifier — so there is one derivation, not a re-computation.
+    Path-based (non-iceberg) bronze and runs that wrote no bronze return ``None``, leaving
+    the bronze uniqueness oracle to skip.
+    """
+    bronze_result = next(
+        (
+            result
+            for result in bronze_results
+            if result.zone == "bronze" and result.format.strip().lower() == "iceberg"
+        ),
+        None,
+    )
+    if bronze_result is None:
+        return None
+    return spark.table(bronze_result.path)
+
+
+def _intent_log_fields(intent: BronzeWriteIntent) -> dict[str, Any]:
+    """Fields the two bronze write events carry so every run's log records the intent."""
+    fields: dict[str, Any] = {
+        "write_strategy": intent.strategy,
+        "write_mode": intent.reported_mode,
+        "write_intent_reason": intent.reason,
+    }
+    if intent.merge_keys:
+        fields["merge_keys"] = list(intent.merge_keys)
+    return fields
 
 
 def _should_count_records_for_handoff(planned_run: PlannedRun) -> bool:

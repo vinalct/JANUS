@@ -32,6 +32,7 @@ from janus.runtime.materialize import (
     _log_info,
     _quality_failure_message,
     _raw_write_results,
+    read_committed_bronze,
 )
 from janus.runtime.spark_lifecycle import SparkSessionProvider, scoped_request_input_session
 from janus.strategies.api import ApiRequest, build_paginator
@@ -223,13 +224,15 @@ class RawToBronzeLoader:
                 )
 
                 normalized_dataframe = None
+                bronze_dataframe = None
+                run_keys = None
                 if not handoff.is_empty:
                     materializer = BronzeMaterializer(
                         reader=self.reader,
                         normalizer=self.normalizer,
                         writer_factory=self.writer_factory,
                     )
-                    bronze_results, normalized_dataframe = materializer.materialize(
+                    bronze_results, normalized_dataframe, run_keys = materializer.materialize(
                         runtime_planned_run,
                         plan,
                         spark_provider.get(),
@@ -239,6 +242,12 @@ class RawToBronzeLoader:
                         bronze_target_identifier=_bronze_target_identifier(plan),
                     )
                     write_results = write_results + bronze_results
+                    # Symmetric with the executor: read the committed table for the bronze
+                    # uniqueness oracle while the replay's session is still live.
+                    bronze_dataframe = read_committed_bronze(
+                        spark_provider.get(),
+                        bronze_results,
+                    )
                 else:
                     _log_info(logger, "spark_session_skipped")
 
@@ -261,6 +270,8 @@ class RawToBronzeLoader:
                     plan,
                     dataframe=normalized_dataframe,
                     write_results=write_results,
+                    bronze_dataframe=bronze_dataframe,
+                    run_keys=run_keys,
                     raise_on_failure=False,
                 )
                 _log_info(
@@ -413,6 +424,7 @@ def _build_result(
 
 
 def _override_bronze_output(plan: ExecutionPlan, bronze_table: str) -> ExecutionPlan:
+    """Redirect the bronze target to ``bronze_table`` for a replay."""
     normalized_target = bronze_table.strip()
     if not normalized_target:
         raise ValueError("bronze_table must not be empty")

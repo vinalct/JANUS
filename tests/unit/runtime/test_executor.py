@@ -131,6 +131,19 @@ class FakeWriter:
         )
 
 
+class _StubTableSession:
+    """A session stand-in that can hand back a committed-bronze frame for the oracle.
+
+    Used where the fake writer reports an iceberg bronze result, so the executor's
+    post-materialization ``read_committed_bronze`` has a ``table`` to call. The frame is a
+    token — the fake quality gate never inspects it.
+    """
+
+    def table(self, identifier: str) -> Any:
+        del identifier
+        return object()
+
+
 @dataclass(slots=True)
 class RecordingWriter:
     calls: list[str]
@@ -567,7 +580,7 @@ def test_source_executor_batches_file_handoff_artifacts_and_appends_after_overwr
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
     ).execute(
         planned_run,
-        SparkSessionProvider.wrapping(object()),
+        SparkSessionProvider.wrapping(_StubTableSession()),
         environment_config={},
     )
 

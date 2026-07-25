@@ -341,6 +341,7 @@ def build_source_config(
     checkpoint_field: str | None = None,
     checkpoint_strategy: str = "none",
     lookback_days: int | None = None,
+    unique_fields: tuple[str, ...] | None = None,
     retry_max_attempts: int = 3,
     retry_backoff_seconds: int = 2,
     retry_backoff_strategy: str = "fixed",
@@ -348,6 +349,8 @@ def build_source_config(
     requests_per_minute: int | None = None,
 ) -> SourceConfig:
     shape = _FAMILY_CONFIG_SHAPE[family_name]
+    if unique_fields is None:
+        unique_fields = ("id",) if extraction_mode == "incremental" else ()
     if access_format is None:
         access_format = "csv" if family_name == "file" else "json"
 
@@ -416,7 +419,10 @@ def build_source_config(
                 "bronze": {"path": f"data/bronze/example/{source_id}", "format": "iceberg"},
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
-            "quality": {"allow_schema_evolution": True},
+            "quality": {
+                "allow_schema_evolution": True,
+                **({"unique_fields": list(unique_fields)} if unique_fields else {}),
+            },
         },
         tmp_path / "conf" / "sources" / f"{source_id}.yaml",
     )

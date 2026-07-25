@@ -184,4 +184,6 @@ sources:
         - mesExtrato
         - dataTransacao
         - valorTransacao
+      unique_fields:
+        - id
       allow_schema_evolution: true

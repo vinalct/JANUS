@@ -295,6 +295,8 @@ class SourceConfig:
         outputs = _build_outputs_config(data.get("outputs"), issues)
         quality = _build_quality_config(data.get("quality"), issues)
 
+        _validate_incremental_contract(extraction, quality, issues)
+
         if issues:
             raise SourceConfigValidationError(config_path, issues)
 
@@ -319,6 +321,26 @@ class SourceConfig:
             spark=spark,
             outputs=outputs,
             quality=quality,
+        )
+
+
+def _validate_incremental_contract(
+    extraction: ExtractionConfig,
+    quality: QualityConfig,
+    issues: list[ValidationIssue],
+) -> None:
+    """Require idempotency keys for incremental sources.
+
+    Incremental writes are upserted on ``quality.unique_fields``; without a key there is
+    no definable "same row", so the loader could only duplicate silently.
+    """
+    if extraction.mode == "incremental" and not quality.unique_fields:
+        issues.append(
+            ValidationIssue(
+                "quality.unique_fields",
+                "is required when extraction.mode is 'incremental' — incremental writes are "
+                "upserted on these keys and have no defined idempotency without them",
+            )
         )
 
 

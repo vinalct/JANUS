@@ -28,11 +28,18 @@ from janus.models.source_config import (
     SparkConfig,
     ValidationIssue,
 )
+from janus.models.write_intent import (
+    BRONZE_WRITE_STRATEGIES,
+    BronzeWriteIntent,
+    resolve_bronze_write_intent,
+)
 
 __all__ = [
+    "BRONZE_WRITE_STRATEGIES",
     "SUPPORTED_OUTPUT_ZONES",
     "AccessConfig",
     "AuthConfig",
+    "BronzeWriteIntent",
     "CombinedRequestInputsConfig",
     "DateWindowRequestInputsConfig",
     "ExecutionPlan",
@@ -56,4 +63,5 @@ __all__ = [
     "SparkConfig",
     "ValidationIssue",
     "WriteResult",
+    "resolve_bronze_write_intent",
 ]
