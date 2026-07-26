@@ -180,6 +180,8 @@ def build_concurrent_plan(
     request_inputs: dict[str, Any] | None = None,
     parameter_bindings: dict[str, Any] | None = None,
     dead_letter_max_items: int = 0,
+    past_end_status_codes: list[int] | None = None,
+    total_count_field: str | None = None,
 ) -> ExecutionPlan:
     """Build an execution plan for a concurrency-capable API source."""
     source_config = build_concurrent_source_config(
@@ -195,6 +197,8 @@ def build_concurrent_plan(
         request_inputs=request_inputs,
         parameter_bindings=parameter_bindings,
         dead_letter_max_items=dead_letter_max_items,
+        past_end_status_codes=past_end_status_codes,
+        total_count_field=total_count_field,
     )
     run_context = RunContext.create(
         run_id=f"run-{source_id}",
@@ -219,6 +223,8 @@ def build_concurrent_source_config(
     request_inputs: dict[str, Any] | None = None,
     parameter_bindings: dict[str, Any] | None = None,
     dead_letter_max_items: int = 0,
+    past_end_status_codes: list[int] | None = None,
+    total_count_field: str | None = None,
 ) -> SourceConfig:
     return SourceConfig.from_mapping(
         {
@@ -241,7 +247,12 @@ def build_concurrent_source_config(
                 "auth": {"type": "none"},
                 "request_inputs": request_inputs,
                 "parameter_bindings": parameter_bindings,
-                "pagination": _pagination_block(pagination_type, page_size),
+                "pagination": _pagination_block(
+                    pagination_type,
+                    page_size,
+                    past_end_status_codes=past_end_status_codes,
+                    total_count_field=total_count_field,
+                ),
                 "rate_limit": {
                     "requests_per_minute": requests_per_minute,
                     "concurrency": concurrency,
@@ -288,19 +299,35 @@ def build_storage_layout(tmp_path: Path) -> StorageLayout:
     )
 
 
-def _pagination_block(pagination_type: str, page_size: int) -> dict[str, Any]:
+def _pagination_block(
+    pagination_type: str,
+    page_size: int,
+    *,
+    past_end_status_codes: list[int] | None = None,
+    total_count_field: str | None = None,
+) -> dict[str, Any]:
+    """Build a pagination block; ``None`` keys are omitted so the contract default applies."""
     if pagination_type == "page_number":
-        return {
+        block: dict[str, Any] = {
             "type": "page_number",
             "page_param": "page",
             "size_param": "page_size",
             "page_size": page_size,
         }
-    if pagination_type == "offset":
-        return {
+    elif pagination_type == "offset":
+        block = {
             "type": "offset",
             "offset_param": "offset",
             "limit_param": "limit",
             "page_size": page_size,
         }
-    raise AssertionError(f"Unsupported pagination type for concurrency tests: {pagination_type}")
+    else:
+        raise AssertionError(
+            f"Unsupported pagination type for concurrency tests: {pagination_type}"
+        )
+
+    if past_end_status_codes is not None:
+        block["past_end_status_codes"] = list(past_end_status_codes)
+    if total_count_field is not None:
+        block["total_count_field"] = total_count_field
+    return block
