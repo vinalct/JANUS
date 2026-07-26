@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from conftest import (
@@ -17,13 +21,63 @@ from conftest import (
 
 from janus.strategies.api.core import (
     CONCURRENCY_ONLY_METADATA_KEYS,
+    ApiHook,
     ApiPastEndConflictError,
     ApiResponseError,
 )
+from janus.utils.logging import StructuredLogger
 
 RECORDS_PAGE_1 = ({"id": "1"}, {"id": "2"})
 RECORDS_PAGE_2 = ({"id": "3"}, {"id": "4"})
 RECORDS_PAGE_3 = ({"id": "5"}, {"id": "6"})
+
+
+def full_pages(
+    count: int,
+    *,
+    extra_payload: Mapping[int, Mapping[str, Any]] | Mapping[str, Any] | None = None,
+    latency_seconds: float = 0.0,
+) -> dict[int, PageScript]:
+    """Script ``count`` full pages of two records each, keyed by page number."""
+    scripts: dict[int, PageScript] = {}
+    for page in range(1, count + 1):
+        if extra_payload is None:
+            page_extra: Mapping[str, Any] = {}
+        elif all(isinstance(key, int) for key in extra_payload):
+            page_extra = extra_payload.get(page, {})
+        else:
+            page_extra = extra_payload 
+        scripts[page] = PageScript(
+            records=({"id": str(page * 2 - 1)}, {"id": str(page * 2)}),
+            extra_payload=page_extra,
+            latency_seconds=latency_seconds,
+        )
+    return scripts
+
+
+def requested_keys_for_scope(
+    transport: ScriptedPageTransport,
+    scope_param: str,
+    scope_value: str,
+) -> list[int]:
+    """Return the pagination keys requested under one request input."""
+    keys = []
+    for request in transport.requests:
+        query = parse_qs(urlsplit(request.full_url()).query)
+        if query.get(scope_param) == [scope_value]:
+            keys.append(int(query["page"][0]))
+    return keys
+
+
+class TotalRecordsHook(ApiHook):
+    """Source-local escape hatch: the API reports its size somewhere generic discovery misses."""
+
+    def __init__(self, total_records: Any) -> None:
+        self._total_records = total_records
+
+    def resolve_total_records(self, plan, request, response, payload) -> Any:
+        del plan, request, response, payload
+        return self._total_records
 
 
 def test_empty_two_hundred_past_end_completes(tmp_path):
@@ -490,7 +544,8 @@ def test_past_end_metadata_is_reported(tmp_path):
     assert metadata["past_end_terminated_count"] == "1"
     assert metadata["past_end_status"] == "404"
     assert metadata["pagination_concurrency"] == "3"
-    assert set(metadata) >= CONCURRENCY_ONLY_METADATA_KEYS
+    assert metadata["lookahead_ceiling_source"] == "none"
+    assert set(metadata) >= CONCURRENCY_ONLY_METADATA_KEYS - {"total_records_reported"}
 
 
 def test_empty_past_end_set_restores_raising(tmp_path):
@@ -520,3 +575,321 @@ def test_empty_past_end_set_restores_raising(tmp_path):
         "entries"
     ][0]
     assert entry["error_type"] == "ApiResponseError"
+
+
+# ---------------------------------------------------------------------------
+# Bounded over-fetch: the total-count ceiling (AC-3)
+#
+# Six full pages of two records, page 7 past the end, concurrency 3. The reported total of 12
+# puts the last useful request index at 6, so the tail is capped: the loop stops guessing at 6
+# and only ever issues page 7 because page 6 came back full — the one confirming request that
+# keeps a stale total from truncating the run. Uncapped, the same script speculates through
+# pages 8 and 9 before the past-end read lands.
+# ---------------------------------------------------------------------------
+
+CAPPED_PAGE_COUNT = 6
+CAPPED_TOTAL_RECORDS = 12
+CAPPED_REQUEST_KEYS = [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_resolve_total_records_defaults_to_none(tmp_path):
+    """The hook point is an escape hatch: unopted sources keep generic payload discovery."""
+    plan = build_concurrent_plan(tmp_path, source_id="hook_default_source")
+
+    assert ApiHook().resolve_total_records(plan, None, None, {"total": 12}) is None
+
+
+def test_total_count_caps_lookahead_to_the_last_page_plus_one(tmp_path):
+    """A payload total bounds speculation: nothing beyond the confirming page is requested."""
+    plan = build_concurrent_plan(
+        tmp_path,
+        source_id="total_count_cap_source",
+        page_size=2,
+        concurrency=3,
+    )
+    transport = ScriptedPageTransport(
+        full_pages(
+            CAPPED_PAGE_COUNT,
+            extra_payload={"total": CAPPED_TOTAL_RECORDS},
+            latency_seconds=0.05,
+        ),
+        default_script=PageScript(status_code=404),
+    )
+    strategy = build_concurrent_strategy(tmp_path, transport)
+
+    result = strategy.extract(plan)
+    metadata = result.metadata_as_dict()
+
+    assert sorted(transport.requested_keys) == CAPPED_REQUEST_KEYS
+    assert len(result.artifacts) == CAPPED_PAGE_COUNT
+    assert result.records_extracted == CAPPED_TOTAL_RECORDS
+    assert metadata["dead_letter_count"] == "0"
+    assert metadata["lookahead_ceiling_source"] == "payload"
+    assert metadata["total_records_reported"] == str(CAPPED_TOTAL_RECORDS)
+    # The cap must not disable concurrency for the pages that are known to exist.
+    assert transport.max_active_requests >= 2
+
+
+def test_total_count_from_nested_meta_is_used(tmp_path):
+    """Generic discovery reaches into meta/metadata/pagination containers."""
+    plan = build_concurrent_plan(
+        tmp_path,
+        source_id="nested_total_count_source",
+        page_size=2,
+        concurrency=3,
+    )
+    transport = ScriptedPageTransport(
+        full_pages(
+            CAPPED_PAGE_COUNT,
+            extra_payload={"meta": {"total": CAPPED_TOTAL_RECORDS}},
+        ),
+        default_script=PageScript(status_code=404),
+    )
+    strategy = build_concurrent_strategy(tmp_path, transport)
+
+    result = strategy.extract(plan)
+
+    assert sorted(transport.requested_keys) == CAPPED_REQUEST_KEYS
+    assert len(result.artifacts) == CAPPED_PAGE_COUNT
+
+
+def test_explicit_total_count_field_wins(tmp_path):
+    """The configured dotted path beats a misleading root hint key."""
+    plan = build_concurrent_plan(
+        tmp_path,
+        source_id="explicit_total_field_source",
+        page_size=2,
+        concurrency=3,
+        total_count_field="meta.total",
+    )
+    transport = ScriptedPageTransport(
+        full_pages(
+            CAPPED_PAGE_COUNT,
+            extra_payload={"total": 999, "meta": {"total": CAPPED_TOTAL_RECORDS}},
+        ),
+        default_script=PageScript(status_code=404),
+    )
+    strategy = build_concurrent_strategy(tmp_path, transport)
+
+    result = strategy.extract(plan)
+
+    assert sorted(transport.requested_keys) == CAPPED_REQUEST_KEYS
+    assert result.records_extracted == CAPPED_TOTAL_RECORDS
+
+
+def test_hook_total_records_overrides_payload(tmp_path):
+    """The source-local hook outranks generic discovery."""
+    plan = build_concurrent_plan(
+        tmp_path,
+        source_id="hook_total_records_source",
+        page_size=2,
+        concurrency=3,
+    )
+    transport = ScriptedPageTransport(
+        full_pages(CAPPED_PAGE_COUNT, extra_payload={"total": 999}),
+        default_script=PageScript(status_code=404),
+    )
+    strategy = build_concurrent_strategy(tmp_path, transport)
+
+    result = strategy.extract(plan, TotalRecordsHook(CAPPED_TOTAL_RECORDS))
+    metadata = result.metadata_as_dict()
+
+    assert sorted(transport.requested_keys) == CAPPED_REQUEST_KEYS
+    assert metadata["lookahead_ceiling_source"] == "hook"
+    assert metadata["total_records_reported"] == str(CAPPED_TOTAL_RECORDS)
+
+
+def test_invalid_hook_total_falls_back_to_payload(tmp_path, caplog):
+    """A hook must not be able to cap a run by returning nonsense."""
+    caplog.set_level(logging.WARNING, logger="janus.test.total_records")
+    plan = build_concurrent_plan(
+        tmp_path,
+        source_id="invalid_hook_total_source",
+        page_size=2,
+        concurrency=3,
+    )
+    transport = ScriptedPageTransport(
+        full_pages(CAPPED_PAGE_COUNT, extra_payload={"total": CAPPED_TOTAL_RECORDS}),
+        default_script=PageScript(status_code=404),
+    )
+    strategy = build_concurrent_strategy(
+        tmp_path,
+        transport,
+        logger=StructuredLogger(logger=logging.getLogger("janus.test.total_records")),
+    )
+
+    result = strategy.extract(plan, TotalRecordsHook(-3))
+    metadata = result.metadata_as_dict()
+
+    assert "api_total_records_invalid" in caplog.text
+    assert sorted(transport.requested_keys) == CAPPED_REQUEST_KEYS
+    assert metadata["lookahead_ceiling_source"] == "payload"
+    assert metadata["total_records_reported"] == str(CAPPED_TOTAL_RECORDS)
+
+
+def test_shrinking_total_does_not_truncate(tmp_path):
+    """A total that collapses mid-stream costs nothing: the ceiling only ever rises."""
+    plan = build_concurrent_plan(
+        tmp_path,
+        source_id="shrinking_total_source",
+        page_size=2,
+        concurrency=3,
+    )
+    transport = ScriptedPageTransport(
+        full_pages(
+            CAPPED_PAGE_COUNT,
+            extra_payload={page: {"total": 1000 if page == 1 else 2} for page in range(1, 7)},
+            latency_seconds=0.05,
+        ),
+        default_script=PageScript(status_code=404, latency_seconds=0.05),
+    )
+    strategy = build_concurrent_strategy(tmp_path, transport)
+
+    result = strategy.extract(plan)
+
+    assert len(result.artifacts) == CAPPED_PAGE_COUNT
+    assert result.records_extracted == CAPPED_TOTAL_RECORDS
+    assert transport.max_active_requests >= 2
+
+
+def test_growing_total_extends_the_ceiling(tmp_path):
+    """A total that grows mid-stream raises the cap instead of stranding the extra pages."""
+    plan = build_concurrent_plan(
+        tmp_path,
+        source_id="growing_total_source",
+        page_size=2,
+        concurrency=2,
+    )
+    transport = ScriptedPageTransport(
+        full_pages(
+            CAPPED_PAGE_COUNT,
+            extra_payload={page: {"total": 6 if page < 3 else 12} for page in range(1, 7)},
+        ),
+        default_script=PageScript(status_code=404),
+    )
+    strategy = build_concurrent_strategy(tmp_path, transport)
+
+    result = strategy.extract(plan)
+
+    assert len(result.artifacts) == CAPPED_PAGE_COUNT
+    assert result.records_extracted == CAPPED_TOTAL_RECORDS
+    assert sorted(transport.requested_keys) == CAPPED_REQUEST_KEYS
+
+
+def test_lookahead_above_ceiling_degrades_to_sequential_not_stop(tmp_path):
+    """A lying total costs parallelism at the tail — never completeness."""
+    plan = build_concurrent_plan(
+        tmp_path,
+        source_id="lying_total_source",
+        page_size=2,
+        concurrency=4,
+    )
+    transport = ScriptedPageTransport(
+        # "There are 4 records" — but six full pages keep coming.
+        full_pages(CAPPED_PAGE_COUNT, extra_payload={"total": 4}),
+        default_script=PageScript(status_code=404),
+    )
+    strategy = build_concurrent_strategy(tmp_path, transport)
+
+    result = strategy.extract(plan)
+
+    assert len(result.artifacts) == CAPPED_PAGE_COUNT
+    assert result.records_extracted == CAPPED_TOTAL_RECORDS
+    # Every page above the ceiling is still fetched, one at a time, exactly once.
+    for key in (5, 6, 7):
+        assert transport.requested_keys.count(key) == 1
+
+
+def test_overfetch_bounded_without_total_count(tmp_path):
+    """No total means the structural bound: the in-flight window, and nothing beyond it."""
+    plan = build_concurrent_plan(
+        tmp_path,
+        source_id="no_total_count_source",
+        page_size=2,
+        concurrency=4,
+    )
+    transport = ScriptedPageTransport(
+        {
+            1: PageScript(records=RECORDS_PAGE_1),
+            2: PageScript(records=RECORDS_PAGE_2),
+            3: PageScript(records=RECORDS_PAGE_3),
+        },
+        default_script=PageScript(status_code=200, records=()),
+    )
+    strategy = build_concurrent_strategy(tmp_path, transport)
+
+    result = strategy.extract(plan)
+
+    end_of_stream_key = 4
+    assert len(result.artifacts) == end_of_stream_key
+    assert max(transport.requested_keys) <= end_of_stream_key + 4 - 1
+    assert len(set(transport.requested_keys)) == len(transport.requested_keys)
+
+
+def test_past_end_page_is_requested_at_most_once(tmp_path):
+    """Even uncapped, the page that proves the end is never retried or re-submitted."""
+    plan = build_concurrent_plan(
+        tmp_path,
+        source_id="past_end_once_source",
+        page_size=2,
+        concurrency=4,
+    )
+    transport = ScriptedPageTransport(
+        {
+            1: PageScript(records=RECORDS_PAGE_1),
+            2: PageScript(records=RECORDS_PAGE_2),
+            3: PageScript(records=RECORDS_PAGE_3),
+        },
+        default_script=PageScript(status_code=404),
+    )
+    strategy = build_concurrent_strategy(tmp_path, transport)
+
+    result = strategy.extract(plan)
+
+    assert transport.requested_keys.count(4) == 1
+    assert result.metadata_as_dict()["past_end_status"] == "404"
+
+
+def test_ceiling_is_per_request_input(tmp_path):
+    """Each request input caps on its own total; nothing leaks across inputs."""
+    plan = build_concurrent_plan(
+        tmp_path,
+        source_id="per_input_ceiling_source",
+        page_size=2,
+        concurrency=3,
+        request_inputs={
+            "type": "date_window",
+            "start": date(2025, 1, 1),
+            "end": date(2025, 2, 28),
+            "step": "month",
+        },
+        parameter_bindings={"mesAno": {"from": "request_input.window_end", "format": "%Y%m"}},
+    )
+    transport = ScriptedPageTransport(
+        {},
+        default_script=PageScript(status_code=404),
+        scope_param="mesAno",
+        scoped_scripts={
+            # January claims a thousand records and stops after two pages: an uncapped tail.
+            "202501": full_pages(2, extra_payload={"total": 1000}),
+            # February tells the truth, so its tail is capped at page 3 + the confirming 404.
+            "202502": full_pages(3, extra_payload={"total": 6}),
+        },
+    )
+    strategy = build_concurrent_strategy(tmp_path, transport)
+
+    result = strategy.extract(plan)
+    metadata = result.metadata_as_dict()
+
+    assert [Path(artifact.path).parent.name for artifact in result.artifacts] == [
+        "request-input-000001",
+        "request-input-000001",
+        "request-input-000002",
+        "request-input-000002",
+        "request-input-000002",
+    ]
+    assert result.records_extracted == 10
+    assert metadata["dead_letter_count"] == "0"
+    assert metadata["past_end_terminated_count"] == "2"
+    # February's own total bounds February, even though January ran with a ceiling of 500.
+    assert sorted(requested_keys_for_scope(transport, "mesAno", "202502")) == [1, 2, 3, 4]

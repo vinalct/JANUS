@@ -290,13 +290,15 @@ This step deliberately adds API-specific hook points without turning the strateg
 - payload transformation;
 - record extraction;
 - next-cursor resolution;
+- total-record resolution, which caps concurrent look-ahead exactly instead of speculating;
 - checkpoint query parameter generation.
 
 That is enough to support sources that mostly follow the shared strategy but still have one awkward detail, such as:
 
 - a custom nested payload path;
 - a non-standard incremental request parameter;
-- a cursor hidden in a special metadata block.
+- a cursor hidden in a special metadata block;
+- a record total published under a name the generic discovery does not recognise.
 
 The strategy still controls the main execution loop. The hook only adjusts the edges that are genuinely source-specific.
 
