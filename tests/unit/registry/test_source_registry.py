@@ -407,6 +407,63 @@ def test_registry_rejects_duplicate_static_and_bound_request_params(tmp_path):
     )
 
 
+def test_registry_parses_past_end_status_codes_and_total_count_field(tmp_path):
+    """The declared end-of-stream contract survives the real YAML entry point.
+
+    Concurrent pagination reads these two keys off the loaded config, so a source that
+    declares them must get the normalized (sorted, de-duplicated) tuple back — and a
+    source that omits them must get the default set, not an empty one.
+    """
+    declared_yaml = _valid_source_yaml("past_end_source", enabled=True).replace(
+        "    page_size: 100\n",
+        "    page_size: 100\n"
+        "    past_end_status_codes: [416, 404, 404]\n"
+        "    total_count_field: meta.total\n",
+        1,
+    )
+    project_root = _create_project(
+        tmp_path,
+        {
+            "past_end.yaml": declared_yaml,
+            "default_past_end.yaml": _valid_source_yaml("default_past_end_source", enabled=True),
+        },
+    )
+
+    registry = load_registry(project_root)
+
+    declared = registry.get_source("past_end_source")
+    assert declared.access.pagination.past_end_status_codes == (404, 416)
+    assert declared.access.pagination.total_count_field == "meta.total"
+
+    defaulted = registry.get_source("default_past_end_source")
+    assert defaulted.access.pagination.past_end_status_codes == (404, 416)
+    assert defaulted.access.pagination.total_count_field is None
+
+
+def test_registry_rejects_concurrency_above_one_without_speculative_pagination(tmp_path):
+    source_yaml = (
+        _valid_source_yaml("cursor_concurrency_source", enabled=True)
+        .replace("strategy_variant: page_number_api", "strategy_variant: cursor_api", 1)
+        .replace(
+            "    type: page_number\n"
+            "    page_param: page\n"
+            "    size_param: page_size\n"
+            "    page_size: 100\n",
+            "    type: cursor\n    cursor_param: next\n",
+            1,
+        )
+        .replace("    concurrency: 1\n", "    concurrency: 8\n", 1)
+    )
+    project_root = _create_project(tmp_path, {"cursor_concurrency.yaml": source_yaml})
+
+    with pytest.raises(SourceConfigValidationError) as exc_info:
+        load_registry(project_root)
+
+    message = str(exc_info.value)
+    assert "access.rate_limit.concurrency: must be 1 unless access.pagination.type is" in message
+    assert "'cursor' pagination" in message
+
+
 def _create_project(tmp_path: Path, sources: dict[str, str]) -> Path:
     conf_dir = tmp_path / "conf"
     sources_dir = conf_dir / "sources"
