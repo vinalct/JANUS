@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from janus.checkpoints import ExtractionProgressStore
 from janus.models import ExecutionPlan, RunContext, SourceConfig
 from janus.strategies.api import ApiStrategy
 from janus.strategies.http.transport import ApiRequest, ApiResponse
@@ -129,6 +130,22 @@ class ScriptedPageTransport:
         return self._scripts.get(key, self._default_script)
 
 
+class RecordingProgressStore(ExtractionProgressStore):
+    """Progress store that remembers every saved position.
+
+    ``extract()`` calls ``clear()`` on success, so the on-disk file is gone by the time a test
+    could read it. The spy keeps the saved rows, which is what the resume path would replay.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.saved_request_indexes: list[int] = []
+
+    def save(self, plan: ExecutionPlan, **kwargs: Any) -> Path:
+        self.saved_request_indexes.append(int(kwargs.get("request_index", 0)))
+        return super().save(plan, **kwargs)
+
+
 def build_transport_factory(
     transport: ScriptedPageTransport,
 ) -> Callable[[], ScriptedPageTransport]:
@@ -151,6 +168,7 @@ def build_concurrent_strategy(
     *,
     sleeper: Callable[[float], None] | None = None,
     logger: StructuredLogger | None = None,
+    progress_store: ExtractionProgressStore | None = None,
 ) -> ApiStrategy:
     """Build an ``ApiStrategy`` wired to ``transport`` with a real (unfrozen) clock.
 
@@ -163,6 +181,7 @@ def build_concurrent_strategy(
         storage_layout_factory=lambda plan: build_storage_layout(tmp_path),
         sleeper=sleeper or (lambda seconds: None),
         logger=logger,
+        **({"progress_store": progress_store} if progress_store is not None else {}),
     )
 
 
@@ -182,6 +201,7 @@ def build_concurrent_plan(
     dead_letter_max_items: int = 0,
     past_end_status_codes: list[int] | None = None,
     total_count_field: str | None = None,
+    checkpoint_field: str | None = None,
 ) -> ExecutionPlan:
     """Build an execution plan for a concurrency-capable API source."""
     source_config = build_concurrent_source_config(
@@ -199,6 +219,7 @@ def build_concurrent_plan(
         dead_letter_max_items=dead_letter_max_items,
         past_end_status_codes=past_end_status_codes,
         total_count_field=total_count_field,
+        checkpoint_field=checkpoint_field,
     )
     run_context = RunContext.create(
         run_id=f"run-{source_id}",
@@ -225,7 +246,26 @@ def build_concurrent_source_config(
     dead_letter_max_items: int = 0,
     past_end_status_codes: list[int] | None = None,
     total_count_field: str | None = None,
+    checkpoint_field: str | None = None,
 ) -> SourceConfig:
+    """Build a concurrency-capable API source config."""
+    extraction: dict[str, Any] = {
+        "mode": "full_refresh",
+        "checkpoint_strategy": "none",
+        "dead_letter_max_items": dead_letter_max_items,
+        "retry": {
+            "max_attempts": retry_max_attempts,
+            "backoff_strategy": "fixed",
+            "backoff_seconds": retry_backoff_seconds,
+        },
+    }
+    quality: dict[str, Any] = {"allow_schema_evolution": True}
+    if checkpoint_field is not None:
+        extraction["mode"] = "incremental"
+        extraction["checkpoint_field"] = checkpoint_field
+        extraction["checkpoint_strategy"] = "max_value"
+        quality["unique_fields"] = ["id"]
+
     return SourceConfig.from_mapping(
         {
             "source_id": source_id,
@@ -259,16 +299,7 @@ def build_concurrent_source_config(
                     "backoff_seconds": None,
                 },
             },
-            "extraction": {
-                "mode": "full_refresh",
-                "checkpoint_strategy": "none",
-                "dead_letter_max_items": dead_letter_max_items,
-                "retry": {
-                    "max_attempts": retry_max_attempts,
-                    "backoff_strategy": "fixed",
-                    "backoff_seconds": retry_backoff_seconds,
-                },
-            },
+            "extraction": extraction,
             "schema": {"mode": "infer"},
             "spark": {
                 "input_format": "json",
@@ -279,7 +310,7 @@ def build_concurrent_source_config(
                 "bronze": {"path": f"data/bronze/example/{source_id}", "format": "iceberg"},
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
-            "quality": {"allow_schema_evolution": True},
+            "quality": quality,
         },
         tmp_path / "conf" / "sources" / f"{source_id}.yaml",
     )
