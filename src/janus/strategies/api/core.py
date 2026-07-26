@@ -945,9 +945,18 @@ class ApiStrategy(BaseStrategy):
         request: ApiRequest,
         throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
+        *,
+        terminal_status_codes: frozenset[int] = frozenset(),
     ) -> tuple[ApiResponse, Any, int]:
         with ApiClient(self.transport_factory()) as client:
-            return self._send_request(plan, client, request, throttle, logger)
+            return self._send_request(
+                plan,
+                client,
+                request,
+                throttle,
+                logger,
+                terminal_status_codes=terminal_status_codes,
+            )
 
     def _send_request(
         self,
@@ -956,7 +965,14 @@ class ApiStrategy(BaseStrategy):
         request: ApiRequest,
         throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
+        *,
+        terminal_status_codes: frozenset[int] = frozenset(),
     ) -> tuple[ApiResponse, Any, int]:
+        """Send one request; ``terminal_status_codes`` returns instead of raising.
+
+        A terminal response carries a ``None`` payload — callers passing a non-empty
+        set must check ``response.status_code`` before consuming it.
+        """
         return send_with_retries(
             plan,
             client,
@@ -967,6 +983,7 @@ class ApiStrategy(BaseStrategy):
             sleeper=self.sleeper,
             decode=lambda response: self._decode_payload(plan, response),
             payload_error_types=(ApiPayloadError,),
+            terminal_status_codes=terminal_status_codes,
         )
 
     def _process_response(
