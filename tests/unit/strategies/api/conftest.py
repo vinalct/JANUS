@@ -202,8 +202,15 @@ def build_concurrent_plan(
     past_end_status_codes: list[int] | None = None,
     total_count_field: str | None = None,
     checkpoint_field: str | None = None,
+    run_id: str | None = None,
+    attributes: Mapping[str, str] | None = None,
 ) -> ExecutionPlan:
-    """Build an execution plan for a concurrency-capable API source."""
+    """Build an execution plan for a concurrency-capable API source.
+
+    ``run_id`` and ``attributes`` exist for suites that run the *same* source twice — the
+    equivalence harness needs a distinct run per leg, and ``attributes={"resume": "true"}``
+    is the only way to reach the resume branch of ``extract()``.
+    """
     source_config = build_concurrent_source_config(
         tmp_path,
         source_id=source_id,
@@ -222,10 +229,11 @@ def build_concurrent_plan(
         checkpoint_field=checkpoint_field,
     )
     run_context = RunContext.create(
-        run_id=f"run-{source_id}",
+        run_id=run_id or f"run-{source_id}",
         environment="local",
         project_root=tmp_path,
         started_at=datetime(2026, 4, 10, 12, 0, tzinfo=UTC),
+        attributes=attributes,
     )
     return ExecutionPlan.from_source_config(source_config, run_context)
 
