@@ -14,6 +14,11 @@ from janus.strategies.api.pagination import (
     build_paginator,
     default_cursor_from_payload,
 )
+from janus.strategies.api.speculation import (
+    SpeculativePaginationPolicy,
+    resolve_speculative_policy,
+    total_records_from_payload,
+)
 from janus.strategies.http import (
     ApiClient,
     ApiRequest,
@@ -42,8 +47,11 @@ __all__ = [
     "OffsetPaginator",
     "PageNumberPaginator",
     "PaginationState",
+    "SpeculativePaginationPolicy",
     "UrllibApiTransport",
     "build_paginator",
     "default_cursor_from_payload",
     "inject_auth",
+    "resolve_speculative_policy",
+    "total_records_from_payload",
 ]

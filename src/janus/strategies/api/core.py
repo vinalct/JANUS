@@ -73,6 +73,11 @@ from .request_inputs import (
     merge_request_params,
     resolve_parameter_bindings,
 )
+from .speculation import (
+    SpeculativePaginationPolicy,
+    resolve_speculative_policy,
+    total_records_from_payload,
+)
 
 SUPPORTED_API_PAYLOAD_FORMATS = frozenset({"binary", "json", "jsonl", "text"})
 RAW_FILE_SUFFIXES = {
@@ -82,6 +87,17 @@ RAW_FILE_SUFFIXES = {
     "text": ".txt",
 }
 DEFAULT_RECORD_KEYS = ("records", "items", "results", "data", "value")
+
+CONCURRENCY_ONLY_METADATA_KEYS = frozenset(
+    {
+        "speculative_request_count",
+        "speculative_discarded_count",
+        "past_end_terminated_count",
+        "past_end_status",
+        "lookahead_ceiling_source",
+        "total_records_reported",
+    }
+)
 
 
 class ApiStrategyError(HttpStrategyError):
@@ -96,6 +112,20 @@ class ApiResponseError(ApiStrategyError):
         message = (
             f"API request failed with status {response.status_code} for "
             f"{redact_url(response.request.full_url())}"
+        )
+        super().__init__(message)
+
+
+class ApiPastEndConflictError(ApiStrategyError):
+    """Raised when a past-end status is contradicted by a later page that returned records."""
+
+    def __init__(self, response: ApiResponse, *, conflicting_request_index: int) -> None:
+        self.response = response
+        self.conflicting_request_index = conflicting_request_index
+        message = (
+            f"API returned past-end status {response.status_code} for "
+            f"{redact_url(response.request.full_url())}, but request index "
+            f"{conflicting_request_index} returned records"
         )
         super().__init__(message)
 
@@ -175,6 +205,25 @@ class ApiHook(SourceHook):
         del payload
         return None
 
+    def resolve_total_records(
+        self,
+        plan: ExecutionPlan,
+        request: ApiRequest,
+        response: ApiResponse,
+        payload: Any,
+    ) -> int | None:
+        """Return the total record count for this request input, when the API exposes one.
+
+        Overriding this caps concurrent look-ahead exactly, removing all speculative
+        over-fetch. Returning ``None`` (the default) falls back to the generic payload
+        discovery in ``speculation.py``.
+        """
+        del plan
+        del request
+        del response
+        del payload
+        return None
+
     def checkpoint_params(
         self,
         plan: ExecutionPlan,
@@ -198,6 +247,30 @@ class ProcessedApiRequest:
     records_extracted: int
     checkpoint_value: str | None
     next_pagination_state: PaginationState | None
+    total_records_reported: int | None = None
+    total_records_source: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RequestInputExtraction:
+    """Everything one request input contributed to the run.
+
+    The trailing fields describe *speculation*, so they stay at their defaults for the
+    sequential path — which never guesses, never over-fetches, and never infers the end of a
+    stream from a status code.
+    """
+
+    artifacts: list[ExtractedArtifact]
+    records_extracted: int
+    successful_requests: int
+    total_attempts: int
+    checkpoint_value: str | None
+    speculative_requests: int = 0
+    discarded_requests: int = 0
+    past_end_status: int | None = None
+    past_end_request_index: int | None = None
+    total_records_reported: int | None = None
+    lookahead_ceiling_source: str | None = None
 
 
 @dataclass(slots=True)
@@ -330,6 +403,13 @@ class ApiStrategy(BaseStrategy):
         successful_requests = 0
         total_attempts = 0
         checkpoint_value: str | None = None
+        concurrent_pagination_used = False
+        speculative_requests = 0
+        discarded_requests = 0
+        past_end_terminated_count = 0
+        past_end_status: int | None = None
+        total_records_reported: int | None = None
+        lookahead_ceiling_source: str | None = None
 
         completed_by_key: dict[str, int] = {}
         if progress is not None:
@@ -455,13 +535,8 @@ class ApiStrategy(BaseStrategy):
                     paginator,
                     plan.source_config.access.rate_limit.concurrency,
                 ):
-                    (
-                        request_input_artifacts,
-                        request_input_total_records,
-                        request_input_successful_requests,
-                        request_input_total_attempts,
-                        request_input_checkpoint_value,
-                    ) = self._extract_concurrent_pages(
+                    concurrent_pagination_used = True
+                    extracted = self._extract_concurrent_pages(
                         plan,
                         api_hook=api_hook,
                         base_request=request_input_base_request,
@@ -482,13 +557,7 @@ class ApiStrategy(BaseStrategy):
                         raw_path_prefix=raw_path_prefix,
                     )
                 else:
-                    (
-                        request_input_artifacts,
-                        request_input_total_records,
-                        request_input_successful_requests,
-                        request_input_total_attempts,
-                        request_input_checkpoint_value,
-                    ) = self._extract_sequential_pages(
+                    extracted = self._extract_sequential_pages(
                         plan,
                         api_hook=api_hook,
                         base_request=request_input_base_request,
@@ -541,25 +610,35 @@ class ApiStrategy(BaseStrategy):
                 dead_letter_skip_count += 1
                 continue
 
-            artifacts.extend(request_input_artifacts)
-            total_records += request_input_total_records
-            successful_requests += request_input_successful_requests
-            total_attempts += request_input_total_attempts
-            checkpoint_value = request_input_checkpoint_value
+            artifacts.extend(extracted.artifacts)
+            total_records += extracted.records_extracted
+            successful_requests += extracted.successful_requests
+            total_attempts += extracted.total_attempts
+            checkpoint_value = extracted.checkpoint_value
+            speculative_requests += extracted.speculative_requests
+            discarded_requests += extracted.discarded_requests
+            if extracted.past_end_status is not None:
+                past_end_terminated_count += 1
+                past_end_status = extracted.past_end_status
+            if extracted.total_records_reported is not None:
+                total_records_reported = extracted.total_records_reported
+                lookahead_ceiling_source = extracted.lookahead_ceiling_source
             completed_inputs.append((request_input_key, file_index))
 
             if request_input_logger is not None:
                 request_input_logger.info(
                     "api_request_input_finished",
-                    request_count=request_input_successful_requests,
+                    request_count=extracted.successful_requests,
                     retry_count=max(
-                        request_input_total_attempts - request_input_successful_requests,
+                        extracted.total_attempts - extracted.successful_requests,
                         0,
                     ),
-                    attempt_count=request_input_total_attempts,
-                    records_extracted=request_input_total_records,
-                    artifact_count=len(request_input_artifacts),
-                    checkpoint_value=request_input_checkpoint_value,
+                    attempt_count=extracted.total_attempts,
+                    records_extracted=extracted.records_extracted,
+                    artifact_count=len(extracted.artifacts),
+                    checkpoint_value=extracted.checkpoint_value,
+                    speculative_request_count=extracted.speculative_requests,
+                    past_end_status=extracted.past_end_status,
                 )
 
         if logger is not None:
@@ -596,10 +675,20 @@ class ApiStrategy(BaseStrategy):
                 "records_extracted": str(total_records),
                 "dead_letter_count": str(dead_letter_count),
                 "dead_letter_skipped_count": str(dead_letter_skip_count),
+                "pagination_concurrency": str(plan.source_config.access.rate_limit.concurrency),
                 **(
                     {"raw_path_prefix": str(raw_path_prefix)}
                     if raw_path_prefix is not None
                     else {}
+                ),
+                **_speculation_metadata(
+                    concurrent_pagination_used=concurrent_pagination_used,
+                    speculative_requests=speculative_requests,
+                    discarded_requests=discarded_requests,
+                    past_end_terminated_count=past_end_terminated_count,
+                    past_end_status=past_end_status,
+                    lookahead_ceiling_source=lookahead_ceiling_source,
+                    total_records_reported=total_records_reported,
                 ),
                 **request_input_metadata,
             },
@@ -634,7 +723,7 @@ class ApiStrategy(BaseStrategy):
         progress_store: ExtractionProgressStore,
         prior_artifact_count: int = 0,
         raw_path_prefix: Path | None = None,
-    ) -> tuple[list[ExtractedArtifact], int, int, int, str | None]:
+    ) -> RequestInputExtraction:
         artifacts: list[ExtractedArtifact] = []
         total_records = 0
         successful_requests = 0
@@ -694,12 +783,12 @@ class ApiStrategy(BaseStrategy):
                 )
                 pagination_state = processed.next_pagination_state
 
-        return (
-            artifacts,
-            total_records,
-            successful_requests,
-            total_attempts,
-            checkpoint_value,
+        return RequestInputExtraction(
+            artifacts=artifacts,
+            records_extracted=total_records,
+            successful_requests=successful_requests,
+            total_attempts=total_attempts,
+            checkpoint_value=checkpoint_value,
         )
 
     def _extract_concurrent_pages(
@@ -723,7 +812,7 @@ class ApiStrategy(BaseStrategy):
         progress_store: ExtractionProgressStore,
         prior_artifact_count: int = 0,
         raw_path_prefix: Path | None = None,
-    ) -> tuple[list[ExtractedArtifact], int, int, int, str | None]:
+    ) -> RequestInputExtraction:
         concurrency = plan.source_config.access.rate_limit.concurrency
         artifacts: list[ExtractedArtifact] = []
         total_records = 0
@@ -733,6 +822,24 @@ class ApiStrategy(BaseStrategy):
         predicted_state = pagination_state
         pending: dict[int, SubmittedApiRequest] = {}
         stop_submitting = False
+        speculative_requests = 0
+        discarded_requests = 0
+        past_end_status: int | None = None
+        past_end_request_index: int | None = None
+
+        policy: SpeculativePaginationPolicy | None = (
+            resolve_speculative_policy(plan, paginator, pagination_state)
+            if pagination_state is not None
+            else None
+        )
+        terminal_statuses = policy.past_end_status_codes if policy is not None else frozenset()
+
+        # ``None`` is "no ceiling known": speculation runs on the structural bound alone (the
+        # in-flight window) until a page reports how many records this request input holds.
+        lookahead_ceiling: int | None = None
+        ceiling_logged = False
+        total_records_reported: int | None = None
+        lookahead_ceiling_source: str | None = None
 
         executor = ThreadPoolExecutor(
             max_workers=concurrency,
@@ -744,6 +851,11 @@ class ApiStrategy(BaseStrategy):
                     predicted_state is not None
                     and not stop_submitting
                     and len(pending) < concurrency
+                    and _may_submit(
+                        predicted_state.request_index,
+                        lookahead_ceiling,
+                        next_request_index,
+                    )
                 ):
                     request = self._prepare_request(
                         plan,
@@ -760,12 +872,17 @@ class ApiStrategy(BaseStrategy):
                         request,
                         throttle,
                         logger,
+                        terminal_status_codes=terminal_statuses,
                     )
                     pending[predicted_state.request_index] = SubmittedApiRequest(
                         pagination_state=predicted_state,
                         request=request,
                         future=future,
                     )
+                    if policy is not None and policy.is_speculative(
+                        predicted_state.request_index
+                    ):
+                        speculative_requests += 1
                     predicted_state = _predicted_next_pagination_state(
                         paginator,
                         predicted_state,
@@ -776,6 +893,34 @@ class ApiStrategy(BaseStrategy):
 
                 submitted = pending.pop(next_request_index)
                 response, payload, attempts_used = submitted.future.result()
+
+                if policy is not None and policy.is_past_end_status(response.status_code):
+                    index = submitted.pagination_state.request_index
+                    if not policy.is_speculative(index):
+                        # The first request of this input was never a guess: a 404 here is a
+                        # broken endpoint, and must fail exactly as it does today.
+                        raise ApiResponseError(response)
+                    _raise_on_past_end_conflict(pending, response, index, logger)
+                    past_end_status = response.status_code
+                    past_end_request_index = index
+                    if logger is not None:
+                        logger.warning(
+                            "api_pagination_past_end_detected",
+                            request_index=index,
+                            page_number=submitted.pagination_state.page_number,
+                            offset=submitted.pagination_state.offset,
+                            status_code=response.status_code,
+                            request_url=redact_url(submitted.request.full_url()),
+                            committed_request_count=successful_requests,
+                        )
+                    stop_submitting = True
+                    discarded_requests += _cancel_pending(
+                        pending,
+                        logger,
+                        next_request_index=index + 1,
+                    )
+                    break
+
                 successful_requests += 1
                 total_attempts += attempts_used
                 processed = self._process_response(
@@ -793,6 +938,7 @@ class ApiStrategy(BaseStrategy):
                     total_records=total_records,
                     request_input_index=request_input_index,
                     request_input_count=request_input_count,
+                    speculation_policy=policy,
                 )
                 artifacts.append(processed.artifact)
                 total_records += processed.records_extracted
@@ -811,20 +957,51 @@ class ApiStrategy(BaseStrategy):
                     raw_path_prefix=str(raw_path_prefix) if raw_path_prefix is not None else None,
                 )
                 next_request_index += 1
+
+                if policy is not None and processed.total_records_reported is not None:
+                    total_records_reported = processed.total_records_reported
+                    lookahead_ceiling_source = processed.total_records_source
+                    candidate = policy.last_request_index_for_total(total_records_reported)
+                    if candidate is not None:
+                        
+                        lookahead_ceiling = (
+                            candidate
+                            if lookahead_ceiling is None
+                            else max(lookahead_ceiling, candidate)
+                        )
+                        if not ceiling_logged and logger is not None:
+                            logger.info(
+                                "api_pagination_lookahead_bounded",
+                                total_records=total_records_reported,
+                                last_request_index=lookahead_ceiling,
+                                concurrency=concurrency,
+                                ceiling_source=lookahead_ceiling_source,
+                            )
+                        ceiling_logged = True
+
                 if processed.next_pagination_state is None:
                     stop_submitting = True
-                    for pending_request in pending.values():
-                        pending_request.future.cancel()
+                    discarded_requests += _cancel_pending(
+                        pending,
+                        logger,
+                        next_request_index=next_request_index,
+                    )
                     break
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
 
-        return (
-            artifacts,
-            total_records,
-            successful_requests,
-            total_attempts,
-            checkpoint_value,
+        return RequestInputExtraction(
+            artifacts=artifacts,
+            records_extracted=total_records,
+            successful_requests=successful_requests,
+            total_attempts=total_attempts,
+            checkpoint_value=checkpoint_value,
+            speculative_requests=speculative_requests,
+            discarded_requests=discarded_requests,
+            past_end_status=past_end_status,
+            past_end_request_index=past_end_request_index,
+            total_records_reported=total_records_reported,
+            lookahead_ceiling_source=lookahead_ceiling_source,
         )
 
     def build_normalization_handoff(
@@ -945,9 +1122,18 @@ class ApiStrategy(BaseStrategy):
         request: ApiRequest,
         throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
+        *,
+        terminal_status_codes: frozenset[int] = frozenset(),
     ) -> tuple[ApiResponse, Any, int]:
         with ApiClient(self.transport_factory()) as client:
-            return self._send_request(plan, client, request, throttle, logger)
+            return self._send_request(
+                plan,
+                client,
+                request,
+                throttle,
+                logger,
+                terminal_status_codes=terminal_status_codes,
+            )
 
     def _send_request(
         self,
@@ -956,7 +1142,14 @@ class ApiStrategy(BaseStrategy):
         request: ApiRequest,
         throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
+        *,
+        terminal_status_codes: frozenset[int] = frozenset(),
     ) -> tuple[ApiResponse, Any, int]:
+        """Send one request; ``terminal_status_codes`` returns instead of raising.
+
+        A terminal response carries a ``None`` payload — callers passing a non-empty
+        set must check ``response.status_code`` before consuming it.
+        """
         return send_with_retries(
             plan,
             client,
@@ -967,6 +1160,7 @@ class ApiStrategy(BaseStrategy):
             sleeper=self.sleeper,
             decode=lambda response: self._decode_payload(plan, response),
             payload_error_types=(ApiPayloadError,),
+            terminal_status_codes=terminal_status_codes,
         )
 
     def _process_response(
@@ -986,6 +1180,7 @@ class ApiStrategy(BaseStrategy):
         total_records: int,
         request_input_index: int,
         request_input_count: int,
+        speculation_policy: SpeculativePaginationPolicy | None = None,
     ) -> ProcessedApiRequest:
         if api_hook is not None:
             response = api_hook.handle_response(plan, request, response)
@@ -1008,6 +1203,16 @@ class ApiStrategy(BaseStrategy):
             pagination_state=pagination_state,
             request_input_index=request_input_index,
             request_input_count=request_input_count,
+        )
+
+        total_records_reported, total_records_source = _resolve_total_records(
+            plan,
+            request,
+            response,
+            payload,
+            api_hook=api_hook,
+            policy=speculation_policy,
+            logger=logger,
         )
 
         next_cursor = None
@@ -1049,6 +1254,8 @@ class ApiStrategy(BaseStrategy):
             records_extracted=len(records),
             checkpoint_value=resolved_checkpoint_value,
             next_pagination_state=next_pagination_state,
+            total_records_reported=total_records_reported,
+            total_records_source=total_records_source,
         )
 
     def _decode_payload(self, plan: ExecutionPlan, response: ApiResponse) -> Any:
@@ -1168,6 +1375,128 @@ def _supports_concurrent_pagination(
     concurrency: int,
 ) -> TypeGuard[PageNumberPaginator | OffsetPaginator]:
     return concurrency > 1 and isinstance(paginator, PageNumberPaginator | OffsetPaginator)
+
+
+def _resolve_total_records(
+    plan: ExecutionPlan,
+    request: ApiRequest,
+    response: ApiResponse,
+    payload: Any,
+    *,
+    api_hook: ApiHook | None,
+    policy: SpeculativePaginationPolicy | None,
+    logger: StructuredLogger | None,
+) -> tuple[int | None, str | None]:
+    """Return the total this page advertises and where it came from."""
+    if policy is None:
+        return None, None
+
+    if api_hook is not None:
+        hook_total = api_hook.resolve_total_records(plan, request, response, payload)
+        if hook_total is not None:
+            if isinstance(hook_total, int) and not isinstance(hook_total, bool) and hook_total >= 0:
+                return hook_total, "hook"
+            if logger is not None:
+                logger.warning(
+                    "api_total_records_invalid",
+                    hook_value=repr(hook_total),
+                    hook_value_type=type(hook_total).__name__,
+                    request_url=redact_url(request.full_url()),
+                )
+
+    payload_total = total_records_from_payload(
+        payload,
+        total_count_field=policy.total_count_field,
+    )
+    if payload_total is None:
+        return None, None
+    return payload_total, "payload"
+
+
+def _may_submit(request_index: int, ceiling: int | None, next_request_index: int) -> bool:
+    """Allow submission ahead of evidence only up to the reported ceiling.
+
+    Above the ceiling we do not stop — we degrade to an in-flight window of one, i.e. the index
+    is submitted only when it is the very next one to commit. So a stale or wrong total costs a
+    little parallelism at the tail and can never truncate the dataset: the authority on "the
+    stream ended" stays with the paginator's short/empty page rule and the past-end status.
+    """
+    if ceiling is None or request_index <= ceiling:
+        return True
+    return request_index == next_request_index
+
+
+def _cancel_pending(
+    pending: dict[int, SubmittedApiRequest],
+    logger: StructuredLogger | None,
+    *,
+    next_request_index: int,
+) -> int:
+    """Cancel every outstanding speculative request and report how many were discarded."""
+    discarded = 0
+    for submitted in pending.values():
+        if submitted.future.cancel() or not submitted.future.done():
+            discarded += 1
+    pending.clear()
+    if discarded and logger is not None:
+        logger.info(
+            "api_pagination_speculation_cancelled",
+            cancelled_count=discarded,
+            next_request_index=next_request_index,
+        )
+    return discarded
+
+
+def _raise_on_past_end_conflict(
+    pending: dict[int, SubmittedApiRequest],
+    response: ApiResponse,
+    past_end_index: int,
+    logger: StructuredLogger | None,
+) -> None:
+    """Fail loudly when a *later* page already proved the stream did not end here."""
+    for index, submitted in sorted(pending.items()):
+        if index <= past_end_index or not submitted.future.done() or submitted.future.cancelled():
+            continue
+        try:
+            later_response, later_payload, _ = submitted.future.result(timeout=0)
+        except Exception:  # a later failure proves nothing; the past-end read stands
+            continue
+        if 200 <= later_response.status_code < 300 and _default_records_from_payload(later_payload):
+            if logger is not None:
+                logger.warning(
+                    "api_pagination_past_end_conflict",
+                    request_index=past_end_index,
+                    status_code=response.status_code,
+                    request_url=redact_url(response.request.full_url()),
+                    conflicting_request_index=index,
+                )
+            raise ApiPastEndConflictError(response, conflicting_request_index=index)
+
+
+def _speculation_metadata(
+    *,
+    concurrent_pagination_used: bool,
+    speculative_requests: int,
+    discarded_requests: int,
+    past_end_terminated_count: int,
+    past_end_status: int | None,
+    lookahead_ceiling_source: str | None,
+    total_records_reported: int | None,
+) -> dict[str, str]:
+    """Build the concurrency-only metadata block, empty for a purely sequential run."""
+    if not concurrent_pagination_used:
+        return {}
+    metadata = {
+        "speculative_request_count": str(speculative_requests),
+        "speculative_discarded_count": str(discarded_requests),
+        "past_end_terminated_count": str(past_end_terminated_count),
+        "lookahead_ceiling_source": lookahead_ceiling_source or "none",
+    }
+    if past_end_status is not None:
+        metadata["past_end_status"] = str(past_end_status)
+    if total_records_reported is not None:
+        metadata["total_records_reported"] = str(total_records_reported)
+    return metadata
 
 
 def _predicted_next_pagination_state(

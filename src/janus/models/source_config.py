@@ -21,6 +21,9 @@ SUPPORTED_AUTH_TYPES = frozenset(
 SUPPORTED_EXTRACTION_MODES = frozenset({"full_refresh", "incremental", "snapshot"})
 SUPPORTED_CHECKPOINT_STRATEGIES = frozenset({"date_window", "max_value", "none"})
 SUPPORTED_PAGINATION_TYPES = frozenset({"cursor", "none", "offset", "page_number"})
+DEFAULT_PAST_END_STATUS_CODES: tuple[int, ...] = (404, 416)
+RETRYABLE_CLIENT_STATUS_CODES: frozenset[int] = frozenset({408, 429})
+CONCURRENT_PAGINATION_TYPES: frozenset[str] = frozenset({"page_number", "offset"})
 SUPPORTED_SCHEMA_MODES = frozenset({"explicit", "infer"})
 SUPPORTED_DATA_FORMATS = frozenset(
     {"binary", "csv", "iceberg", "json", "jsonl", "parquet", "text"}
@@ -72,6 +75,14 @@ class AuthConfig:
 
 @dataclass(frozen=True, slots=True)
 class PaginationConfig:
+    """Pagination shape plus the end-of-stream evidence the strategy may rely on.
+
+    ``past_end_status_codes`` are the client-error statuses this API returns when a
+    page beyond the last one is requested — evidence that the stream ended, not that
+    the request failed. ``total_count_field`` is a dotted path to a total-record count
+    in the payload, used to cap speculative look-ahead when the API exposes one.
+    """
+
     type: str
     page_param: str | None = None
     size_param: str | None = None
@@ -79,6 +90,8 @@ class PaginationConfig:
     offset_param: str | None = None
     limit_param: str | None = None
     cursor_param: str | None = None
+    past_end_status_codes: tuple[int, ...] = DEFAULT_PAST_END_STATUS_CODES
+    total_count_field: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,6 +309,7 @@ class SourceConfig:
         quality = _build_quality_config(data.get("quality"), issues)
 
         _validate_incremental_contract(extraction, quality, issues)
+        _validate_concurrency_contract(source_type, access, issues)
 
         if issues:
             raise SourceConfigValidationError(config_path, issues)
@@ -340,6 +354,28 @@ def _validate_incremental_contract(
                 "quality.unique_fields",
                 "is required when extraction.mode is 'incremental' — incremental writes are "
                 "upserted on these keys and have no defined idempotency without them",
+            )
+        )
+
+
+def _validate_concurrency_contract(
+    source_type: str,
+    access: AccessConfig,
+    issues: list[ValidationIssue],
+) -> None:
+    """Concurrency is a speculative pagination capability, not a generic knob."""
+
+    if source_type != "api":
+        return
+    if access.rate_limit.concurrency <= 1:
+        return
+    if access.pagination.type not in CONCURRENT_PAGINATION_TYPES:
+        issues.append(
+            ValidationIssue(
+                "access.rate_limit.concurrency",
+                "must be 1 unless access.pagination.type is 'page_number' or 'offset' — "
+                "concurrent pagination speculates on the next page index and cannot predict "
+                f"{access.pagination.type!r} pagination",
             )
         )
 
@@ -509,6 +545,13 @@ def _build_pagination_config(raw_value: Any, issues: list[ValidationIssue]) -> P
     offset_param = _optional_string(data, "offset_param", issues, "access.pagination")
     limit_param = _optional_string(data, "limit_param", issues, "access.pagination")
     cursor_param = _optional_string(data, "cursor_param", issues, "access.pagination")
+    raw_past_end = _optional_int_list(data, "past_end_status_codes", issues, "access.pagination")
+    past_end_status_codes = _resolve_past_end_status_codes(raw_past_end, issues)
+    total_count_field = _optional_string(data, "total_count_field", issues, "access.pagination")
+    if total_count_field is not None:
+        _validate_dotted_path(
+            total_count_field, "access.pagination.total_count_field", issues
+        )
 
     if pagination_type == "page_number":
         if not page_param:
@@ -572,7 +615,55 @@ def _build_pagination_config(raw_value: Any, issues: list[ValidationIssue]) -> P
         offset_param=offset_param,
         limit_param=limit_param,
         cursor_param=cursor_param,
+        past_end_status_codes=past_end_status_codes,
+        total_count_field=total_count_field,
     )
+
+
+def _resolve_past_end_status_codes(
+    raw_codes: list[int] | None,
+    issues: list[ValidationIssue],
+) -> tuple[int, ...]:
+    """Normalize the declared past-end statuses into a deterministic, validated tuple."""
+
+    if raw_codes is None:
+        return DEFAULT_PAST_END_STATUS_CODES
+
+    accepted: set[int] = set()
+    for index, code in enumerate(raw_codes):
+        child_path = f"access.pagination.past_end_status_codes[{index}]"
+        if not 400 <= code < 500:
+            issues.append(
+                ValidationIssue(child_path, "must be a 4xx client-error status code")
+            )
+            continue
+        if code in RETRYABLE_CLIENT_STATUS_CODES:
+            retryable = ", ".join(str(item) for item in sorted(RETRYABLE_CLIENT_STATUS_CODES))
+            issues.append(
+                ValidationIssue(
+                    child_path,
+                    f"must not be a retryable status code ({retryable})",
+                )
+            )
+            continue
+        accepted.add(code)
+
+    return tuple(sorted(accepted))
+
+
+def _validate_dotted_path(
+    value: str,
+    field_path: str,
+    issues: list[ValidationIssue],
+) -> None:
+    """Check the shape of a dotted payload path; resolution semantics live downstream."""
+    if any(not segment.strip() for segment in value.split(".")):
+        issues.append(
+            ValidationIssue(
+                field_path,
+                "must be a dotted path without empty segments, e.g. 'meta.total'",
+            )
+        )
 
 
 def _build_rate_limit_config(raw_value: Any, issues: list[ValidationIssue]) -> RateLimitConfig:
@@ -1379,6 +1470,33 @@ def _optional_string_list(
             issues.append(ValidationIssue(child_path, "must not be empty"))
             continue
         result.append(stripped_item)
+    return result
+
+
+def _optional_int_list(
+    data: Mapping[str, Any],
+    field_name: str,
+    issues: list[ValidationIssue],
+    prefix: str | None = None,
+) -> list[int] | None:
+    """Read an optional list of integers; return None when the key is absent or null."""
+    if field_name not in data or data[field_name] is None:
+        return None
+
+    value = data[field_name]
+    field_path = _field_path(field_name, prefix)
+    if not isinstance(value, list):
+        issues.append(ValidationIssue(field_path, "must be a list"))
+        return None
+
+    result: list[int] = []
+    for index, item in enumerate(value):
+        child_path = f"{field_path}[{index}]"
+        # bool is a subclass of int in Python; `true` in YAML is not a status code.
+        if not isinstance(item, int) or isinstance(item, bool):
+            issues.append(ValidationIssue(child_path, "must be an integer"))
+            continue
+        result.append(item)
     return result
 
 

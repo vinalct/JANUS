@@ -55,12 +55,29 @@ def send_with_retries(
     sleeper: Callable[[float], None],
     decode: Callable[[ApiResponse], Any] | None = None,
     payload_error_types: tuple[type[Exception], ...] = (),
+    terminal_status_codes: frozenset[int] = frozenset(),
 ) -> tuple[ApiResponse, Any | None, int]:
     """Send ``request`` with the shared retry/throttle/backoff policy.
 
     Always returns ``(response, payload, attempts)``; ``payload`` is ``None`` when
     ``decode`` is ``None`` (the file strategy). The throttle is consulted once per
     attempt, including the first, matching every family's current pacing.
+
+    ``terminal_status_codes`` lets a caller declare statuses that are a normal
+    terminal outcome rather than a failure — a speculative page past the end of a
+    paginated stream, for instance. Such a response is *returned*, not raised, so
+    the knowledge stays in this one loop instead of being re-derived by callers
+    sniffing ``exc.response.status_code``. The ordering is part of the contract:
+
+    * ``2xx`` is handled first, so a success is never terminal-by-status.
+    * Terminal is checked **before** the retryable set, so a status in both wins as
+      terminal and is sent exactly once — retrying a definitive "there is nothing
+      here" only burns rate-limit budget.
+    * ``payload`` is ``None`` for a terminal return; the body is an error document,
+      not a payload, and is never decoded. Callers must therefore branch on
+      ``response.status_code``, never on ``payload is None``.
+
+    The default empty set keeps every existing caller bit-for-bit unchanged.
     """
     retry_config = plan.source_config.extraction.retry
     last_transport_error: Exception | None = None
@@ -91,6 +108,15 @@ def send_with_retries(
                 )
                 continue
             return response, payload, attempt
+
+        if response.status_code in terminal_status_codes:
+            if logger is not None:
+                logger.info(
+                    "http_terminal_status_returned",
+                    status_code=response.status_code,
+                    attempt=attempt,
+                )
+            return response, None, attempt
 
         if (
             response.status_code not in RETRYABLE_STATUS_CODES

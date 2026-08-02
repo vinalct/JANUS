@@ -33,6 +33,7 @@ sources:
         page_param: pagina
         size_param: tamanhoPagina
         page_size: 15
+        past_end_status_codes: [404, 416]
       rate_limit:
         requests_per_minute: 90
         concurrency: 10
@@ -111,6 +112,10 @@ sources:
         page_param: pagina
         size_param: tamanhoPagina
         page_size: 15
+        # Verified 2026-08-02: page 99999 answers an empty 200, never a 4xx. Precondition 1
+        # (empty 200) holds, so this list never fires; kept at the default as documentation
+        # that it was checked.
+        past_end_status_codes: [404, 416]
       rate_limit:
         requests_per_minute: 90
         concurrency: 10

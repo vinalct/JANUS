@@ -38,7 +38,7 @@ sources:
         page_size: 15
       rate_limit:
         requests_per_minute: 90
-        concurrency: 5
+        concurrency: 1
         backoff_seconds: 10
 
     extraction:
@@ -132,7 +132,8 @@ sources:
         page_size: 15
       rate_limit:
         requests_per_minute: 90
-        concurrency: 5
+        # the catalog strategy paginates sequentially; concurrency is an API-family capability.
+        concurrency: 1
         backoff_seconds: 10
 
     extraction:
