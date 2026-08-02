@@ -11,6 +11,11 @@ from janus.models import (
     resolve_bronze_write_intent,
 )
 from janus.utils.storage import StorageLayout, bronze_table_identifier
+from janus.writers.identifiers import quote_identifier
+from janus.writers.overwrite import (
+    build_create_table_as_select_sql,
+    build_replace_table_as_select_sql,
+)
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame
@@ -178,28 +183,33 @@ class SparkDatasetWriter:
         prepared_frame.createOrReplaceTempView(temp_view_name)
         try:
             spark.sql(
-                f"CREATE NAMESPACE IF NOT EXISTS {_quote_identifier(namespace_identifier)}"
+                f"CREATE NAMESPACE IF NOT EXISTS {quote_identifier(namespace_identifier)}"
             )
 
-            quoted_table = _quote_identifier(table_identifier)
-            quoted_temp_view = _quote_identifier(temp_view_name)
-            partition_clause = _partition_clause(partition_columns)
+            quoted_table = quote_identifier(table_identifier)
+            quoted_temp_view = quote_identifier(temp_view_name)
             table_exists = spark.catalog.tableExists(table_identifier)
 
             if effective_mode == "ignore" and table_exists:
                 pass
             elif effective_mode == "overwrite" and table_exists:
                 spark.sql(
-                    f"REPLACE TABLE {quoted_table} USING iceberg "
-                    f"{partition_clause} AS SELECT * FROM {quoted_temp_view}"
+                    build_replace_table_as_select_sql(
+                        table_identifier=table_identifier,
+                        source_view=temp_view_name,
+                        partition_columns=partition_columns,
+                    )
                 )
             elif effective_mode == "append" and table_exists:
                 spark.sql(f"INSERT INTO {quoted_table} SELECT * FROM {quoted_temp_view}")
             else:
                 # A first write for any of ignore/append/overwrite creates the table.
                 spark.sql(
-                    f"CREATE TABLE {quoted_table} USING iceberg "
-                    f"{partition_clause} AS SELECT * FROM {quoted_temp_view}"
+                    build_create_table_as_select_sql(
+                        table_identifier=table_identifier,
+                        source_view=temp_view_name,
+                        partition_columns=partition_columns,
+                    )
                 )
         finally:
             spark.catalog.dropTempView(temp_view_name)
@@ -268,16 +278,16 @@ class SparkDatasetWriter:
         merge_source.createOrReplaceTempView(temp_view_name)
         try:
             spark.sql(
-                f"CREATE NAMESPACE IF NOT EXISTS {_quote_identifier(namespace_identifier)}"
+                f"CREATE NAMESPACE IF NOT EXISTS {quote_identifier(namespace_identifier)}"
             )
-            quoted_table = _quote_identifier(table_identifier)
-            quoted_temp_view = _quote_identifier(temp_view_name)
 
             if not table_exists:
-                partition_clause = _partition_clause(partition_columns)
                 spark.sql(
-                    f"CREATE TABLE {quoted_table} USING iceberg "
-                    f"{partition_clause} AS SELECT * FROM {quoted_temp_view}"
+                    build_create_table_as_select_sql(
+                        table_identifier=table_identifier,
+                        source_view=temp_view_name,
+                        partition_columns=partition_columns,
+                    )
                 )
                 write_metadata["write_strategy"] = "create"
                 write_metadata["requested_strategy"] = "merge_on_keys"
@@ -326,10 +336,10 @@ def build_merge_sql(
     if not merge_keys:
         raise ValueError("merge_on_keys requires at least one merge key")
 
-    quoted_table = _quote_identifier(table_identifier)
-    quoted_view = _quote_identifier(source_view)
+    quoted_table = quote_identifier(table_identifier)
+    quoted_view = quote_identifier(source_view)
     conditions = "\n   AND ".join(
-        f"janus_target.{_quote_identifier(key)} <=> janus_source.{_quote_identifier(key)}"
+        f"janus_target.{quote_identifier(key)} <=> janus_source.{quote_identifier(key)}"
         for key in merge_keys
     )
     return (
@@ -350,9 +360,9 @@ def build_add_columns_sql(
     if not columns:
         return None
 
-    quoted_table = _quote_identifier(table_identifier)
+    quoted_table = quote_identifier(table_identifier)
     rendered = ", ".join(
-        f"{_quote_identifier(name)} {column_type}" for name, column_type in columns
+        f"{quote_identifier(name)} {column_type}" for name, column_type in columns
     )
     return f"ALTER TABLE {quoted_table} ADD COLUMNS ({rendered})"
 
@@ -472,14 +482,3 @@ def _rebalance_for_write(
     if target_partitions > current_partitions:
         return dataframe.repartition(target_partitions)
     return dataframe
-
-
-def _partition_clause(partition_columns: tuple[str, ...]) -> str:
-    if not partition_columns:
-        return ""
-    rendered_columns = ", ".join(_quote_identifier(column) for column in partition_columns)
-    return f"PARTITIONED BY ({rendered_columns})"
-
-
-def _quote_identifier(identifier: str) -> str:
-    return ".".join(f"`{part.replace('`', '``')}`" for part in identifier.split("."))
