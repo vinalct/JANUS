@@ -279,6 +279,73 @@ Resume is supported for page-number and offset pagination. Cursor pagination doe
 
 The progress file is removed at the end of every successful extraction. A normal run without `--resume` also removes any stale progress file and clears any stale dead-letter state before starting, so partial state from a previous run does not silently influence an intentional fresh run.
 
+## Concurrent pagination and end of stream
+
+The short version is: concurrency in the API strategy is **speculation**, and speculation needs an explicit answer to "what happens when I guess wrong."
+
+When `access.rate_limit.concurrency` is above `1` and the paginator is page-number or offset, `_extract_concurrent_pages` runs instead of the sequential loop. It fills a window of in-flight requests by calling `_predicted_next_pagination_state`, which does exactly what its name says: it assumes the page currently in flight will come back full and computes the next page number or offset from that assumption. Nothing has confirmed that page exists.
+
+That assumption is unavoidable — the whole point of fanning out is to issue page N+1 before page N answers — so the design question is not how to avoid guessing, but what a wrong guess is allowed to cost.
+
+### Three signals that the stream ended
+
+The loop now recognizes three:
+
+1. **A short or empty page.** The paginator's existing rule, unchanged, and the only signal the sequential loop has ever had.
+2. **A past-end status.** A response whose status is in `access.pagination.past_end_status_codes` (default `404`, `416`). Previously this raised `ApiResponseError` and dead-lettered the entire request input; now it ends the stream cleanly.
+3. **A reported total.** When a payload or hook exposes a record count, the last useful request index is computed from it and speculation stops there — before the wasted requests are ever issued.
+
+Signals 1 and 2 are terminal. Signal 3 is only a **cap on speculation**: past the reported total the loop degrades to a single in-flight request rather than stopping, so a stale or wrong total costs throughput and never completeness. That distinction is the safety property the whole feature rests on, and it is stated in `speculation.py`'s module docstring for the same reason.
+
+### The first index is never speculative
+
+The rule that keeps a genuine `404` loud is one line in `SpeculativePaginationPolicy.is_speculative`: a request index counts as speculative only when it is greater than the first index of that request input.
+
+The first request of a request stream was issued on evidence — the config or an upstream Iceberg table said that input exists. A `404` there means the endpoint is broken, and it still raises exactly as before. Every later index exists only because JANUS guessed the previous page was full, so a `404` there is evidence about the *guess*, not about the endpoint. The first index is read from the initial pagination state rather than hard-coded to `1`, so a resumed run anchors on the page it actually restarted from.
+
+There is a second guard for the case where the guess and the evidence disagree. Speculation often means futures for *higher* indexes have already resolved by the time a past-end response is committed. Before accepting end-of-stream, the loop inspects those already-done futures; if one of them returned records, the past-end read is contradicted and `ApiPastEndConflictError` is raised naming the conflicting index. Only futures that are already `done()` are inspected — never waited on, or cancellation would stop working. Since it is an `ApiStrategyError`, a contradicted stream dead-letters like any other failure. A truncated dataset stays impossible; a noisy failure is the acceptable cost.
+
+### Where the classification lives
+
+The knowledge that "some statuses are a normal terminal outcome" belongs to the shared retry loop, not to the API strategy. `send_with_retries` takes an opt-in `terminal_status_codes` set and, for a matching response, returns it undecoded instead of raising — checked after the `2xx` branch and before the retryable check, so a terminal status wins over a retry. The default is empty, so the catalog family, the file family, and the sequential API path are bit-for-bit unchanged.
+
+This matters architecturally: the alternative — catching `ApiResponseError` in `api/core.py` and sniffing `exc.response.status_code` — would fork HTTP mechanics back into a family core, which is precisely what the shared `strategies/http/` layer exists to prevent.
+
+### Bounding the over-fetch
+
+Without a reported total, the bound is structural: at most `concurrency − 1` requests are outstanding past the end, all cancelled through `_cancel_pending` the moment either end signal fires, and the past-end page itself is requested exactly once.
+
+With a total, the bound is exact. `total_records_from_payload` resolves the configured dotted path first, then a list of root hint keys, then the same hints nested inside `meta` / `metadata` / `pagination`. `count` is deliberately excluded from the hints — several APIs use it for records on the current page, which would yield a one-page ceiling and quietly serialize the run. `last_request_index_for_total` converts the count into the highest worthwhile request index using integer arithmetic, because page counts at CNPJ scale must not pass through binary floating point. The ceiling is monotone: it only ever rises, so a total that shrinks between pages cannot retro-truncate work already predicted.
+
+`_may_submit` is where the ceiling is applied, and it gates **submission only** — above the ceiling an index is submitted when it is the next one to commit, which is the degradation-not-termination rule again, expressed in code.
+
+### New hook point
+
+`ApiHook.resolve_total_records(plan, request, response, payload)` returns the total for a request input when the API exposes one somewhere the generic discovery cannot reach. It defaults to `None`, which falls back to payload discovery. Hook values that are negative or not integers are rejected with an `api_total_records_invalid` warning and the payload value is used instead — a hook must not be able to truncate a run, though a legitimate `0` would be harmless anyway since the ceiling never terminates extraction.
+
+### New structured events
+
+- `api_pagination_past_end_detected` (WARNING) — a stream ended on an inferred signal rather than an observed empty page. Deliberately a warning: an operator should be able to grep for sources whose end-of-stream is inferred.
+- `api_pagination_speculation_cancelled` (INFO) — outstanding speculative futures were dropped, with the count.
+- `api_pagination_lookahead_bounded` (INFO) — a reported total produced a ceiling, with the total, the last request index, and where the total came from.
+- `http_terminal_status_returned` (INFO, from the shared retry loop) — a caller-declared terminal status was returned instead of raised.
+- `api_total_records_invalid` (WARNING) — a hook returned an unusable total.
+
+Logged URLs go through `redact_url`, since auth tokens ride in query strings on some sources.
+
+### New extraction metadata
+
+`pagination_concurrency` is emitted on every run. These six appear only when the concurrent loop actually ran:
+
+- `speculative_request_count`
+- `speculative_discarded_count`
+- `past_end_terminated_count`
+- `past_end_status`
+- `total_records_reported`
+- `lookahead_ceiling_source` (`hook`, `payload`, or `none`)
+
+They are exported as `CONCURRENCY_ONLY_METADATA_KEYS` and are the **only** legitimate differences between a concurrent and a sequential run of the same source. The equivalence suite imports that constant rather than restating the list, and asserts that everything else — artifact paths, checksums, bytes, record counts, checkpoints, and the remaining metadata — is identical.
+
 ## Hooks and extension points
 
 This step deliberately adds API-specific hook points without turning the strategy into a special-case switchboard.

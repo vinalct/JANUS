@@ -120,7 +120,10 @@ The registry contract is intentionally small. The most important current options
 - `access.method` must be a supported HTTP method such as `GET` or `POST`.
 - `access.auth.type` controls auth shape. Supported values today are `none`, `header_token`, `bearer_token`, `query_token`, and `basic`.
 - `access.pagination.type` must match the chosen family variant when pagination is used: `page_number`, `offset`, `cursor`, or `none`.
+- `access.pagination.past_end_status_codes` is an optional 4xx list meaning "you asked past the last page", defaulting to `[404, 416]`. It only matters when `concurrency > 1`.
+- `access.pagination.total_count_field` is an optional dotted path to a total-record count, used to cap concurrent look-ahead exactly.
 - `access.rate_limit` carries `requests_per_minute`, optional `backoff_seconds`, and optional `concurrency`.
+- `access.rate_limit.concurrency` above `1` is an API-family capability with a validated precondition — see [Concurrent pagination](#concurrent-pagination).
 - `access.params` is the home for static literal request parameters.
 - `access.request_inputs` is an optional API/catalog block for bounded runtime request contexts before pagination starts.
 - `access.parameter_bindings` is an optional API/catalog block for request parameters resolved from the current request input or checkpoint state.
@@ -265,6 +268,70 @@ access:
 ```
 
 JANUS computes the Cartesian product of the two input streams and runs one request stream per combination. With 5 org codes and 12 monthly windows, that produces 60 request streams, each bound with its own `codigoOrgao`, `dataInicio`, and `dataFinal`.
+
+### Concurrent pagination
+
+`access.rate_limit.concurrency` is the only knob that makes JANUS issue more than one request at a time. It is a **capability with a precondition**, not a throughput dial you can turn up on any source. Read this section before setting it above `1`.
+
+#### What concurrency actually does
+
+With `concurrency: N` (N > 1), the API strategy submits up to N pages before the current one has answered. It has no way of knowing whether page 4 exists while page 3 is still in flight, so it **predicts a full page each time**: "page 3 returned `page_size` records, therefore page 4 probably exists." Results are still committed in request order, so artifacts and records are identical to a sequential run — only the request timing differs.
+
+That prediction is the whole point and the whole risk. Every request beyond the first one of a request stream is a guess.
+
+#### When it is allowed
+
+| Family | `concurrency > 1` | Behavior |
+|---|---|---|
+| `api` + `page_number` or `offset` | allowed | speculative fan-out, as described here |
+| `api` + `cursor` | **rejected at config load** | the next request is only knowable from the current response, so there is nothing to predict |
+| `api` + `none` | **rejected at config load** | a single page cannot be paginated ahead |
+| `catalog` | accepted, **inert** | the catalog strategy paginates sequentially and never reads the key |
+| `file` | accepted, **inert** | parallel downloads are unimplemented; the value only reaches a log field |
+
+The `api` rules are enforced by `SourceConfig.from_mapping`, so a `cursor_api` source with `concurrency: 2` fails to load with an issue at `access.rate_limit.concurrency` that names the offending pagination type. The `catalog` and `file` rows are accepted for backward compatibility only — setting the key there buys nothing, so leave it at `1` rather than implying throughput the runtime does not deliver.
+
+#### The precondition, stated plainly
+
+Because JANUS speculates, it *will* eventually request a page past the last one. The API must answer that request in one of exactly two ways:
+
+1. an **empty `200`** (or a short page), or
+2. one of the statuses in `access.pagination.past_end_status_codes` — by default `404` and `416`.
+
+Both are read as a clean end of stream: no artifact is written, no counter moves, the request stream finishes normally, and extraction continues with the next request input.
+
+Anything else is a genuine failure and will dead-letter the request input, by design:
+
+- a `500`, a timeout, or a redirect loop past the end;
+- a `200` that repeats the last page forever (JANUS cannot detect this and will loop until the page-number space is exhausted — do not enable concurrency on such an API);
+- a past-end status on the **first** request of a request stream — that request was never speculative, so a `404` there means a broken endpoint, not an ended stream;
+- a past-end status that a later, already-resolved page contradicts by returning records. That raises `ApiPastEndConflictError` naming the conflicting request index, rather than silently truncating the dataset.
+
+`past_end_status_codes` must be 4xx and may not include `408` or `429` — a status cannot mean both "retry me" and "the stream ended". An explicit empty list (`past_end_status_codes: []`) opts out entirely and restores raise-on-4xx behavior.
+
+
+#### How to reduce over-fetch to zero
+
+Without a known total, ending the stream costs at most `concurrency − 1` wasted in-flight requests, all cancelled the moment the end is detected, and the past-end page itself is requested exactly once. That is the structural bound.
+
+If the payload exposes a record total, the bound becomes exact and over-fetch drops to **zero**:
+
+- set `access.pagination.total_count_field` to its dotted path (e.g. `meta.total`); or
+- if the total is somewhere the generic discovery cannot reach, override `ApiHook.resolve_total_records` in a source hook.
+
+Without either, JANUS still probes common names (`total`, `totalCount`, `totalElements`, … at the root or inside `meta` / `metadata` / `pagination`). `count` is deliberately **not** probed — many APIs use it for "records on this page", which would produce a one-page ceiling. If your total really is `count`, opt in with `total_count_field: count`.
+
+The tail-degradation rule makes an unreliable total safe: past the reported total, JANUS does **not** stop — it drops to one in-flight request at a time and keeps going until the paginator or a past-end status says the stream is over. A stale, cached, or shrinking total costs a little parallelism at the tail and can never truncate a dataset.
+
+#### When to leave it at 1
+
+- **Tight rate limits.** Receita Federal is capped at 6 req/min; concurrency cannot beat a throttle, it only makes the queue deeper.
+- **Endpoints documented as single-writer or unstable under parallel reads.**
+- **Any API whose past-end behavior you have not verified** with the three commands above. This is the default answer. `concurrency: 1` is always correct; `concurrency: 10` is correct only with evidence.
+
+#### What a concurrent run reports
+
+Concurrent runs emit extra extraction metadata that sequential runs do not: `speculative_request_count`, `speculative_discarded_count`, `past_end_terminated_count`, `past_end_status`, `total_records_reported`, and `lookahead_ceiling_source`. These are the *only* legitimate differences between a concurrent and a sequential run of the same source — artifacts, records, and checkpoints are identical. `pagination_concurrency` is reported on every run.
 
 ### `extraction`
 

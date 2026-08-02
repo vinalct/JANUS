@@ -33,6 +33,7 @@ access:
     page_param: page
     size_param: page_size
     page_size: 100
+    past_end_status_codes: [404, 416]
   rate_limit:
     requests_per_minute: 30
     concurrency: 1
