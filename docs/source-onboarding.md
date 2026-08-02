@@ -309,6 +309,50 @@ Anything else is a genuine failure and will dead-letter the request input, by de
 
 `past_end_status_codes` must be 4xx and may not include `408` or `429` — a status cannot mean both "retry me" and "the stream ended". An explicit empty list (`past_end_status_codes: []`) opts out entirely and restores raise-on-4xx behavior.
 
+#### How to check a new API in three commands
+
+Verify the precondition before you raise `concurrency`. Export your token once, then run three requests: the **first** page, the **last** page with data, and **one past it**. Only the third answer decides whether concurrency is safe.
+
+```bash
+export TOKEN="…"                 # never paste the token into the YAML or a commit
+BASE=https://api.portaldatransparencia.gov.br/api-de-dados/orgaos-siape
+H="chave-api-dados: $TOKEN"
+
+# 1. first page — confirms auth, page_size, and that pagina/tamanhoPagina are honored
+curl -s -o /dev/null -w '%{http_code} ' -H "$H" "$BASE?pagina=1&tamanhoPagina=15"
+curl -s -H "$H" "$BASE?pagina=1&tamanhoPagina=15" | jq 'length'
+
+# 2. last page with data — walk or bisect until the count drops below page_size
+curl -s -H "$H" "$BASE?pagina=43&tamanhoPagina=15" | jq 'length'
+
+# 3. one page past the end — this is the answer that matters
+curl -s -w '\nHTTP %{http_code}\n' -H "$H" "$BASE?pagina=44&tamanhoPagina=15"
+```
+
+Worked example, run against `orgaos-siape` on **2026-08-02** (token redacted):
+
+| Request | Status | Records | Reading |
+|---|---|---|---|
+| `pagina=1` | `200` | 15 | full page — stream continues |
+| `pagina=43` | `200` | 10 | short page — this is the last page (640 records total) |
+| `pagina=44` | `200` | 0 (`[]`) | **empty `200`** — precondition 1 satisfied ✅ |
+| `pagina=99999` | `200` | 0 (`[]`) | still empty, never a 4xx — no surprise far past the end |
+
+That endpoint qualifies for `concurrency > 1`. Two checks are worth adding before you trust the result:
+
+- **Probe far past the end** (`pagina=99999`), not just `last + 1`. Speculation overshoots by up to `concurrency − 1`, and some endpoints change their answer only at large page numbers.
+- **Confirm the page parameter is actually honored.** Compare the *bodies* of two different pages, not just their status:
+
+  ```bash
+  curl -s -H "$H" "$BASE?pagina=1&tamanhoPagina=15" | sha256sum
+  curl -s -H "$H" "$BASE?pagina=2&tamanhoPagina=15" | sha256sum
+  ```
+
+  Identical digests mean the endpoint ignores `pagina` and serves one fixed list. `/api-de-dados/licitacoes/modalidades` does exactly this — every page number and every `tamanhoPagina` returns the same 14 records. Such an endpoint must stay at `concurrency: 1`: it is a single-page stream, so speculation buys nothing, and if its record count ever reached `page_size` JANUS would page forever.
+
+Record the date and the observed answer in a YAML comment next to `past_end_status_codes`. An endpoint that answers with an empty `200` never exercises that list at all — the paginator's short-page rule ends the stream first — so leaving it at the default is correct; the comment is what proves someone checked.
+
+One caveat seen in practice: a `4xx` past the end is only evidence of end-of-stream if it is **reproducible**. `licitacoes/ugs` intermittently answers `400 {"Erro na API":"Erro ao executar a consulta"}` at extreme page numbers while answering an empty `200` at its real boundary — that is a transient server fault, and adding `400` to `past_end_status_codes` would convert a real error into a silent truncation. Re-run the third command a few times before declaring a status terminal.
 
 #### How to reduce over-fetch to zero
 
