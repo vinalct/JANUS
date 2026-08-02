@@ -1,6 +1,23 @@
+"""Spark writers for the bronze zone and for path-based Spark outputs.
+
+A full refresh overwrites bronze *in place* (``INSERT OVERWRITE``) rather than recreating the
+table, so the Iceberg snapshot log grows instead of resetting and time travel reaches previous
+runs. :mod:`janus.writers.overwrite` decides between that and the history-resetting
+``REPLACE TABLE`` fallback; this module only reads the target's state, executes the chosen
+statement and records which one ran in the write metadata.
+
+The cost of retaining history is real and deliberate: **snapshots are never
+expired here.** Every full refresh keeps the previous run's data files until someone expires
+them, so the bronze zone now grows per run where it previously did not. For the current source
+set — small daily API refreshes plus periodic archives — that is negligible; at CNPJ scale it
+is the first thing to revisit. Expiration needs a retention window, a schedule and somewhere to
+run, which makes it an operational policy rather than a writer concern.
+"""
+
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -14,7 +31,9 @@ from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers.identifiers import quote_identifier
 from janus.writers.overwrite import (
     build_create_table_as_select_sql,
+    build_insert_overwrite_sql,
     build_replace_table_as_select_sql,
+    plan_full_refresh_overwrite,
 )
 
 if TYPE_CHECKING:
@@ -177,6 +196,7 @@ class SparkDatasetWriter:
         if count_records and resolved_records_written is None:
             resolved_records_written = prepared_frame.count()
 
+        write_metadata: dict[str, str] = dict(metadata or {})
         spark = prepared_frame.sparkSession
         temp_view_name = f"janus_bronze_{plan.source.source_id}_{uuid4().hex}"
 
@@ -193,13 +213,45 @@ class SparkDatasetWriter:
             if effective_mode == "ignore" and table_exists:
                 pass
             elif effective_mode == "overwrite" and table_exists:
-                spark.sql(
-                    build_replace_table_as_select_sql(
-                        table_identifier=table_identifier,
-                        source_view=temp_view_name,
-                        partition_columns=partition_columns,
-                    )
+                target_columns, target_partitions = _read_target_table_state(
+                    spark, table_identifier
                 )
+                overwrite_plan = plan_full_refresh_overwrite(
+                    source_columns=tuple(
+                        (field.name, field.dataType.simpleString())
+                        for field in prepared_frame.schema.fields
+                    ),
+                    target_columns=target_columns,
+                    configured_partitions=partition_columns,
+                    target_partitions=target_partitions,
+                )
+                write_metadata["overwrite_mechanism"] = overwrite_plan.mechanism
+                if not overwrite_plan.preserves_history:
+                    write_metadata["history_reset_reason"] = overwrite_plan.reason
+
+                if overwrite_plan.mechanism == "replace_table":
+                    spark.sql(
+                        build_replace_table_as_select_sql(
+                            table_identifier=table_identifier,
+                            source_view=temp_view_name,
+                            partition_columns=partition_columns,
+                        )
+                    )
+                else:
+                    add_columns_sql = build_add_columns_sql(
+                        table_identifier=table_identifier,
+                        columns=list(overwrite_plan.add_columns),
+                    )
+                    if add_columns_sql is not None:
+                        spark.sql(add_columns_sql)
+                    with _static_partition_overwrite(spark):
+                        spark.sql(
+                            build_insert_overwrite_sql(
+                                table_identifier=table_identifier,
+                                source_view=temp_view_name,
+                                projection=overwrite_plan.projection,
+                            )
+                        )
             elif effective_mode == "append" and table_exists:
                 spark.sql(f"INSERT INTO {quoted_table} SELECT * FROM {quoted_temp_view}")
             else:
@@ -222,7 +274,7 @@ class SparkDatasetWriter:
             mode=effective_mode,
             records_written=resolved_records_written,
             partition_by=partition_columns,
-            metadata=metadata,
+            metadata=write_metadata,
         )
 
     def _merge_bronze_iceberg(
@@ -365,6 +417,52 @@ def build_add_columns_sql(
         f"{quote_identifier(name)} {column_type}" for name, column_type in columns
     )
     return f"ALTER TABLE {quoted_table} ADD COLUMNS ({rendered})"
+
+
+def _read_target_table_state(
+    spark: Any, table_identifier: str
+) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...] | None]:
+    """Return ``(columns, partition_columns)`` for an existing Iceberg table."""
+    columns = tuple(
+        (field.name, field.dataType.simpleString())
+        for field in spark.table(table_identifier).schema.fields
+    )
+    try:
+        partitions_schema = spark.table(f"{table_identifier}.partitions").schema
+        partition_field = next(
+            (field for field in partitions_schema.fields if field.name == "partition"),
+            None,
+        )
+        if partition_field is None:
+            return columns, ()
+        # JANUS only ever emits identity partitioning, so the struct's field names are the
+        # column names verbatim.
+        return columns, tuple(field.name for field in partition_field.dataType.fields)
+    except Exception:
+        return columns, None
+
+
+@contextmanager
+def _static_partition_overwrite(spark: Any) -> Iterator[None]:
+    """Force ``INSERT OVERWRITE`` to replace *every* partition, then restore the session.
+
+    Iceberg resolves ``INSERT OVERWRITE`` against ``spark.sql.sources.partitionOverwriteMode``:
+    ``static`` (Spark's default) deletes all rows when no PARTITION clause is given, while
+    ``dynamic`` deletes only the partitions the SELECT produces. A full refresh means *all*, so
+    the mode is pinned for the statement rather than inherited — a cluster profile or a future
+    environment config that sets ``dynamic`` globally must not silently turn a full refresh into
+    a partial one that leaves the previous run's partitions behind.
+    """
+    key = "spark.sql.sources.partitionOverwriteMode"
+    previous = spark.conf.get(key, None)
+    spark.conf.set(key, "static")
+    try:
+        yield
+    finally:
+        if previous is None:
+            spark.conf.unset(key)
+        else:
+            spark.conf.set(key, previous)
 
 
 def _dedupe_for_merge(
