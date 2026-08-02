@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Self, overload
+from typing import Any, Final, Self, overload
 
 SUPPORTED_SOURCE_TYPES = frozenset({"api", "catalog", "file"})
 SUPPORTED_STRATEGIES = SUPPORTED_SOURCE_TYPES
@@ -116,11 +116,24 @@ class RequestInputsConfig:
         return False
 
 
+_INVALID_DATE_BOUND: Final[date] = date(1, 1, 1)
+
+
 @dataclass(frozen=True, slots=True)
 class DateWindowRequestInputsConfig(RequestInputsConfig):
     start: date
     end: date
     step: str
+
+    def __post_init__(self) -> None:
+        """Reject the placeholder values a failed parse used to substitute."""
+        if _INVALID_DATE_BOUND in (self.start, self.end):
+            raise ValueError(
+                "date_window start/end must be real dates; 0001-01-01 is a "
+                "parse-failure placeholder and is not a valid window bound"
+            )
+        if not self.step:
+            raise ValueError("date_window step must not be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -716,9 +729,10 @@ def _build_request_inputs_config(
     if request_input_type == "combined":
         return _build_combined_request_inputs_config(data, issues)
 
-    return _parse_request_input_entry(
+    entry = _parse_request_input_entry(
         data, request_input_type, "access.request_inputs", issues
     )
+    return entry if entry is not None else RequestInputsConfig(type="none")
 
 
 def _parse_request_input_entry(
@@ -726,8 +740,13 @@ def _parse_request_input_entry(
     input_type: str,
     prefix: str,
     issues: list[ValidationIssue],
-) -> RequestInputsConfig:
-    """Parse one atomic request-input config from an already-validated dict."""
+) -> RequestInputsConfig | None:
+    """Parse one atomic request-input config, or ``None`` when it cannot be built.
+
+    Returning ``None`` — rather than a config carrying placeholder values — keeps the
+    invalid state unrepresentable. Every ``None`` return is paired with at least one
+    recorded issue, so ``from_mapping`` still raises with the full, path-prefixed list.
+    """
     if input_type == "date_window":
         start = _require_date(data, "start", issues, prefix)
         end = _require_date(data, "end", issues, prefix)
@@ -741,10 +760,13 @@ def _parse_request_input_entry(
                 )
             )
 
+        if start is None or end is None or not step:
+            return None 
+
         return DateWindowRequestInputsConfig(
             type=input_type,
-            start=start or date.min,
-            end=end or date.min,
+            start=start,
+            end=end,
             step=step,
         )
 
@@ -765,6 +787,9 @@ def _parse_request_input_entry(
                 )
             )
         distinct = _optional_bool(data, "distinct", issues, prefix, default=False)
+
+        if not namespace or not table_name:
+            return None
 
         return IcebergRowsRequestInputsConfig(
             type=input_type,
@@ -821,6 +846,8 @@ def _build_combined_request_inputs_config(
             continue
 
         sub_config = _parse_request_input_entry(sub_raw, sub_type, sub_prefix, issues)
+        if sub_config is None:
+            continue
 
         sub_fields = _request_input_field_names_for(sub_config)
         conflicts = seen_fields.intersection(sub_fields)

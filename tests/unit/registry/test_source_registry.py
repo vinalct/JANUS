@@ -578,6 +578,30 @@ def test_registry_rejects_invalid_date_window_request_inputs(tmp_path):
     assert "access.request_inputs.step: must be one of: day, month" in message
 
 
+def test_registry_rejects_an_inverted_date_window_request_input(tmp_path):
+    source_yaml = _valid_source_yaml("inverted_window_source", enabled=True).replace(
+        "  auth:\n"
+        "    type: none\n",
+        "  request_inputs:\n"
+        "    type: date_window\n"
+        "    start: 2025-03-31\n"
+        "    end: 2025-01-01\n"
+        "    step: month\n"
+        "  auth:\n"
+        "    type: none\n",
+        1,
+    )
+    project_root = _create_project(tmp_path, {"inverted_window.yaml": source_yaml})
+
+    with pytest.raises(SourceConfigValidationError) as exc_info:
+        load_registry(project_root)
+
+    assert (
+        "access.request_inputs.end: must be on or after access.request_inputs.start"
+        in str(exc_info.value)
+    )
+
+
 def test_registry_rejects_invalid_iceberg_request_inputs(tmp_path):
     source_yaml = _valid_source_yaml("broken_iceberg_source", enabled=True).replace(
         "  auth:\n"
