@@ -194,8 +194,9 @@ def _write(
     *,
     source_columns: tuple[tuple[str, str], ...] = BASE_COLUMNS,
     partition_by: list[str] | None = None,
+    source_id: str = "bronze_overwrite_fixture",
 ):
-    plan = _plan(tmp_path, partition_by=partition_by)
+    plan = _plan(tmp_path, partition_by=partition_by, source_id=source_id)
     writer = SparkDatasetWriter(
         StorageLayout.from_environment_config(ENVIRONMENT_CONFIG, tmp_path)
     )
@@ -351,7 +352,31 @@ def test_temp_view_is_dropped_when_the_statement_raises(tmp_path):
     assert len(session.dropped_temp_views) == 1
 
 
-def _plan(tmp_path: Path, *, partition_by: list[str] | None = None) -> ExecutionPlan:
+def test_dotted_source_id_stages_through_a_single_quoted_view(tmp_path):
+    """Regression: an unsanitized name would be quoted as `janus_bronze_receita`.`federal_...`.
+
+    Spark would then look for a temp view inside a namespace nobody configured and fail the
+    write with an AnalysisException naming a table that does not exist.
+    """
+    session = FakeSparkSession()
+
+    result = _write(tmp_path, session, source_id="receita.federal.cnpj")
+
+    view_name = session.dropped_temp_views[0]
+    assert "." not in view_name
+    insert = next(
+        statement for statement in session.statements if "INSERT OVERWRITE" in statement
+    )
+    assert f"`{view_name}`" in insert
+    assert result.metadata_as_dict()["overwrite_mechanism"] == "insert_overwrite"
+
+
+def _plan(
+    tmp_path: Path,
+    *,
+    partition_by: list[str] | None = None,
+    source_id: str = "bronze_overwrite_fixture",
+) -> ExecutionPlan:
     run_context = RunContext.create(
         run_id="run-bronze-overwrite-001",
         environment="local",
@@ -359,12 +384,17 @@ def _plan(tmp_path: Path, *, partition_by: list[str] | None = None) -> Execution
         started_at=datetime(2026, 7, 8, 12, 0, tzinfo=UTC),
     )
     return ExecutionPlan.from_source_config(
-        _source_config(tmp_path, partition_by=partition_by), run_context
+        _source_config(tmp_path, partition_by=partition_by, source_id=source_id),
+        run_context,
     )
 
 
-def _source_config(tmp_path: Path, *, partition_by: list[str] | None) -> SourceConfig:
-    source_id = "bronze_overwrite_fixture"
+def _source_config(
+    tmp_path: Path,
+    *,
+    partition_by: list[str] | None,
+    source_id: str = "bronze_overwrite_fixture",
+) -> SourceConfig:
     payload: dict[str, Any] = {
         "source_id": source_id,
         "name": source_id,

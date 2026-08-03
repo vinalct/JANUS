@@ -19,7 +19,6 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 
 from janus.models import (
     BronzeWriteIntent,
@@ -28,7 +27,7 @@ from janus.models import (
     resolve_bronze_write_intent,
 )
 from janus.utils.storage import StorageLayout, bronze_table_identifier
-from janus.writers.identifiers import quote_identifier
+from janus.writers.identifiers import build_bronze_temp_view_name, quote_identifier
 from janus.writers.overwrite import (
     build_create_table_as_select_sql,
     build_insert_overwrite_sql,
@@ -198,7 +197,7 @@ class SparkDatasetWriter:
 
         write_metadata: dict[str, str] = dict(metadata or {})
         spark = prepared_frame.sparkSession
-        temp_view_name = f"janus_bronze_{plan.source.source_id}_{uuid4().hex}"
+        temp_view_name = build_bronze_temp_view_name(plan.source.source_id)
 
         prepared_frame.createOrReplaceTempView(temp_view_name)
         try:
@@ -326,7 +325,7 @@ class SparkDatasetWriter:
 
         merge_source = deduped.localCheckpoint(eager=True) if table_exists else deduped
 
-        temp_view_name = f"janus_bronze_{plan.source.source_id}_{uuid4().hex}"
+        temp_view_name = build_bronze_temp_view_name(plan.source.source_id)
         merge_source.createOrReplaceTempView(temp_view_name)
         try:
             spark.sql(
