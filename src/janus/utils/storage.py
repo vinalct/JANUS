@@ -137,14 +137,14 @@ def bronze_table_identifier(
     table_name: str | None = None,
 ) -> str:
     """Return the deterministic Iceberg table identifier for one bronze target."""
-    resolved_namespace = _sanitize_identifier_segment(namespace or ICEBERG_BRONZE_NAMESPACE)
+    resolved_namespace = sanitize_identifier_segment(namespace or ICEBERG_BRONZE_NAMESPACE)
     if not resolved_namespace:
         resolved_namespace = ICEBERG_BRONZE_NAMESPACE
 
-    resolved_table = _sanitize_identifier_segment(table_name) if table_name else ""
+    resolved_table = sanitize_identifier_segment(table_name) if table_name else ""
     if not resolved_table:
         raw_parts = [part for part in Path(configured_path).parts if part not in {"", ".", "/"}]
-        normalized_parts = [_sanitize_identifier_segment(part) for part in raw_parts]
+        normalized_parts = [sanitize_identifier_segment(part) for part in raw_parts]
         normalized_parts = [part for part in normalized_parts if part]
 
         bronze_indexes = [
@@ -154,12 +154,28 @@ def bronze_table_identifier(
             normalized_parts = normalized_parts[bronze_indexes[-1] + 1 :]
 
         if not normalized_parts:
-            fallback = _sanitize_identifier_segment(fallback_name)
+            fallback = sanitize_identifier_segment(fallback_name)
             normalized_parts = [fallback or "dataset"]
 
         resolved_table = "__".join(normalized_parts)
 
     return f"{resolved_namespace}.{resolved_table}"
+
+
+def sanitize_identifier_segment(value: str) -> str:
+    """Normalize one identifier segment to ``[a-z0-9_]``, or ``""`` if nothing survives.
+
+    Public because it is the single normalization every JANUS identifier goes through
+    before it reaches a catalog or a SQL statement — the bronze table identifier above and
+    the bronze staging-view name in :mod:`janus.writers.identifiers`. A second regex
+    elsewhere would be a second answer to "what is a safe identifier".
+    """
+    normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip().lower()).strip("_")
+    if not normalized:
+        return ""
+    if normalized[0].isdigit():
+        return f"t_{normalized}"
+    return normalized
 
 
 def _output_target_for_zone(plan: ExecutionPlan, zone: str) -> OutputTarget:
@@ -217,12 +233,3 @@ def _validate_zone(zone: str) -> None:
     if zone not in SUPPORTED_STORAGE_ZONES:
         allowed = ", ".join(sorted(SUPPORTED_STORAGE_ZONES))
         raise ValueError(f"zone must be one of: {allowed}")
-
-
-def _sanitize_identifier_segment(value: str) -> str:
-    normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip().lower()).strip("_")
-    if not normalized:
-        return ""
-    if normalized[0].isdigit():
-        return f"t_{normalized}"
-    return normalized

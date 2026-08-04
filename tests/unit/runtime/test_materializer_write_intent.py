@@ -120,6 +120,12 @@ def test_full_refresh_multi_batch_preserves_the_insert_downgrade(tmp_path):
         "insert",
         "insert",
     ]
+    # Batch 1 overwrites the table — now via INSERT OVERWRITE, which keeps the snapshot log —
+    # and batches 2+ append into what it just wrote instead of overwriting it again.
+    assert [intent.reported_mode for intent in writer.intents] == ["overwrite"] * 3
+    assert all(
+        "downgraded to insert" in intent.reason for intent in writer.intents[1:]
+    )
 
 
 def test_incremental_with_keys_merges_every_batch_without_downgrade(tmp_path):

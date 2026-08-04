@@ -431,6 +431,17 @@ During execution, JANUS passes an explicit Spark schema to the reader when the n
 - `spark.partition_by` is an optional list of partition columns.
 - `spark.read_options` is an optional string-to-string mapping for reader options such as CSV header, separator, or encoding.
 
+A source that combines `extraction.mode: full_refresh` with `spark.write_mode: overwrite` and an Iceberg
+bronze target **keeps its snapshot history across runs**. Each run replaces every row, but the previous
+run stays readable: you can `SELECT ... VERSION AS OF <snapshot_id>` to compare against yesterday's bronze,
+or roll the table back to it after a bad load. Query `<table>.history` and `<table>.snapshots` to see what
+is available. Two things are worth knowing as a source owner. First, a **schema or partition change resets
+that history by design** — if a run drops a column, changes a column's type, or changes
+`spark.partition_by`, JANUS recreates the table and starts a fresh snapshot log, recording
+`history_reset_reason` in the run metadata so the reset is visible rather than assumed. Adding a new column
+does *not* reset history. Second, snapshots are retained indefinitely — nothing expires them today — so the
+storage a full-refresh source occupies grows with each run.
+
 ### `outputs`
 
 - Each source defines `outputs.raw`, `outputs.bronze`, and `outputs.metadata`.
