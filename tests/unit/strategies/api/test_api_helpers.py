@@ -18,8 +18,8 @@ from janus.strategies.api import (
     ApiTransportError,
     UrllibApiTransport,
 )
+from janus.strategies.api.artifacts import _raw_relative_path
 from janus.strategies.api.core import (
-    _raw_relative_path,
     _request_input_key,
 )
 from janus.strategies.api.pagination import (

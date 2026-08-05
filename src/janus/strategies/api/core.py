@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import contextlib
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from hashlib import sha256
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import Any
 
 from janus.checkpoints import (
     CheckpointState,
@@ -18,11 +16,9 @@ from janus.checkpoints import (
     can_continue_after_dead_letter,
 )
 from janus.models import (
-    CombinedRequestInputsConfig,
     ExecutionPlan,
     ExtractedArtifact,
     ExtractionResult,
-    IcebergRowsRequestInputsConfig,
     SourceConfig,
     WriteResult,
 )
@@ -32,7 +28,6 @@ from janus.strategies.common import (
     _compare_checkpoint_values,
     _default_storage_layout,
     _freeze_string_mapping,
-    _raw_page_path,
     _raw_run_path_prefix,
     _request_input_key,
     _stringify_mapping,
@@ -43,7 +38,6 @@ from janus.strategies.http import (
     ApiResponse,
     ApiTransport,
     HttpRequestThrottle,
-    HttpStrategyError,
     PayloadDecodeError,
     RetryErrorPolicy,
     UrllibApiTransport,
@@ -59,12 +53,34 @@ from janus.utils.logging import StructuredLogger, redact_url
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 
+from .artifacts import (
+    _raw_relative_path,
+    _rediscover_all_artifacts_for_input,
+    _rediscover_raw_artifacts,
+)
+from .errors import (
+    ApiPastEndConflictError,
+    ApiPayloadError,
+    ApiResponseError,
+    ApiStrategyError,
+)
+from .metadata import (
+    _request_input_dead_letter_metadata,
+    _request_input_field_names,
+    _request_input_metadata,
+    _speculation_metadata,
+)
 from .pagination import (
     OffsetPaginator,
     PageNumberPaginator,
     PaginationState,
     _resume_pagination_state,
     build_paginator,
+)
+from .records import (
+    _default_records_from_payload,
+    _lookup_field,
+    _string_value,
 )
 from .request_inputs import (
     ApiParameterBindingError,
@@ -75,18 +91,31 @@ from .request_inputs import (
 )
 from .speculation import (
     SpeculativePaginationPolicy,
+    SubmittedApiRequest,
+    _cancel_pending,
+    _may_submit,
+    _predicted_next_pagination_state,
+    _raise_on_past_end_conflict,
+    _resolve_total_records,
+    _supports_concurrent_pagination,
     resolve_speculative_policy,
-    total_records_from_payload,
 )
 
+__all__ = [
+    "CONCURRENCY_ONLY_METADATA_KEYS",
+    "SUPPORTED_API_PAYLOAD_FORMATS",
+    "ApiHook",
+    "ApiPastEndConflictError",
+    "ApiPayloadError",
+    "ApiResponseError",
+    "ApiStrategy",
+    "ApiStrategyError",
+    "SubmittedApiRequest",
+    "_raw_relative_path",
+    "_request_input_key",
+]
+
 SUPPORTED_API_PAYLOAD_FORMATS = frozenset({"binary", "json", "jsonl", "text"})
-RAW_FILE_SUFFIXES = {
-    "binary": ".bin",
-    "json": ".json",
-    "jsonl": ".jsonl",
-    "text": ".txt",
-}
-DEFAULT_RECORD_KEYS = ("records", "items", "results", "data", "value")
 
 CONCURRENCY_ONLY_METADATA_KEYS = frozenset(
     {
@@ -98,41 +127,6 @@ CONCURRENCY_ONLY_METADATA_KEYS = frozenset(
         "total_records_reported",
     }
 )
-
-
-class ApiStrategyError(HttpStrategyError):
-    """Base failure for API strategy execution."""
-
-
-class ApiResponseError(ApiStrategyError):
-    """Raised when an API call finished with a non-success response."""
-
-    def __init__(self, response: ApiResponse) -> None:
-        self.response = response
-        message = (
-            f"API request failed with status {response.status_code} for "
-            f"{redact_url(response.request.full_url())}"
-        )
-        super().__init__(message)
-
-
-class ApiPastEndConflictError(ApiStrategyError):
-    """Raised when a past-end status is contradicted by a later page that returned records."""
-
-    def __init__(self, response: ApiResponse, *, conflicting_request_index: int) -> None:
-        self.response = response
-        self.conflicting_request_index = conflicting_request_index
-        message = (
-            f"API returned past-end status {response.status_code} for "
-            f"{redact_url(response.request.full_url())}, but request index "
-            f"{conflicting_request_index} returned records"
-        )
-        super().__init__(message)
-
-
-class ApiPayloadError(ApiStrategyError):
-    """Raised when the configured payload format cannot be decoded."""
-
 
 _RETRY_POLICY = RetryErrorPolicy(
     transport_error_factory=ApiStrategyError,
@@ -232,13 +226,6 @@ class ApiHook(SourceHook):
         del plan
         del checkpoint_value
         return None
-
-
-@dataclass(frozen=True, slots=True)
-class SubmittedApiRequest:
-    pagination_state: PaginationState
-    request: ApiRequest
-    future: Future[tuple[ApiResponse, Any, int]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1368,365 +1355,3 @@ class ApiStrategy(BaseStrategy):
         if value is not None:
             return value
         return os.getenv(name)
-
-
-def _supports_concurrent_pagination(
-    paginator: Any,
-    concurrency: int,
-) -> TypeGuard[PageNumberPaginator | OffsetPaginator]:
-    return concurrency > 1 and isinstance(paginator, PageNumberPaginator | OffsetPaginator)
-
-
-def _resolve_total_records(
-    plan: ExecutionPlan,
-    request: ApiRequest,
-    response: ApiResponse,
-    payload: Any,
-    *,
-    api_hook: ApiHook | None,
-    policy: SpeculativePaginationPolicy | None,
-    logger: StructuredLogger | None,
-) -> tuple[int | None, str | None]:
-    """Return the total this page advertises and where it came from."""
-    if policy is None:
-        return None, None
-
-    if api_hook is not None:
-        hook_total = api_hook.resolve_total_records(plan, request, response, payload)
-        if hook_total is not None:
-            if isinstance(hook_total, int) and not isinstance(hook_total, bool) and hook_total >= 0:
-                return hook_total, "hook"
-            if logger is not None:
-                logger.warning(
-                    "api_total_records_invalid",
-                    hook_value=repr(hook_total),
-                    hook_value_type=type(hook_total).__name__,
-                    request_url=redact_url(request.full_url()),
-                )
-
-    payload_total = total_records_from_payload(
-        payload,
-        total_count_field=policy.total_count_field,
-    )
-    if payload_total is None:
-        return None, None
-    return payload_total, "payload"
-
-
-def _may_submit(request_index: int, ceiling: int | None, next_request_index: int) -> bool:
-    """Allow submission ahead of evidence only up to the reported ceiling.
-
-    Above the ceiling we do not stop — we degrade to an in-flight window of one, i.e. the index
-    is submitted only when it is the very next one to commit. So a stale or wrong total costs a
-    little parallelism at the tail and can never truncate the dataset: the authority on "the
-    stream ended" stays with the paginator's short/empty page rule and the past-end status.
-    """
-    if ceiling is None or request_index <= ceiling:
-        return True
-    return request_index == next_request_index
-
-
-def _cancel_pending(
-    pending: dict[int, SubmittedApiRequest],
-    logger: StructuredLogger | None,
-    *,
-    next_request_index: int,
-) -> int:
-    """Cancel every outstanding speculative request and report how many were discarded."""
-    discarded = 0
-    for submitted in pending.values():
-        if submitted.future.cancel() or not submitted.future.done():
-            discarded += 1
-    pending.clear()
-    if discarded and logger is not None:
-        logger.info(
-            "api_pagination_speculation_cancelled",
-            cancelled_count=discarded,
-            next_request_index=next_request_index,
-        )
-    return discarded
-
-
-def _raise_on_past_end_conflict(
-    pending: dict[int, SubmittedApiRequest],
-    response: ApiResponse,
-    past_end_index: int,
-    logger: StructuredLogger | None,
-) -> None:
-    """Fail loudly when a *later* page already proved the stream did not end here."""
-    for index, submitted in sorted(pending.items()):
-        if index <= past_end_index or not submitted.future.done() or submitted.future.cancelled():
-            continue
-        try:
-            later_response, later_payload, _ = submitted.future.result(timeout=0)
-        except Exception:  # a later failure proves nothing; the past-end read stands
-            continue
-        if 200 <= later_response.status_code < 300 and _default_records_from_payload(later_payload):
-            if logger is not None:
-                logger.warning(
-                    "api_pagination_past_end_conflict",
-                    request_index=past_end_index,
-                    status_code=response.status_code,
-                    request_url=redact_url(response.request.full_url()),
-                    conflicting_request_index=index,
-                )
-            raise ApiPastEndConflictError(response, conflicting_request_index=index)
-
-
-def _speculation_metadata(
-    *,
-    concurrent_pagination_used: bool,
-    speculative_requests: int,
-    discarded_requests: int,
-    past_end_terminated_count: int,
-    past_end_status: int | None,
-    lookahead_ceiling_source: str | None,
-    total_records_reported: int | None,
-) -> dict[str, str]:
-    """Build the concurrency-only metadata block, empty for a purely sequential run."""
-    if not concurrent_pagination_used:
-        return {}
-    metadata = {
-        "speculative_request_count": str(speculative_requests),
-        "speculative_discarded_count": str(discarded_requests),
-        "past_end_terminated_count": str(past_end_terminated_count),
-        "lookahead_ceiling_source": lookahead_ceiling_source or "none",
-    }
-    if past_end_status is not None:
-        metadata["past_end_status"] = str(past_end_status)
-    if total_records_reported is not None:
-        metadata["total_records_reported"] = str(total_records_reported)
-    return metadata
-
-
-def _predicted_next_pagination_state(
-    paginator: PageNumberPaginator | OffsetPaginator,
-    pagination_state: PaginationState,
-) -> PaginationState | None:
-    return paginator.next_state(
-        pagination_state,
-        records_extracted=paginator.page_size,
-        payload=None,
-    )
-
-
-def _raw_relative_path(
-    raw_format: str,
-    pagination_state: PaginationState,
-    *,
-    request_input_index: int,
-    request_input_count: int,
-) -> Path:
-    return _raw_page_path(
-        pagination_state,
-        RAW_FILE_SUFFIXES[raw_format],
-        request_input_index=request_input_index,
-        request_input_count=request_input_count,
-    )
-
-
-def _request_input_metadata(plan: ExecutionPlan, request_input_count: int) -> dict[str, str]:
-    parameter_bindings = plan.source_config.access.parameter_bindings or {}
-    request_inputs = plan.source_config.access.request_inputs
-    metadata = {
-        "request_input_type": request_inputs.type,
-        "request_input_count": str(request_input_count),
-    }
-    if parameter_bindings:
-        metadata["bound_parameter_names"] = ",".join(sorted(parameter_bindings))
-    if request_inputs.type == "iceberg_rows" and isinstance(
-        request_inputs, IcebergRowsRequestInputsConfig
-    ):
-        metadata["upstream_namespace"] = request_inputs.namespace
-        metadata["upstream_table_name"] = request_inputs.table_name
-        metadata["upstream_column_names"] = ",".join(
-            sorted(
-                {
-                    str(column).strip()
-                    for column in request_inputs.columns.values()
-                    if str(column).strip()
-                }
-            )
-        )
-    if request_inputs.type == "combined" and isinstance(
-        request_inputs, CombinedRequestInputsConfig
-    ):
-        for sub_ri in request_inputs.inputs:
-            if isinstance(sub_ri, IcebergRowsRequestInputsConfig):
-                metadata["upstream_namespace"] = sub_ri.namespace
-                metadata["upstream_table_name"] = sub_ri.table_name
-                metadata["upstream_column_names"] = ",".join(
-                    sorted(
-                        {
-                            str(column).strip()
-                            for column in sub_ri.columns.values()
-                            if str(column).strip()
-                        }
-                    )
-                )
-                break
-    return metadata
-
-
-
-def _request_input_dead_letter_metadata(
-    *,
-    request_input: Mapping[str, Any] | None,
-    request_input_index: int,
-    request_input_count: int,
-    request: ApiRequest,
-) -> dict[str, str]:
-    metadata = {
-        "request_input_index": str(request_input_index),
-        "request_input_count": str(request_input_count),
-        "request_url": request.full_url(),
-    }
-    field_names = _request_input_field_names(request_input)
-    if field_names:
-        metadata["request_input_field_names"] = ",".join(field_names)
-    return metadata
-
-
-def _request_input_field_names(
-    request_input: Mapping[str, Any] | None,
-) -> tuple[str, ...]:
-    if not request_input:
-        return ()
-    return tuple(sorted(str(field_name) for field_name in request_input))
-
-
-
-
-def _pages_dir(
-    plan: ExecutionPlan,
-    storage_layout: StorageLayout,
-    request_input_index: int,
-    request_input_count: int,
-) -> Path:
-    """Return the raw subdirectory for one request input, mirroring _raw_relative_path."""
-    raw_dir = storage_layout.resolve_output(plan, "raw").resolved_path
-    if request_input_count > 1:
-        return raw_dir / f"request-input-{request_input_index:06d}"
-    return raw_dir / "pages"
-
-
-def _rediscover_all_artifacts_for_input(
-    plan: ExecutionPlan,
-    storage_layout: StorageLayout,
-    request_input_index: int,
-    request_input_count: int,
-) -> list[ExtractedArtifact]:
-    """Return all raw artifacts written for a fully completed request input."""
-    raw_format = plan.source_config.outputs.raw.format
-    suffix = RAW_FILE_SUFFIXES.get(raw_format, "")
-    directory = _pages_dir(plan, storage_layout, request_input_index, request_input_count)
-
-    if not directory.exists():
-        return []
-
-    candidates: list[tuple[int, Path]] = []
-    for path in directory.glob(f"*{suffix}"):
-        stem = path.stem
-        for prefix, start in (("page-", 5), ("offset-", 7), ("cursor-", 7), ("response-", 9)):
-            if stem.startswith(prefix):
-                with contextlib.suppress(ValueError):
-                    candidates.append((int(stem[start:]), path))
-                break
-
-    artifacts = []
-    for _, path in sorted(candidates):
-        checksum = sha256(path.read_bytes()).hexdigest()
-        artifacts.append(ExtractedArtifact(path=str(path), format=raw_format, checksum=checksum))
-    return artifacts
-
-
-def _rediscover_raw_artifacts(
-    plan: ExecutionPlan,
-    storage_layout: StorageLayout,
-    progress: dict[str, Any],
-    request_input_index: int = 1,
-    request_input_count: int = 1,
-) -> list[ExtractedArtifact]:
-    """Re-discover raw artifact files written by a previous partial run."""
-    raw_format = plan.source_config.outputs.raw.format
-    suffix = RAW_FILE_SUFFIXES.get(raw_format, "")
-    directory = _pages_dir(plan, storage_layout, request_input_index, request_input_count)
-
-    if not directory.exists():
-        return []
-
-    last_page = progress.get("last_page_number")
-    last_offset = progress.get("last_offset")
-    artifacts: list[ExtractedArtifact] = []
-
-    if last_page is not None:
-        candidates: list[tuple[int, Path]] = []
-        for path in directory.glob(f"page-*{suffix}"):
-            stem = path.stem
-            if not stem.startswith("page-"):
-                continue
-            try:
-                num = int(stem[5:])
-            except ValueError:
-                continue
-            if num <= last_page:
-                candidates.append((num, path))
-        for _, path in sorted(candidates):
-            checksum = sha256(path.read_bytes()).hexdigest()
-            artifacts.append(
-                ExtractedArtifact(path=str(path), format=raw_format, checksum=checksum)
-            )
-
-    elif last_offset is not None:
-        candidates = []
-        for path in directory.glob(f"offset-*{suffix}"):
-            stem = path.stem
-            if not stem.startswith("offset-"):
-                continue
-            try:
-                num = int(stem[7:])
-            except ValueError:
-                continue
-            if num <= last_offset:
-                candidates.append((num, path))
-        for _, path in sorted(candidates):
-            checksum = sha256(path.read_bytes()).hexdigest()
-            artifacts.append(
-                ExtractedArtifact(path=str(path), format=raw_format, checksum=checksum)
-            )
-
-    return artifacts
-
-
-def _default_records_from_payload(payload: Any) -> Sequence[Any]:
-    if payload is None:
-        return ()
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, tuple):
-        return payload
-    if isinstance(payload, Mapping):
-        for key in DEFAULT_RECORD_KEYS:
-            nested = payload.get(key)
-            if isinstance(nested, list):
-                return nested
-        return (payload,)
-    return ()
-
-
-def _lookup_field(record: Mapping[str, Any], field_path: str) -> Any:
-    current: Any = record
-    for segment in field_path.split("."):
-        if not isinstance(current, Mapping):
-            return None
-        current = current.get(segment)
-    return current
-
-
-def _string_value(value: Any) -> str | None:
-    if value is None:
-        return None
-    rendered = str(value).strip()
-    if not rendered:
-        return None
-    return rendered

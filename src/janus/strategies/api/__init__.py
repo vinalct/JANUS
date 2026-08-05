@@ -1,8 +1,11 @@
 from janus.strategies.api.core import (
     ApiHook,
+    ApiStrategy,
+)
+from janus.strategies.api.errors import (
+    ApiPastEndConflictError,
     ApiPayloadError,
     ApiResponseError,
-    ApiStrategy,
     ApiStrategyError,
 )
 from janus.strategies.api.pagination import (
@@ -33,6 +36,7 @@ from janus.strategies.http import (
 __all__ = [
     "ApiClient",
     "ApiHook",
+    "ApiPastEndConflictError",
     "ApiPayloadError",
     "ApiRequest",
     "ApiResponse",
