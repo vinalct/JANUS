@@ -229,13 +229,31 @@ def test_combined_never_holds_a_sentinel_window():
     assert [sub.type for sub in combined.inputs] == ["iceberg_rows"]
 
 
-def test_no_date_min_sentinel_in_source_config():
-    """AC-1 guardrail: the parse-failure sentinel must not reappear in the model module."""
-    source = inspect.getsource(source_config_module)
+def _config_package_sources() -> dict[str, str]:
+    """Source text of every module that participates in source-config parsing."""
+    models_dir = Path(inspect.getfile(source_config_module)).parent
+    paths = [models_dir / "source_config.py", *sorted((models_dir / "config").glob("*.py"))]
+    return {
+        str(path.relative_to(models_dir)): path.read_text(encoding="utf-8")
+        for path in paths
+        if path.exists()
+    }
 
-    assert "date.min" not in source, (
-        "the date.min sentinel was reintroduced in janus.models.source_config; "
-        "see order-09 TASK-01 — an unbuildable request input must return None so the "
+
+def test_no_date_min_sentinel_in_the_config_package():
+    """AC-1 guardrail: the parse-failure sentinel must not reappear in the config modules."""
+    sources = _config_package_sources()
+
+    assert "source_config.py" in sources, (
+        f"the sentinel sweep found {sorted(sources)} — it must always read source_config.py, "
+        "or the assertion below is vacuous"
+    )
+
+    offenders = sorted(name for name, source in sources.items() if "date.min" in source)
+
+    assert not offenders, (
+        f"the date.min sentinel was reintroduced in janus.models.{'/'.join(offenders)}; "
+        "an unbuildable request input must return None so the "
         "collected issues raise, never a config carrying placeholder bounds"
     )
 
