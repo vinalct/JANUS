@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 import janus.strategies.api.core as api_core
+import janus.strategies.api.requests as api_requests
 import janus.strategies.catalog.core as catalog_core
 import janus.strategies.files.core as files_core
 from janus.models import ExecutionPlan, RunContext, SourceConfig
@@ -76,6 +77,12 @@ def _decode_via_strategy_method(strategy, plan, response):
     return strategy._decode_payload(plan, response)
 
 
+def _decode_via_api_executor(strategy, plan, response):
+    """The api family's decoder now hangs off ApiRequestExecutor, not the strategy."""
+    del strategy
+    return api_requests.ApiRequestExecutor().decode_payload(plan, response)
+
+
 def _shared_send_via(core, *, decode_via, payload_error):
 
     def send(strategy, plan, client, request, throttle, logger):
@@ -115,11 +122,11 @@ FAMILIES: dict[str, FamilyUnderTest] = {
             lambda status, url: f"API request failed with status {status} for {url}"
         ),
         send_with_retries=_shared_send_via(
-            api_core,
-            decode_via=_decode_via_strategy_method,
+            api_requests,
+            decode_via=_decode_via_api_executor,
             payload_error=api_core.ApiPayloadError,
         ),
-        decode_payload=_decode_via_strategy_method,
+        decode_payload=_decode_via_api_executor,
     ),
     "catalog": FamilyUnderTest(
         name="catalog",
