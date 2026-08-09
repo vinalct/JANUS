@@ -1,13 +1,25 @@
+"""The catalog strategy façade.
+
+What remains here is the contract, not the machinery: the :class:`CatalogStrategy` lifecycle
+methods the planner calls, the :class:`CatalogHook` extension points a source implements, and
+compatibility re-exports for names that were defined in this module before the package was
+split.
+
+Where the machinery went:
+
+* ``errors.py`` — the exception hierarchy.
+* ``entities.py`` — record shaping, the governed normalized-record contract, entity merging.
+* ``artifacts.py`` — raw/normalized path layout, page rediscovery, replay, persistence.
+* ``metadata.py`` — dead-letter metadata and per-input parameter binding.
+* ``document.py`` — the document walker.
+"""
+
 from __future__ import annotations
 
-import contextlib
-import json
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
-from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +46,6 @@ from janus.strategies.api.pagination import _resume_pagination_state
 from janus.strategies.api.request_inputs import (
     ApiRequestInputLoadError,
     load_request_inputs,
-    resolve_parameter_bindings,
 )
 from janus.strategies.base import BaseStrategy, SourceHook
 from janus.strategies.catalog.document import (  # noqa: F401
@@ -86,11 +97,8 @@ from janus.strategies.catalog.document import (  # noqa: F401
     walk_document,
 )
 from janus.strategies.common import (
-    _compare_checkpoint_values,
     _default_storage_layout,
     _freeze_string_mapping,
-    _max_checkpoint_value,
-    _raw_page_path,
     _raw_run_path_prefix,
     _request_input_key,
     _stringify_mapping,
@@ -101,7 +109,6 @@ from janus.strategies.http import (
     ApiResponse,
     ApiTransport,
     HttpRequestThrottle,
-    HttpStrategyError,
     PayloadDecodeError,
     RetryErrorPolicy,
     UrllibApiTransport,
@@ -113,33 +120,44 @@ from janus.strategies.http import (
     send_with_retries,
     split_path_and_query_params,
 )
-from janus.utils.logging import StructuredLogger, redact_url
+from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 
+from .artifacts import (
+    _persist_generic_artifacts,
+    _persist_normalized_records,
+    _raw_relative_path,
+    _rediscover_catalog_input_artifacts,
+    _rediscover_catalog_raw_artifacts,
+    _replay_catalog_entities_from_dir,
+)
+from .entities import (
+    _catalog_total_entity_count,
+    _collect_catalog_entities,
+    _merge_catalog_entity_records,
+    _normalize_catalog_record,
+)
+from .errors import CatalogPayloadError, CatalogResponseError, CatalogStrategyError
+from .metadata import _apply_per_input_params, _catalog_request_input_dead_letter_metadata
+
+__all__ = [
+    "SUPPORTED_CATALOG_INPUT_FORMATS",
+    "SUPPORTED_CATALOG_PAYLOAD_FORMATS",
+    "CatalogHook",
+    "CatalogPayloadError",
+    "CatalogResponseError",
+    "CatalogStrategy",
+    "CatalogStrategyError",
+    "_apply_per_input_params",
+    "_normalize_catalog_record",
+    "_persist_generic_artifacts",
+    "_rediscover_catalog_input_artifacts",
+    "_replay_catalog_entities_from_dir",
+]
+
 SUPPORTED_CATALOG_PAYLOAD_FORMATS = frozenset({"json"})
 SUPPORTED_CATALOG_INPUT_FORMATS = frozenset({"jsonl"})
-
-
-class CatalogStrategyError(HttpStrategyError):
-    """Base failure for metadata/catalog strategy execution."""
-
-
-class CatalogResponseError(CatalogStrategyError):
-    """Raised when a catalog request finished with a non-success response."""
-
-    def __init__(self, response: ApiResponse) -> None:
-        self.response = response
-        message = (
-            f"Catalog request failed with status {response.status_code} for "
-            f"{redact_url(response.request.full_url())}"
-        )
-        super().__init__(message)
-
-
-class CatalogPayloadError(CatalogStrategyError):
-    """Raised when a catalog payload cannot be decoded or traversed safely."""
-
 
 _RETRY_POLICY = RetryErrorPolicy(
     transport_error_factory=CatalogStrategyError,
@@ -363,7 +381,6 @@ class CatalogStrategy(BaseStrategy):
                     )
                     raw_artifacts.extend(pre_artifacts)
                     checkpoint_value = _replay_catalog_entities_from_dir(
-                        self,
                         plan,
                         storage_layout,
                         per_input_request,
@@ -491,7 +508,7 @@ class CatalogStrategy(BaseStrategy):
                             entity_type: len(records)
                             for entity_type, records in request_input_records.items()
                         }
-                        request_input_checkpoint_value = self._collect_catalog_entities(
+                        request_input_checkpoint_value = _collect_catalog_entities(
                             plan,
                             payload=payload,
                             request=request,
@@ -625,7 +642,7 @@ class CatalogStrategy(BaseStrategy):
                 completed_inputs.append((request_input_key, request_input_index))
 
         self.progress_store.clear(plan)
-        normalized_artifacts = self._persist_normalized_records(
+        normalized_artifacts = _persist_normalized_records(
             plan,
             raw_writer,
             normalized_records,
@@ -848,132 +865,6 @@ class CatalogStrategy(BaseStrategy):
             return 0
         return len(batches[0].records)
 
-    def _collect_catalog_entities(
-        self,
-        plan: ExecutionPlan,
-        *,
-        payload: Any,
-        request: ApiRequest,
-        response: ApiResponse,
-        pagination_state: PaginationState,
-        raw_artifact: ExtractedArtifact,
-        checkpoint_state: CheckpointState | None,
-        normalized_records: dict[str, list[dict[str, Any]]],
-        entity_indexes: dict[tuple[str, str], int],
-        current_checkpoint_value: str | None,
-    ) -> str | None:
-        checkpoint_value = current_checkpoint_value
-        for batch in _root_batches(payload, plan.source.strategy_variant, path="payload"):
-            for index, record in enumerate(batch.records):
-                checkpoint_value = self._collect_entity_tree(
-                    plan,
-                    entity_type=batch.entity_type,
-                    record=record,
-                    collection_path=batch.collection_path,
-                    record_path=f"{batch.collection_path}[{index}]",
-                    request=request,
-                    response=response,
-                    pagination_state=pagination_state,
-                    raw_artifact=raw_artifact,
-                    normalized_records=normalized_records,
-                    entity_indexes=entity_indexes,
-                    checkpoint_state=checkpoint_state,
-                    current_checkpoint_value=checkpoint_value,
-                )
-        return checkpoint_value
-
-    def _collect_entity_tree(
-        self,
-        plan: ExecutionPlan,
-        *,
-        entity_type: str,
-        record: dict[str, Any],
-        collection_path: str,
-        record_path: str,
-        request: ApiRequest,
-        response: ApiResponse,
-        pagination_state: PaginationState,
-        raw_artifact: ExtractedArtifact,
-        normalized_records: dict[str, list[dict[str, Any]]],
-        entity_indexes: dict[tuple[str, str], int],
-        checkpoint_state: CheckpointState | None,
-        current_checkpoint_value: str | None,
-        parent: CatalogEntityReference | None = None,
-    ) -> str | None:
-        checkpoint_value = current_checkpoint_value
-        entity_reference = _build_entity_reference(entity_type, record, record_path)
-        checkpoint_candidate = _checkpoint_candidate(plan, record)
-
-        if not _should_skip_for_checkpoint(plan, checkpoint_state, checkpoint_candidate):
-            normalized_record = _normalize_catalog_record(
-                entity_type=entity_type,
-                record=record,
-                collection_path=collection_path,
-                record_path=record_path,
-                request=request,
-                response=response,
-                pagination_state=pagination_state,
-                raw_artifact=raw_artifact,
-                parent=parent,
-            )
-            _upsert_entity_record(
-                plan,
-                normalized_records,
-                entity_indexes,
-                entity_reference.entity_key,
-                normalized_record,
-            )
-            if checkpoint_candidate is not None:
-                checkpoint_value = _max_checkpoint_value(checkpoint_value, checkpoint_candidate)
-
-        for child_batch in _nested_batches(
-            record,
-            variant=plan.source.strategy_variant,
-            parent_type=entity_type,
-            path=record_path,
-        ):
-            for index, child_record in enumerate(child_batch.records):
-                checkpoint_value = self._collect_entity_tree(
-                    plan,
-                    entity_type=child_batch.entity_type,
-                    record=child_record,
-                    collection_path=child_batch.collection_path,
-                    record_path=f"{child_batch.collection_path}[{index}]",
-                    request=request,
-                    response=response,
-                    pagination_state=pagination_state,
-                    raw_artifact=raw_artifact,
-                    normalized_records=normalized_records,
-                    entity_indexes=entity_indexes,
-                    checkpoint_state=checkpoint_state,
-                    current_checkpoint_value=checkpoint_value,
-                    parent=entity_reference,
-                )
-        return checkpoint_value
-
-    def _persist_normalized_records(
-        self,
-        plan: ExecutionPlan,
-        raw_writer: RawArtifactWriter,
-        normalized_records: Mapping[str, Sequence[dict[str, Any]]],
-    ) -> list[ExtractedArtifact]:
-        artifacts: list[ExtractedArtifact] = []
-        for entity_type in ENTITY_TYPE_ORDER:
-            records = normalized_records[entity_type]
-            if not records:
-                continue
-            persisted = raw_writer.write_json_lines(
-                plan,
-                _normalized_relative_path(entity_type),
-                records,
-                metadata={
-                    "entity_type": entity_type,
-                    "record_count": str(len(records)),
-                },
-            )
-            artifacts.append(persisted.artifact)
-        return artifacts
-
     def _bind_logger(self, plan: ExecutionPlan) -> StructuredLogger | None:
         if self.logger is None:
             return None
@@ -988,436 +879,3 @@ class CatalogStrategy(BaseStrategy):
         if value is not None:
             return value
         return os.getenv(name)
-
-
-def _apply_per_input_params(
-    base_request: ApiRequest,
-    parameter_bindings: Any,
-    request_input: dict[str, Any] | None,
-    *,
-    checkpoint_value: str | None = None,
-) -> ApiRequest:
-    """Apply per-request-input parameter bindings to the base request."""
-    if not parameter_bindings:
-        return base_request
-    bound_params = resolve_parameter_bindings(
-        parameter_bindings,
-        request_input=request_input,
-        checkpoint_value=checkpoint_value,
-    )
-    if not bound_params:
-        return base_request
-    path_params, query_params = split_path_and_query_params(base_request.url, bound_params)
-    request = base_request
-    if path_params:
-        request = request.with_url(base_request.url.format_map(path_params))
-    if query_params:
-        request = request.with_params(query_params)
-    return request
-
-
-def _raw_relative_path(
-    pagination_state: PaginationState,
-    *,
-    request_input_index: int = 1,
-    request_input_count: int = 1,
-) -> Path:
-    return _raw_page_path(
-        pagination_state,
-        ".json",
-        request_input_index=request_input_index,
-        request_input_count=request_input_count,
-    )
-
-
-def _normalized_relative_path(entity_type: str) -> Path:
-    return Path("normalized") / f"{ENTITY_FILE_NAMES[entity_type]}.jsonl"
-
-
-def _normalize_catalog_record(
-    *,
-    entity_type: str,
-    record: Mapping[str, Any],
-    collection_path: str,
-    record_path: str,
-    request: ApiRequest,
-    response: ApiResponse,
-    pagination_state: PaginationState,
-    raw_artifact: ExtractedArtifact,
-    parent: CatalogEntityReference | None,
-) -> dict[str, Any]:
-    entity_reference = _build_entity_reference(entity_type, record, record_path)
-    return {
-        "entity_type": entity_type,
-        "entity_key": entity_reference.entity_key,
-        "entity_id": entity_reference.entity_id,
-        "parent_entity_type": parent.entity_type if parent is not None else None,
-        "parent_entity_key": parent.entity_key if parent is not None else None,
-        "parent_entity_id": parent.entity_id if parent is not None else None,
-        "catalog_collection_path": collection_path,
-        "catalog_record_path": record_path,
-        "catalog_request_url": request.full_url(),
-        "catalog_request_index": pagination_state.request_index,
-        "catalog_page_number": pagination_state.page_number,
-        "catalog_offset": pagination_state.offset,
-        "catalog_cursor": pagination_state.cursor,
-        "catalog_received_at": response.received_at.isoformat(),
-        "catalog_raw_artifact_path": raw_artifact.path,
-        "payload": json.dumps(dict(record), sort_keys=True, ensure_ascii=False),
-    }
-
-def _upsert_entity_record(
-    plan: ExecutionPlan,
-    normalized_records: dict[str, list[dict[str, Any]]],
-    entity_indexes: dict[tuple[str, str], int],
-    entity_key: str,
-    candidate: dict[str, Any],
-) -> None:
-    entity_type = candidate["entity_type"]
-    key = (entity_type, entity_key)
-    existing_index = entity_indexes.get(key)
-    if existing_index is None:
-        entity_indexes[key] = len(normalized_records[entity_type])
-        normalized_records[entity_type].append(candidate)
-        return
-
-    existing = normalized_records[entity_type][existing_index]
-    if _prefer_candidate_record(plan, existing, candidate):
-        normalized_records[entity_type][existing_index] = candidate
-
-
-def _prefer_candidate_record(
-    plan: ExecutionPlan,
-    existing: Mapping[str, Any],
-    candidate: Mapping[str, Any],
-) -> bool:
-    existing_value = _payload_checkpoint_value(existing, plan.checkpoint_field)
-    candidate_value = _payload_checkpoint_value(candidate, plan.checkpoint_field)
-    if candidate_value is None:
-        return False
-    if existing_value is None:
-        return True
-    return _compare_checkpoint_values(candidate_value, existing_value) > 0
-
-
-def _payload_checkpoint_value(
-    record: Mapping[str, Any],
-    checkpoint_field: str | None,
-) -> str | None:
-    payload = record.get("payload")
-    if not isinstance(payload, Mapping):
-        return None
-    return _string_value(_lookup_field(payload, checkpoint_field))
-
-
-def _checkpoint_candidate(plan: ExecutionPlan, record: Mapping[str, Any]) -> str | None:
-    if plan.checkpoint_field is None:
-        return None
-    return _string_value(_lookup_field(record, plan.checkpoint_field))
-
-
-def _should_skip_for_checkpoint(
-    plan: ExecutionPlan,
-    checkpoint_state: CheckpointState | None,
-    checkpoint_value: str | None,
-) -> bool:
-    if (
-        checkpoint_state is None
-        or checkpoint_value is None
-        or plan.extraction_mode != "incremental"
-    ):
-        return False
-    return _compare_checkpoint_values(checkpoint_value, checkpoint_state.checkpoint_value) <= 0
-
-
-def _lookup_field(record: Mapping[str, Any], field_path: str | None) -> Any:
-    if field_path is None:
-        return None
-
-    current: Any = record
-    for segment in field_path.split("."):
-        if not isinstance(current, Mapping):
-            return None
-        current = current.get(segment)
-    return current
-
-
-def _string_value(value: Any) -> str | None:
-    if value is None:
-        return None
-    normalized = str(value).strip()
-    if not normalized:
-        return None
-    return normalized
-
-
-def _catalog_input_dir(
-    plan: ExecutionPlan,
-    storage_layout: StorageLayout,
-    request_input_index: int,
-    request_input_count: int,
-) -> Path:
-    raw_dir = storage_layout.resolve_output(plan, "raw").resolved_path
-    if request_input_count > 1:
-        return raw_dir / f"request-input-{request_input_index:06d}"
-    return raw_dir / "pages"
-
-
-def _sorted_catalog_pages(directory: Path) -> list[Path]:
-    """Return all catalog page JSON files sorted by sequence number."""
-    if not directory.exists():
-        return []
-    candidates: list[tuple[int, Path]] = []
-    for path in directory.glob("*.json"):
-        stem = path.stem
-        for prefix, start in (
-            ("page-", 5),
-            ("offset-", 7),
-            ("cursor-", 7),
-            ("response-", 9),
-        ):
-            if stem.startswith(prefix):
-                with contextlib.suppress(ValueError):
-                    candidates.append((int(stem[start:]), path))
-                break
-    return [p for _, p in sorted(candidates)]
-
-
-def _catalog_pagination_state_from_path(path: Path) -> PaginationState:
-    """Reconstruct a PaginationState from a raw page filename."""
-    stem = path.stem
-    if stem.startswith("page-"):
-        try:
-            num = int(stem[5:])
-            return PaginationState(request_index=num, page_number=num)
-        except ValueError:
-            pass
-    if stem.startswith("offset-"):
-        try:
-            return PaginationState(request_index=1, offset=int(stem[7:]))
-        except ValueError:
-            pass
-    if stem.startswith("cursor-"):
-        try:
-            return PaginationState(request_index=int(stem[7:]), cursor="")
-        except ValueError:
-            pass
-    if stem.startswith("response-"):
-        try:
-            return PaginationState(request_index=int(stem[9:]))
-        except ValueError:
-            pass
-    return PaginationState(request_index=1)
-
-
-def _rediscover_catalog_raw_artifacts(
-    plan: ExecutionPlan,
-    storage_layout: StorageLayout,
-    progress: dict[str, Any],
-    request_input_index: int = 1,
-    request_input_count: int = 1,
-) -> list[ExtractedArtifact]:
-    """Re-discover raw JSON artifacts written by a previous partial catalog run."""
-    directory = _catalog_input_dir(plan, storage_layout, request_input_index, request_input_count)
-    if not directory.exists():
-        return []
-
-    last_page = progress.get("last_page_number")
-    last_offset = progress.get("last_offset")
-    artifacts: list[ExtractedArtifact] = []
-
-    if last_page is not None:
-        candidates: list[tuple[int, Path]] = []
-        for path in directory.glob("page-*.json"):
-            stem = path.stem
-            try:
-                num = int(stem[5:])
-            except ValueError:
-                continue
-            if num <= last_page:
-                candidates.append((num, path))
-        for _, path in sorted(candidates):
-            checksum = sha256(path.read_bytes()).hexdigest()
-            artifacts.append(ExtractedArtifact(path=str(path), format="json", checksum=checksum))
-
-    elif last_offset is not None:
-        candidates = []
-        for path in directory.glob("offset-*.json"):
-            stem = path.stem
-            try:
-                num = int(stem[7:])
-            except ValueError:
-                continue
-            if num <= last_offset:
-                candidates.append((num, path))
-        for _, path in sorted(candidates):
-            checksum = sha256(path.read_bytes()).hexdigest()
-            artifacts.append(ExtractedArtifact(path=str(path), format="json", checksum=checksum))
-
-    return artifacts
-
-
-def _rediscover_catalog_input_artifacts(
-    plan: ExecutionPlan,
-    storage_layout: StorageLayout,
-    request_input_index: int,
-    request_input_count: int,
-) -> list[ExtractedArtifact]:
-    """Re-discover all raw JSON artifacts for a fully completed catalog input."""
-    artifacts: list[ExtractedArtifact] = []
-    for path in _sorted_catalog_pages(
-        _catalog_input_dir(plan, storage_layout, request_input_index, request_input_count)
-    ):
-        checksum = sha256(path.read_bytes()).hexdigest()
-        artifacts.append(ExtractedArtifact(path=str(path), format="json", checksum=checksum))
-    return artifacts
-
-
-def _replay_catalog_entities_from_dir(
-    strategy: CatalogStrategy,
-    plan: ExecutionPlan,
-    storage_layout: StorageLayout,
-    per_input_request: ApiRequest,
-    paginator: Any,
-    request_input_index: int,
-    request_input_count: int,
-    checkpoint_state: CheckpointState | None,
-    normalized_records: dict[str, list[dict[str, Any]]],
-    entity_indexes: dict[tuple[str, str], int],
-    current_checkpoint_value: str | None,
-) -> str | None:
-    """Re-collect catalog entities from the raw JSON files of a completed input."""
-    directory = _catalog_input_dir(plan, storage_layout, request_input_index, request_input_count)
-    checkpoint_value = current_checkpoint_value
-    for path in _sorted_catalog_pages(directory):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        pagination_state = _catalog_pagination_state_from_path(path)
-        request = paginator.apply(per_input_request, pagination_state)
-        file_mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
-        response = ApiResponse(
-            request=request,
-            status_code=200,
-            body=b"",
-            received_at=file_mtime,
-        )
-        checksum = sha256(path.read_bytes()).hexdigest()
-        raw_artifact = ExtractedArtifact(path=str(path), format="json", checksum=checksum)
-        checkpoint_value = strategy._collect_catalog_entities(
-            plan,
-            payload=payload,
-            request=request,
-            response=response,
-            pagination_state=pagination_state,
-            raw_artifact=raw_artifact,
-            checkpoint_state=checkpoint_state,
-            normalized_records=normalized_records,
-            entity_indexes=entity_indexes,
-            current_checkpoint_value=checkpoint_value,
-        )
-    return checkpoint_value
-
-
-def _merge_catalog_entity_records(
-    plan: ExecutionPlan,
-    normalized_records: dict[str, list[dict[str, Any]]],
-    entity_indexes: dict[tuple[str, str], int],
-    request_input_records: Mapping[str, Sequence[dict[str, Any]]],
-) -> None:
-    for entity_type in ENTITY_TYPE_ORDER:
-        for candidate in request_input_records.get(entity_type, ()):  # pragma: no branch
-            entity_key = _string_value(candidate.get("entity_key"))
-            if entity_key is None:
-                continue
-            _upsert_entity_record(
-                plan,
-                normalized_records,
-                entity_indexes,
-                entity_key,
-                candidate,
-            )
-
-
-def _catalog_total_entity_count(
-    normalized_records: Mapping[str, Sequence[dict[str, Any]]],
-    request_input_records: Mapping[str, Sequence[dict[str, Any]]],
-) -> int:
-    return sum(
-        len(normalized_records[entity_type]) + len(request_input_records[entity_type])
-        for entity_type in ENTITY_TYPE_ORDER
-    )
-
-
-def _catalog_request_input_dead_letter_metadata(
-    *,
-    request_input: Mapping[str, Any] | None,
-    request_input_index: int,
-    request_input_count: int,
-    request: ApiRequest,
-) -> dict[str, str]:
-    metadata = {
-        "request_input_index": str(request_input_index),
-        "request_input_count": str(request_input_count),
-        "request_url": request.full_url(),
-    }
-    if request_input:
-        metadata["request_input_field_names"] = ",".join(sorted(str(key) for key in request_input))
-    return metadata
-
-
-def _persist_generic_artifacts(
-    plan: ExecutionPlan,
-    raw_writer: RawArtifactWriter,
-    normalized_records: Mapping[str, Sequence[dict[str, Any]]],
-) -> tuple[list[ExtractedArtifact], CatalogParseSummary]:
-    all_records = [
-        record
-        for entity_type in ENTITY_TYPE_ORDER
-        for record in normalized_records[entity_type]
-    ]
-    if not all_records:
-        return [], _compute_parse_summary([], [])
-
-    path_by_key: dict[str, str] = {
-        record["entity_key"]: record["catalog_record_path"]
-        for record in all_records
-        if record.get("entity_key")
-    }
-
-    variant = plan.source.strategy_variant
-    nodes: list[dict[str, Any]] = []
-    edges: list[dict[str, Any]] = []
-    for record in all_records:
-        parent_key = record.get("parent_entity_key")
-        parent_node_path = path_by_key.get(parent_key) if parent_key else None
-        nodes.append(
-            _build_generic_catalog_node(
-                record,
-                parent_node_path=parent_node_path,
-                variant=variant,
-            )
-        )
-        if parent_key:
-            edges.append(_build_generic_catalog_edge(record))
-
-    parse_summary = _compute_parse_summary(nodes, edges)
-
-    artifacts: list[ExtractedArtifact] = []
-    persisted = raw_writer.write_json_lines(
-        plan,
-        Path("normalized") / f"{CATALOG_NODES_FILE}.jsonl",
-        nodes,
-        metadata={"record_count": str(len(nodes))},
-    )
-    artifacts.append(persisted.artifact)
-    if edges:
-        persisted = raw_writer.write_json_lines(
-            plan,
-            Path("normalized") / f"{CATALOG_EDGES_FILE}.jsonl",
-            edges,
-            metadata={"record_count": str(len(edges))},
-        )
-        artifacts.append(persisted.artifact)
-    return artifacts, parse_summary

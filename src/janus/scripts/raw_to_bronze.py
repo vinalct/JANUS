@@ -37,13 +37,16 @@ from janus.runtime.materialize import (
 from janus.runtime.spark_lifecycle import SparkSessionProvider, scoped_request_input_session
 from janus.strategies.api import ApiRequest, build_paginator
 from janus.strategies.api.request_inputs import load_request_inputs
-from janus.strategies.catalog.core import (
-    ENTITY_TYPE_ORDER,
-    CatalogStrategy,
-    _apply_per_input_params,
+from janus.strategies.catalog.artifacts import (
+    _persist_normalized_records,
     _rediscover_catalog_input_artifacts,
     _replay_catalog_entities_from_dir,
 )
+from janus.strategies.catalog.core import (
+    ENTITY_TYPE_ORDER,
+    CatalogStrategy,
+)
+from janus.strategies.catalog.metadata import _apply_per_input_params
 from janus.strategies.http import resolve_url
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout, bronze_table_identifier
@@ -684,7 +687,6 @@ def _build_catalog_extraction_result_from_raw(
             request_input,
         )
         checkpoint_value = _replay_catalog_entities_from_dir(
-            strategy,
             raw_plan,
             storage_layout,
             per_input_request,
@@ -698,7 +700,7 @@ def _build_catalog_extraction_result_from_raw(
         )
 
     raw_writer = RawArtifactWriter(storage_layout)
-    normalized_artifacts = strategy._persist_normalized_records(
+    normalized_artifacts = _persist_normalized_records(
         raw_plan,
         raw_writer,
         normalized_records,

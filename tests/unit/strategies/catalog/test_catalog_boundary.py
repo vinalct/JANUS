@@ -22,10 +22,8 @@ import janus.strategies.catalog as catalog_package
 from janus.models import ExtractedArtifact
 from janus.strategies.api import ApiRequest, ApiResponse
 from janus.strategies.api.pagination import PaginationState
-from janus.strategies.catalog.core import (
-    CatalogHook,
-    _normalize_catalog_record,
-)
+from janus.strategies.catalog.core import CatalogHook
+from janus.strategies.catalog.entities import _normalize_catalog_record
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
