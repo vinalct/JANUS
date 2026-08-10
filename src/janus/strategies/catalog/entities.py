@@ -23,6 +23,11 @@ from janus.strategies.common import (
 from janus.strategies.http import ApiRequest, ApiResponse
 
 
+def _empty_entity_records() -> dict[str, list[dict[str, Any]]]:
+    """One empty bucket per generic entity type, in the contract's order."""
+    return {entity_type: [] for entity_type in ENTITY_TYPE_ORDER}
+
+
 def _collect_catalog_entities(
     plan: ExecutionPlan,
     *,

@@ -19,11 +19,19 @@ from pathlib import Path
 from typing import Any
 
 import janus.strategies.catalog as catalog_package
+import janus.strategies.catalog.core as catalog_core
+import janus.strategies.catalog.extraction as catalog_extraction
 from janus.models import ExtractedArtifact
 from janus.strategies.api import ApiRequest, ApiResponse
 from janus.strategies.api.pagination import PaginationState
 from janus.strategies.catalog.core import CatalogHook
 from janus.strategies.catalog.entities import _normalize_catalog_record
+
+#: Names that would let the orchestration layer speak HTTP directly.
+BANNED_TRANSPORT_TOKENS = ("ApiTransport", "ApiClient", "urllib")
+
+#: Tokens that only appear when the shared retry loop has been re-implemented locally.
+BANNED_RETRY_TOKENS = ("while attempt", "RETRYABLE_STATUS_CODES", "time.sleep(")
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -35,6 +43,15 @@ def _catalog_package_sources() -> list[tuple[Path, ast.Module]]:
         (path, ast.parse(path.read_text(encoding="utf-8")))
         for path in sorted(package_dir.glob("*.py"))
     ]
+
+
+def _top_level_definitions(module) -> set[str]:
+    tree = ast.parse(Path(inspect.getfile(module)).read_text(encoding="utf-8"))
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+    }
 
 
 def _compare_references_source_id(node: ast.Compare) -> bool:
@@ -84,6 +101,70 @@ def test_boundary_sweep_actually_covers_the_catalog_package():
     assert len(names) >= 3, (  # __init__, core, document — grows as order-10 lands
         f"the boundary sweep found only {sorted(names)}; expected at least the three "
         "modules the catalog package has today"
+    )
+
+
+def test_boundary_sweep_covers_the_decomposed_modules():
+    """The sweep must see every module the split produced, not just the ones it started with.
+
+    A rule pinned to the modules that existed when it was written is silently disarmed by
+    the next split rather than by anyone deciding to weaken it.
+    """
+    names = {path.name for path, _ in _catalog_package_sources()}
+
+    expected = {
+        "core.py",
+        "requests.py",
+        "extraction.py",
+        "pagination_loop.py",
+        "run_state.py",
+        "document.py",
+    }
+    assert expected <= names, (
+        f"the catalog package sweep is missing modules it must cover (found {sorted(names)})"
+    )
+
+
+# ── AC-2: orchestration decides what to request, mechanics performs it ───────
+
+
+def test_catalog_orchestration_does_not_import_the_transport():
+    """AC-2 as a test rather than a structure review: the seam is an import boundary."""
+    source = inspect.getsource(catalog_extraction)
+
+    for banned in BANNED_TRANSPORT_TOKENS:
+        assert banned not in source, (
+            f"{banned!r} appears in catalog/extraction.py. Orchestration decides what to "
+            "request next and what to do when something fails; performing a request belongs "
+            "to CatalogRequestExecutor in catalog/requests.py."
+        )
+
+
+def test_no_module_in_the_catalog_package_reimplements_the_retry_loop():
+    """single-source rule, swept so a new module inherits it automatically."""
+    offenders = {
+        path.name: banned
+        for path, _ in _catalog_package_sources()
+        for banned in BANNED_RETRY_TOKENS
+        if banned in path.read_text(encoding="utf-8")
+    }
+
+    assert not offenders, (
+        f"retry mechanics reappeared inside strategies/catalog: {offenders}. The retry loop, "
+        "its backoff arithmetic and its status-code classification live once, in "
+        "strategies/http/retry.py — the catalog family composes send_with_retries."
+    )
+
+
+def test_catalog_core_is_a_facade():
+    """``core.py`` defines the strategy and the hook ABC — everything else is re-exported."""
+    defined = _top_level_definitions(catalog_core)
+
+    assert defined == {"CatalogStrategy", "CatalogHook"}, (
+        f"catalog/core.py defines {sorted(defined)}. After the split it is a façade: the "
+        "CatalogStrategy contract methods, the CatalogHook ABC and the compatibility "
+        "re-exports. Mechanics go to requests.py, the page loop to pagination_loop.py, "
+        "orchestration to extraction.py and the state it carries to run_state.py."
     )
 
 

@@ -1002,7 +1002,7 @@ def test_catalog_strategy_iceberg_rows_request_inputs_iterates_over_inputs(tmp_p
     )
 
     with patch(
-        "janus.strategies.catalog.core.load_request_inputs",
+        "janus.strategies.catalog.extraction.load_request_inputs",
         return_value=fake_inputs,
     ):
         result = strategy.extract(plan)
@@ -1052,7 +1052,7 @@ def test_catalog_strategy_request_inputs_query_param_binding(tmp_path):
     from unittest.mock import patch
 
     with patch(
-        "janus.strategies.catalog.core.load_request_inputs",
+        "janus.strategies.catalog.extraction.load_request_inputs",
         return_value=fake_inputs,
     ):
         strategy.extract(plan)
@@ -1125,7 +1125,7 @@ def test_catalog_strategy_dead_letters_failed_request_input_without_partial_enti
 
     transport.send = patched_send
 
-    with patch("janus.strategies.catalog.core.load_request_inputs", return_value=fake_inputs):
+    with patch("janus.strategies.catalog.extraction.load_request_inputs", return_value=fake_inputs):
         result = strategy.extract(plan)
 
     metadata = result.metadata_as_dict()
@@ -1187,7 +1187,7 @@ def test_catalog_strategy_continues_after_multiple_dead_letters_within_budget(tm
         ],
     )
 
-    with patch("janus.strategies.catalog.core.load_request_inputs", return_value=fake_inputs):
+    with patch("janus.strategies.catalog.extraction.load_request_inputs", return_value=fake_inputs):
         result = strategy.extract(plan)
 
     metadata = result.metadata_as_dict()
