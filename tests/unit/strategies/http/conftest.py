@@ -24,6 +24,7 @@ import janus.strategies.api.requests as api_requests
 import janus.strategies.catalog.core as catalog_core
 import janus.strategies.catalog.requests as catalog_requests
 import janus.strategies.files.core as files_core
+import janus.strategies.files.download as files_download
 from janus.models import ExecutionPlan, RunContext, SourceConfig
 from janus.strategies.http import (
     RETRYABLE_STATUS_CODES,
@@ -166,7 +167,7 @@ FAMILIES: dict[str, FamilyUnderTest] = {
         status_error_message=(
             lambda status, url: f"File request failed with status {status} for {url}"
         ),
-        send_with_retries=_shared_send_via(files_core, decode_via=None, payload_error=None),
+        send_with_retries=_shared_send_via(files_download, decode_via=None, payload_error=None),
         decode_payload=None,
     ),
 }

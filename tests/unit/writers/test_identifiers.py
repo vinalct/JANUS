@@ -148,5 +148,5 @@ def test_writer_never_builds_a_raw_temp_view_name():
     assert not offending, (
         f"{spark_writer.__name__} builds a temp-view name inline at line(s) "
         f"{offending}; use build_bronze_temp_view_name() instead "
-        "(TASK-05 — temp-view identifier sanitization)"
+        "(temp-view identifier sanitization)"
     )

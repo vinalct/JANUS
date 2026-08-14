@@ -1,8 +1,9 @@
-"""Characterization tests for file-strategy helpers in core and formats modules."""
+"""Characterization tests for file-strategy helpers across the files package."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -12,6 +13,9 @@ from janus.strategies.common import (
     _compare_checkpoint_values,
     _retry_delay_seconds,
 )
+from janus.strategies.files.archives import _archive_member_payloads
+from janus.strategies.files.artifacts import _safe_archive_member_path
+from janus.strategies.files.core import ArchiveExtractionError
 from janus.strategies.files.formats import (
     _filename_from_content_disposition,
     _filename_from_url,
@@ -348,3 +352,36 @@ def test_safe_path_segment_empty_becomes_current():
 
 def test_safe_path_segment_only_unsafe_chars_becomes_current():
     assert _safe_path_segment("!!!") == "current"
+
+
+# ---------------------------------------------------------------------------
+# _safe_archive_member_path — the Zip-Slip guard
+
+
+def test_safe_archive_member_path_keeps_a_nested_member():
+    assert _safe_archive_member_path("nested/records.csv") == Path("nested") / "records.csv"
+
+
+def test_safe_archive_member_path_rejects_absolute_members():
+    with pytest.raises(ArchiveExtractionError, match="absolute paths"):
+        _safe_archive_member_path("/etc/passwd")
+
+
+def test_safe_archive_member_path_rejects_parent_traversal():
+    with pytest.raises(ArchiveExtractionError, match="unsafe path segments"):
+        _safe_archive_member_path("../../etc/cron.d/janus")
+
+
+def test_safe_archive_member_path_normalizes_current_directory_segments():
+    """``.`` and empty segments collapse in ``PurePosixPath``; ``..`` does not — hence the guard."""
+    assert _safe_archive_member_path("nested/./records.csv") == Path("nested") / "records.csv"
+
+
+def test_archive_member_payloads_applies_the_guard_to_every_member(tmp_path):
+    archive_path = tmp_path / "traversal.zip"
+    with ZipFile(archive_path, "w") as archive:
+        archive.writestr("safe.csv", "id\n1\n")
+        archive.writestr("../escape.csv", "id\n2\n")
+
+    with pytest.raises(ArchiveExtractionError):
+        _archive_member_payloads(archive_path.read_bytes(), archive_path.name)
