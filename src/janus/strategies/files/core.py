@@ -158,20 +158,20 @@ class FileHook(SourceHook):
         return members
 
 
-from janus.strategies.files.archives import (  
+from janus.strategies.files.archives import (
     _archive_member_payloads,
     _filter_members,
 )
-from janus.strategies.files.artifacts import (  
+from janus.strategies.files.artifacts import (
     _infer_handoff_format,
     _raw_extracted_relative_path,
 )
-from janus.strategies.files.download import (  
+from janus.strategies.files.download import (
     _RETRY_POLICY,
     FileDownloader,
     _read_checksum_sidecar,
 )
-from janus.strategies.files.extraction import (  
+from janus.strategies.files.extraction import (
     FileExtractionContext,
     build_extraction_result,
     run_file_extraction,

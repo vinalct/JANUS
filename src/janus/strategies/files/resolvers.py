@@ -26,6 +26,7 @@ from janus.strategies.files.formats import (
     _filename_from_url,
     _infer_format_name,
 )
+from janus.strategies.http import HTTP_STATUS_CLIENT_ERROR, HTTP_STATUS_SUCCESS
 from janus.utils.logging import redact_url
 
 _NEXTCLOUD_SHARE_PATTERN = re.compile(r"/index\.php/s/([^/?#]+)")
@@ -87,7 +88,7 @@ class RedirectResolver:
             _log_resolver_diagnostic(self, url, "transport_error", error=exc)
             return ()
 
-        if not (200 <= response.status_code < 400):
+        if not (HTTP_STATUS_SUCCESS <= response.status_code < HTTP_STATUS_CLIENT_ERROR):
             _log_resolver_diagnostic(
                 self,
                 url,
@@ -189,7 +190,7 @@ class HtmlLinkResolver:
             _log_resolver_diagnostic(self, url, "transport_error", error=exc)
             return ()
 
-        if not (200 <= response.status_code < 400):
+        if not (HTTP_STATUS_SUCCESS <= response.status_code < HTTP_STATUS_CLIENT_ERROR):
             _log_resolver_diagnostic(
                 self,
                 url,

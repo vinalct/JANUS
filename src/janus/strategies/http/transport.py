@@ -26,6 +26,11 @@ from janus.models import AuthConfig
 from janus.strategies.common import _freeze_string_mapping, _stringify_mapping
 from janus.utils.logging import redact_url
 
+HTTP_STATUS_MIN = 100
+HTTP_STATUS_SUCCESS = 200
+HTTP_STATUS_REDIRECT = 300
+HTTP_STATUS_CLIENT_ERROR = 400
+
 
 @dataclass(frozen=True, slots=True)
 class ApiRequest:
@@ -85,7 +90,7 @@ class ApiResponse:
     received_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
     def __post_init__(self) -> None:
-        if self.status_code < 100:
+        if self.status_code < HTTP_STATUS_MIN:
             raise ValueError("status_code must be a valid HTTP status")
         if self.received_at.tzinfo is None or self.received_at.utcoffset() is None:
             raise ValueError("received_at must be timezone-aware")

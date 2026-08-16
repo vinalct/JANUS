@@ -43,6 +43,8 @@ from janus.strategies.http import resolve_url
 from janus.utils.storage import StorageLayout
 from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter
 
+_VERSIONED_DOWNLOAD_PATH_PARTS = 3
+
 
 def _build_extraction_result_from_raw(
     planned_run: PlannedRun,
@@ -193,7 +195,10 @@ def _is_archive_download_path(raw_root: Path, artifact_path: Path) -> bool:
         relative_path = artifact_path.relative_to(raw_root)
     except ValueError:
         return False
-    if len(relative_path.parts) < 3 or relative_path.parts[0] != "downloads":
+    if (
+        len(relative_path.parts) < _VERSIONED_DOWNLOAD_PATH_PARTS
+        or relative_path.parts[0] != "downloads"
+    ):
         return False
     lower_name = artifact_path.name.lower()
     return lower_name.endswith((".zip", ".tar.gz", ".tgz"))
@@ -204,7 +209,10 @@ def _download_version(raw_root: Path, artifact_path: Path) -> str:
         relative_path = artifact_path.relative_to(raw_root)
     except ValueError:
         return "current"
-    if len(relative_path.parts) >= 3 and relative_path.parts[0] == "downloads":
+    if (
+        len(relative_path.parts) >= _VERSIONED_DOWNLOAD_PATH_PARTS
+        and relative_path.parts[0] == "downloads"
+    ):
         return relative_path.parts[1]
     return "current"
 

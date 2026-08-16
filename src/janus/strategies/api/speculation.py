@@ -33,7 +33,12 @@ from janus.strategies.api.pagination import (
     PaginationState,
 )
 from janus.strategies.api.records import _default_records_from_payload
-from janus.strategies.http import ApiRequest, ApiResponse
+from janus.strategies.http import (
+    HTTP_STATUS_REDIRECT,
+    HTTP_STATUS_SUCCESS,
+    ApiRequest,
+    ApiResponse,
+)
 from janus.utils.logging import StructuredLogger, redact_url
 
 #: Root/container keys read as a total-record count when no explicit field is configured.
@@ -300,7 +305,10 @@ def _raise_on_past_end_conflict(
             later_response, later_payload, _ = submitted.future.result(timeout=0)
         except Exception:  # a later failure proves nothing; the past-end read stands
             continue
-        if 200 <= later_response.status_code < 300 and _default_records_from_payload(later_payload):
+        if (
+            HTTP_STATUS_SUCCESS <= later_response.status_code < HTTP_STATUS_REDIRECT
+            and _default_records_from_payload(later_payload)
+        ):
             if logger is not None:
                 logger.warning(
                     "api_pagination_past_end_conflict",

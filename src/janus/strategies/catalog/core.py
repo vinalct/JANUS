@@ -98,7 +98,6 @@ from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 
-
 from .artifacts import (
     _persist_generic_artifacts,
     _rediscover_catalog_input_artifacts,

@@ -32,6 +32,8 @@ from janus.models.config.types import (
     RequestInputsConfig,
 )
 
+_MINIMUM_COMBINED_SUB_INPUTS = 2
+
 
 def _build_request_inputs_config(
     raw_value: Any,
@@ -151,7 +153,7 @@ def _build_combined_request_inputs_config(
         )
         return CombinedRequestInputsConfig(type="combined", inputs=())
 
-    if len(inputs_raw) < 2:
+    if len(inputs_raw) < _MINIMUM_COMBINED_SUB_INPUTS:
         issues.append(
             ValidationIssue(
                 "access.request_inputs.inputs",

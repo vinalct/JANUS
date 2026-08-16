@@ -63,6 +63,8 @@ ENTITY_HINT_KEYS_BY_TYPE: dict[str, tuple[str, ...]] = {
 }
 UNKNOWN_ENTITY_TYPE = "unknown"
 
+HIGH_CONFIDENCE_SIGNAL_COUNT = 2
+
 
 @dataclass(frozen=True, slots=True)
 class CatalogEntityReference:
@@ -380,12 +382,16 @@ def classify_catalog_node(
     """
     if parent_type == "dataset":
         signals = _matched_signals(payload, RESOURCE_HINT_KEYS)
-        confidence = "high" if len(signals) >= 2 else "heuristic"
+        confidence = (
+            "high" if len(signals) >= HIGH_CONFIDENCE_SIGNAL_COUNT else "heuristic"
+        )
         return NodeClassification("resource", confidence, signals or (f"parent:{parent_type}",))
 
     if parent_type in {"organization", "group"}:
         signals = _matched_signals(payload, DATASET_HINT_KEYS)
-        confidence = "high" if len(signals) >= 2 else "heuristic"
+        confidence = (
+            "high" if len(signals) >= HIGH_CONFIDENCE_SIGNAL_COUNT else "heuristic"
+        )
         return NodeClassification("dataset", confidence, signals or (f"parent:{parent_type}",))
 
     priority = ROOT_ENTITY_PRIORITY.get(variant, ROOT_ENTITY_PRIORITY["metadata_catalog"])
@@ -401,7 +407,7 @@ def classify_catalog_node(
 
     best_type = max(priority, key=lambda t: (all_scores[t], -priority.index(t)))
     signals = all_signals[best_type]
-    confidence = "high" if best_score >= 2 else "heuristic"
+    confidence = "high" if best_score >= HIGH_CONFIDENCE_SIGNAL_COUNT else "heuristic"
     return NodeClassification(best_type, confidence, signals)
 
 
@@ -412,7 +418,7 @@ def _matched_signals(payload: Mapping[str, Any], keys: Sequence[str]) -> tuple[s
 def _classification_confidence(entity_type: str, payload: Mapping[str, Any]) -> str:
     hint_keys = ENTITY_HINT_KEYS_BY_TYPE.get(entity_type, ())
     score = _score_record(payload, hint_keys)
-    if score >= 2:
+    if score >= HIGH_CONFIDENCE_SIGNAL_COUNT:
         return "high"
     if score >= 1:
         return "heuristic"

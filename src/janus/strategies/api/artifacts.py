@@ -104,42 +104,49 @@ def _rediscover_raw_artifacts(
 
     last_page = progress.get("last_page_number")
     last_offset = progress.get("last_offset")
-    artifacts: list[ExtractedArtifact] = []
 
     if last_page is not None:
-        candidates: list[tuple[int, Path]] = []
-        for path in directory.glob(f"page-*{suffix}"):
-            stem = path.stem
-            if not stem.startswith("page-"):
-                continue
-            try:
-                num = int(stem[5:])
-            except ValueError:
-                continue
-            if num <= last_page:
-                candidates.append((num, path))
-        for _, path in sorted(candidates):
-            checksum = sha256(path.read_bytes()).hexdigest()
-            artifacts.append(
-                ExtractedArtifact(path=str(path), format=raw_format, checksum=checksum)
-            )
-
+        paths = _numbered_pages_up_to(
+            directory, prefix="page-", suffix=suffix, last_index=last_page
+        )
     elif last_offset is not None:
-        candidates = []
-        for path in directory.glob(f"offset-*{suffix}"):
-            stem = path.stem
-            if not stem.startswith("offset-"):
-                continue
-            try:
-                num = int(stem[7:])
-            except ValueError:
-                continue
-            if num <= last_offset:
-                candidates.append((num, path))
-        for _, path in sorted(candidates):
-            checksum = sha256(path.read_bytes()).hexdigest()
-            artifacts.append(
-                ExtractedArtifact(path=str(path), format=raw_format, checksum=checksum)
-            )
+        paths = _numbered_pages_up_to(
+            directory, prefix="offset-", suffix=suffix, last_index=last_offset
+        )
+    else:
+        paths = []
 
-    return artifacts
+    return [
+        ExtractedArtifact(
+            path=str(path),
+            format=raw_format,
+            checksum=sha256(path.read_bytes()).hexdigest(),
+        )
+        for path in paths
+    ]
+
+
+def _numbered_pages_up_to(
+    directory: Path,
+    *,
+    prefix: str,
+    suffix: str,
+    last_index: int,
+) -> list[Path]:
+    """Raw page files named ``<prefix><n><suffix>``, index-ordered, up to ``last_index``.
+
+    One collector for both paginator flavours: page-number resume and offset resume differ
+    only in the filename prefix and the progress key that bounds them.
+    """
+    candidates: list[tuple[int, Path]] = []
+    for path in directory.glob(f"{prefix}*{suffix}"):
+        stem = path.stem
+        if not stem.startswith(prefix):
+            continue
+        try:
+            index = int(stem[len(prefix) :])
+        except ValueError:
+            continue
+        if index <= last_index:
+            candidates.append((index, path))
+    return [path for _, path in sorted(candidates)]

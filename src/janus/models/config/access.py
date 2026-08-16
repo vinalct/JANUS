@@ -20,6 +20,8 @@ from janus.models.config.coercion import (
     _require_mapping,
 )
 from janus.models.config.constants import (
+    CLIENT_ERROR_STATUS_MAX_EXCLUSIVE,
+    CLIENT_ERROR_STATUS_MIN,
     DEFAULT_PAST_END_STATUS_CODES,
     RETRYABLE_CLIENT_STATUS_CODES,
     SUPPORTED_AUTH_TYPES,
@@ -290,7 +292,7 @@ def _resolve_past_end_status_codes(
     accepted: set[int] = set()
     for index, code in enumerate(raw_codes):
         child_path = f"access.pagination.past_end_status_codes[{index}]"
-        if not 400 <= code < 500:
+        if not CLIENT_ERROR_STATUS_MIN <= code < CLIENT_ERROR_STATUS_MAX_EXCLUSIVE:
             issues.append(
                 ValidationIssue(child_path, "must be a 4xx client-error status code")
             )

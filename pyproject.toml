@@ -45,7 +45,70 @@ line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
+select = ["B", "E", "F", "I", "PL", "RUF", "SIM", "UP"]
+
+[tool.ruff.lint.pylint]
+max-branches = 12    # PLR0912 — ruff's default
+max-statements = 50  # PLR0915 — ruff's default
+max-returns = 6      # PLR0911 — ruff's default
+
+max-args = 8
+
+[tool.ruff.lint.per-file-ignores]
+"src/janus/models/source_config.py" = ["F401"]
+
+"src/janus/strategies/files/core.py" = ["E402"]
+
+# ---------------------------------------------------------------------------
+# Deferred: bundle the threaded context into a request object.
+
+"src/janus/checkpoints/progress.py" = ["PLR0913"]
+"src/janus/runtime/executor.py" = ["PLR0913"]
+"src/janus/scripts/raw_to_bronze.py" = ["PLR0913"]
+"src/janus/strategies/api/extraction.py" = ["PLR0913"]
+"src/janus/strategies/api/requests.py" = ["PLR0913"]
+"src/janus/strategies/api/run_state.py" = ["PLR0913"]
+"src/janus/strategies/catalog/artifacts.py" = ["PLR0913"]
+"src/janus/strategies/catalog/entities.py" = ["PLR0913"]
+"src/janus/strategies/catalog/extraction.py" = ["PLR0913"]
+"src/janus/strategies/catalog/pagination_loop.py" = ["PLR0913"]
+"src/janus/strategies/catalog/run_state.py" = ["PLR0913"]
+"src/janus/strategies/files/extraction.py" = ["PLR0913"]
+"src/janus/strategies/http/retry.py" = ["PLR0913"]
+"src/janus/writers/spark.py" = ["PLR0913", "PLR0912"]
+
+"src/janus/strategies/api/pagination_loop.py" = ["PLR0913", "PLR0915"]
+
+# ---------------------------------------------------------------------------
+# Guard-clause classifiers: one return per outcome IS the readable form here.
+# Collapsing them into accumulator variables would trade a flat, auditable list of
+# cases for nested state, which is the opposite of what the rule is protecting.
+# ---------------------------------------------------------------------------
+# main() returns a distinct process exit code per failure class, and its statement
+# count is argument parsing plus the two CLI entry paths held side by side.
+"src/janus/main.py" = ["PLR0911", "PLR0915"]
+# Suffix-to-format dispatch tables.
+"src/janus/scripts/checksums.py" = ["PLR0911"]
+"src/janus/strategies/files/formats.py" = ["PLR0911"]
+# One return per ValidationCheck outcome.
+"src/janus/quality/validators.py" = ["PLR0911"]
+# Config validators: one branch and one return per rejected shape. The branch count is
+# the number of shapes the contract accepts, and collecting issues rather than raising
+# on the first is what makes multi-error reporting work (study §3.2).
+"src/janus/models/config/bindings.py" = ["PLR0911", "PLR0912"]
+"src/janus/models/config/coercion.py" = ["PLR0911"]
+
+# ---------------------------------------------------------------------------
+# Tests. The complexity gate measures production code. In a test, comparing against a
+# literal status code is the assertion (PLR2004), a fixture builder taking twenty
+# keyword arguments is a fixture rather than a design smell (PLR0913), an end-to-end
+# integration test is long by construction (PLR0915), and `import janus.models as
+# models` is deliberate in the import-surface guardrails — it asserts that the
+# documented module path still imports, which `from janus import models` does not
+# exercise (PLR0402). Constants are compared on purpose where a test pins Python's own
+# ordering semantics (PLR0133).
+# ---------------------------------------------------------------------------
+"tests/**" = ["PLR2004", "PLR0913", "PLR0915", "PLR0402", "PLR0133"]
 
 [tool.mypy]
 python_version = "3.13"

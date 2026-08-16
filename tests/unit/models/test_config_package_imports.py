@@ -15,7 +15,6 @@ import janus.models as models
 import janus.models.config as config_package
 import janus.models.source_config as source_config_module
 
-
 PUBLIC_NAMES: tuple[str, ...] = (
     "AccessConfig",
     "Any",
