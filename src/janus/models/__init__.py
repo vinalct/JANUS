@@ -1,13 +1,4 @@
-from janus.models.contracts import (
-    SUPPORTED_OUTPUT_ZONES,
-    ExecutionPlan,
-    ExtractedArtifact,
-    ExtractionResult,
-    RunContext,
-    SourceReference,
-    WriteResult,
-)
-from janus.models.source_config import (
+from janus.models.config import (
     CONCURRENT_PAGINATION_TYPES,
     DEFAULT_PAST_END_STATUS_CODES,
     RETRYABLE_CLIENT_STATUS_CODES,
@@ -26,11 +17,20 @@ from janus.models.source_config import (
     RequestInputsConfig,
     RetryConfig,
     SchemaConfig,
-    SourceConfig,
     SourceConfigValidationError,
     SparkConfig,
     ValidationIssue,
 )
+from janus.models.contracts import (
+    SUPPORTED_OUTPUT_ZONES,
+    ExecutionPlan,
+    ExtractedArtifact,
+    ExtractionResult,
+    RunContext,
+    SourceReference,
+    WriteResult,
+)
+from janus.models.source_config import SourceConfig
 from janus.models.write_intent import (
     BRONZE_WRITE_STRATEGIES,
     BronzeWriteIntent,

@@ -60,6 +60,8 @@ _SUPPORTED_STRFTIME_DIRECTIVES = frozenset(
 )
 _SUPPORTED_STRFTIME_MODIFIERS = frozenset({"#", "-", "0", "^", "_"})
 
+_LAST_MONTH_OF_YEAR = 12
+
 
 class ApiRequestInputError(RuntimeError):
     """Base error for request-input loading and parameter binding resolution."""
@@ -417,7 +419,7 @@ def _generate_monthly_request_inputs(
 
 
 def _month_window_end(value: date) -> date:
-    if value.month == 12:
+    if value.month == _LAST_MONTH_OF_YEAR:
         next_month_start = date(value.year + 1, 1, 1)
     else:
         next_month_start = date(value.year, value.month + 1, 1)

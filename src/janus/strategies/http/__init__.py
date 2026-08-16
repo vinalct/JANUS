@@ -26,6 +26,10 @@ from janus.strategies.http.retry import (
 )
 from janus.strategies.http.throttle import HttpRequestThrottle
 from janus.strategies.http.transport import (
+    HTTP_STATUS_CLIENT_ERROR,
+    HTTP_STATUS_MIN,
+    HTTP_STATUS_REDIRECT,
+    HTTP_STATUS_SUCCESS,
     ApiClient,
     ApiRequest,
     ApiResponse,
@@ -38,6 +42,10 @@ from janus.strategies.http.transport import (
 
 __all__ = [
     "ALL_PAYLOAD_FORMATS",
+    "HTTP_STATUS_CLIENT_ERROR",
+    "HTTP_STATUS_MIN",
+    "HTTP_STATUS_REDIRECT",
+    "HTTP_STATUS_SUCCESS",
     "RETRYABLE_STATUS_CODES",
     "ApiClient",
     "ApiRequest",

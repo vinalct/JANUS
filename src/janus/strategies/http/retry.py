@@ -16,6 +16,8 @@ from janus.models import ExecutionPlan
 from janus.strategies.common import _retry_delay_seconds
 from janus.strategies.http.throttle import HttpRequestThrottle
 from janus.strategies.http.transport import (
+    HTTP_STATUS_REDIRECT,
+    HTTP_STATUS_SUCCESS,
     ApiClient,
     ApiRequest,
     ApiResponse,
@@ -95,7 +97,7 @@ def send_with_retries(
             )
             continue
 
-        if 200 <= response.status_code < 300:
+        if HTTP_STATUS_SUCCESS <= response.status_code < HTTP_STATUS_REDIRECT:
             if decode is None:
                 return response, None, attempt
             try:

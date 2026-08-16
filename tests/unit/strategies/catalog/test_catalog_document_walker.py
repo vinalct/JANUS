@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from janus.models import ExecutionPlan, RunContext, SourceConfig
-from janus.strategies.catalog.core import _persist_generic_artifacts
+from janus.strategies.catalog.artifacts import _persist_generic_artifacts
 from janus.strategies.catalog.document import (
     CATALOG_EDGES_FILE,
     CATALOG_NODES_FILE,

@@ -20,8 +20,11 @@ from typing import Any
 import pytest
 
 import janus.strategies.api.core as api_core
+import janus.strategies.api.requests as api_requests
 import janus.strategies.catalog.core as catalog_core
+import janus.strategies.catalog.requests as catalog_requests
 import janus.strategies.files.core as files_core
+import janus.strategies.files.download as files_download
 from janus.models import ExecutionPlan, RunContext, SourceConfig
 from janus.strategies.http import (
     RETRYABLE_STATUS_CODES,
@@ -72,8 +75,16 @@ class SharedBinding:
     checkpoint_request_value: Callable[..., str | None]
 
 
-def _decode_via_strategy_method(strategy, plan, response):
-    return strategy._decode_payload(plan, response)
+def _decode_via_api_executor(strategy, plan, response):
+    """The api family's decoder now hangs off ApiRequestExecutor, not the strategy."""
+    del strategy
+    return api_requests.ApiRequestExecutor().decode_payload(plan, response)
+
+
+def _decode_via_catalog_executor(strategy, plan, response):
+    """The catalog family's decoder now hangs off CatalogRequestExecutor, not the strategy."""
+    del strategy
+    return catalog_requests.CatalogRequestExecutor().decode_payload(plan, response)
 
 
 def _shared_send_via(core, *, decode_via, payload_error):
@@ -115,11 +126,11 @@ FAMILIES: dict[str, FamilyUnderTest] = {
             lambda status, url: f"API request failed with status {status} for {url}"
         ),
         send_with_retries=_shared_send_via(
-            api_core,
-            decode_via=_decode_via_strategy_method,
+            api_requests,
+            decode_via=_decode_via_api_executor,
             payload_error=api_core.ApiPayloadError,
         ),
-        decode_payload=_decode_via_strategy_method,
+        decode_payload=_decode_via_api_executor,
     ),
     "catalog": FamilyUnderTest(
         name="catalog",
@@ -136,11 +147,11 @@ FAMILIES: dict[str, FamilyUnderTest] = {
             lambda status, url: f"Catalog request failed with status {status} for {url}"
         ),
         send_with_retries=_shared_send_via(
-            catalog_core,
-            decode_via=_decode_via_strategy_method,
+            catalog_requests,
+            decode_via=_decode_via_catalog_executor,
             payload_error=catalog_core.CatalogPayloadError,
         ),
-        decode_payload=_decode_via_strategy_method,
+        decode_payload=_decode_via_catalog_executor,
     ),
     "file": FamilyUnderTest(
         name="file",
@@ -156,7 +167,7 @@ FAMILIES: dict[str, FamilyUnderTest] = {
         status_error_message=(
             lambda status, url: f"File request failed with status {status} for {url}"
         ),
-        send_with_retries=_shared_send_via(files_core, decode_via=None, payload_error=None),
+        send_with_retries=_shared_send_via(files_download, decode_via=None, payload_error=None),
         decode_payload=None,
     ),
 }

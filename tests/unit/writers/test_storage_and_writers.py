@@ -11,7 +11,7 @@ import pytest
 
 from janus.models import ExecutionPlan, RunContext
 from janus.registry import load_registry
-from janus.strategies.files.core import _read_checksum_sidecar
+from janus.strategies.files.download import _read_checksum_sidecar
 from janus.utils.environment import ICEBERG_CATALOG_IMPL, ICEBERG_SESSION_EXTENSIONS
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter, SparkDatasetWriter

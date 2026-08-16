@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 import janus.strategies.api.core as api_core
+import janus.strategies.api.requests as api_requests
 from janus.strategies.http import send_with_retries
 
 from .conftest import (
@@ -32,7 +33,7 @@ def _send(plan, script, *, terminal=None, logger=None, decode=None):
     sleeps: list[float] = []
     client, transport = make_client(script)
     throttle = CountingThrottle()
-    strategy = api_core.ApiStrategy(sleeper=sleeps.append, clock=lambda: 0.0)
+    executor = api_requests.ApiRequestExecutor(sleeper=sleeps.append)
     kwargs = {} if terminal is None else {"terminal_status_codes": terminal}
     result = send_with_retries(
         plan,
@@ -40,9 +41,9 @@ def _send(plan, script, *, terminal=None, logger=None, decode=None):
         make_request(REQUEST_URL),
         throttle,
         logger,
-        policy=api_core._RETRY_POLICY,
+        policy=api_requests._RETRY_POLICY,
         sleeper=sleeps.append,
-        decode=decode or (lambda response: strategy._decode_payload(plan, response)),
+        decode=decode or (lambda response: executor.decode_payload(plan, response)),
         payload_error_types=(api_core.ApiPayloadError,),
         **kwargs,
     )

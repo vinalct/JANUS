@@ -12,22 +12,34 @@ legitimately reaches that index because the previous page came back full, the pa
 fetched. A stale, cached or plainly wrong ``total`` can therefore cost a little throughput, but
 can never truncate a dataset.
 
-Every decision here is a pure function of the config, the paginator and one payload: no
-transport, no writer, no executor.
+The policy half of this module is a pure function of the config, the paginator and one
+payload. The mechanics half below it — the in-flight window, its cancellation, and the
+past-end conflict check — operates on already-submitted futures, but still owns no transport
+and no writer: it is handed the futures, it never creates them.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, TypeGuard
 
 from janus.models import ExecutionPlan
+from janus.strategies.api.errors import ApiPastEndConflictError
 from janus.strategies.api.pagination import (
     OffsetPaginator,
     PageNumberPaginator,
     PaginationState,
 )
+from janus.strategies.api.records import _default_records_from_payload
+from janus.strategies.http import (
+    HTTP_STATUS_REDIRECT,
+    HTTP_STATUS_SUCCESS,
+    ApiRequest,
+    ApiResponse,
+)
+from janus.utils.logging import StructuredLogger, redact_url
 
 #: Root/container keys read as a total-record count when no explicit field is configured.
 #: ``count`` is deliberately absent: several APIs use it for *records on this page*, which would
@@ -171,3 +183,149 @@ def _ceil_div(dividend: int, divisor: int) -> int:
     if dividend <= 0:
         return 0
     return -(-dividend // divisor)
+
+
+# ---------------------------------------------------------------------------
+# The in-flight window
+# ---------------------------------------------------------------------------
+
+
+class TotalRecordsResolver(Protocol):
+    """The single hook method ``_resolve_total_records`` needs.
+
+    Structural rather than an ``ApiHook`` import: ``ApiHook`` is declared in ``core.py``,
+    which imports this module, so naming the class here would close the cycle that
+    ``errors.py`` was split out to break. ``ApiHook`` satisfies this protocol as written.
+    """
+
+    def resolve_total_records(
+        self,
+        plan: ExecutionPlan,
+        request: ApiRequest,
+        response: ApiResponse,
+        payload: Any,
+    ) -> int | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SubmittedApiRequest:
+    pagination_state: PaginationState
+    request: ApiRequest
+    future: Future[tuple[ApiResponse, Any, int]]
+
+
+def _supports_concurrent_pagination(
+    paginator: Any,
+    concurrency: int,
+) -> TypeGuard[PageNumberPaginator | OffsetPaginator]:
+    return concurrency > 1 and isinstance(paginator, PageNumberPaginator | OffsetPaginator)
+
+
+def _resolve_total_records(
+    plan: ExecutionPlan,
+    request: ApiRequest,
+    response: ApiResponse,
+    payload: Any,
+    *,
+    api_hook: TotalRecordsResolver | None,
+    policy: SpeculativePaginationPolicy | None,
+    logger: StructuredLogger | None,
+) -> tuple[int | None, str | None]:
+    """Return the total this page advertises and where it came from."""
+    if policy is None:
+        return None, None
+
+    if api_hook is not None:
+        hook_total = api_hook.resolve_total_records(plan, request, response, payload)
+        if hook_total is not None:
+            if isinstance(hook_total, int) and not isinstance(hook_total, bool) and hook_total >= 0:
+                return hook_total, "hook"
+            if logger is not None:
+                logger.warning(
+                    "api_total_records_invalid",
+                    hook_value=repr(hook_total),
+                    hook_value_type=type(hook_total).__name__,
+                    request_url=redact_url(request.full_url()),
+                )
+
+    payload_total = total_records_from_payload(
+        payload,
+        total_count_field=policy.total_count_field,
+    )
+    if payload_total is None:
+        return None, None
+    return payload_total, "payload"
+
+
+def _may_submit(request_index: int, ceiling: int | None, next_request_index: int) -> bool:
+    """Allow submission ahead of evidence only up to the reported ceiling.
+
+    Above the ceiling we do not stop — we degrade to an in-flight window of one, i.e. the index
+    is submitted only when it is the very next one to commit. So a stale or wrong total costs a
+    little parallelism at the tail and can never truncate the dataset: the authority on "the
+    stream ended" stays with the paginator's short/empty page rule and the past-end status.
+    """
+    if ceiling is None or request_index <= ceiling:
+        return True
+    return request_index == next_request_index
+
+
+def _cancel_pending(
+    pending: dict[int, SubmittedApiRequest],
+    logger: StructuredLogger | None,
+    *,
+    next_request_index: int,
+) -> int:
+    """Cancel every outstanding speculative request and report how many were discarded."""
+    discarded = 0
+    for submitted in pending.values():
+        if submitted.future.cancel() or not submitted.future.done():
+            discarded += 1
+    pending.clear()
+    if discarded and logger is not None:
+        logger.info(
+            "api_pagination_speculation_cancelled",
+            cancelled_count=discarded,
+            next_request_index=next_request_index,
+        )
+    return discarded
+
+
+def _raise_on_past_end_conflict(
+    pending: dict[int, SubmittedApiRequest],
+    response: ApiResponse,
+    past_end_index: int,
+    logger: StructuredLogger | None,
+) -> None:
+    """Fail loudly when a *later* page already proved the stream did not end here."""
+    for index, submitted in sorted(pending.items()):
+        if index <= past_end_index or not submitted.future.done() or submitted.future.cancelled():
+            continue
+        try:
+            later_response, later_payload, _ = submitted.future.result(timeout=0)
+        except Exception:  # a later failure proves nothing; the past-end read stands
+            continue
+        if (
+            HTTP_STATUS_SUCCESS <= later_response.status_code < HTTP_STATUS_REDIRECT
+            and _default_records_from_payload(later_payload)
+        ):
+            if logger is not None:
+                logger.warning(
+                    "api_pagination_past_end_conflict",
+                    request_index=past_end_index,
+                    status_code=response.status_code,
+                    request_url=redact_url(response.request.full_url()),
+                    conflicting_request_index=index,
+                )
+            raise ApiPastEndConflictError(response, conflicting_request_index=index)
+
+
+def _predicted_next_pagination_state(
+    paginator: PageNumberPaginator | OffsetPaginator,
+    pagination_state: PaginationState,
+) -> PaginationState | None:
+    return paginator.next_state(
+        pagination_state,
+        records_extracted=paginator.page_size,
+        payload=None,
+    )
