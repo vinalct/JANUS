@@ -93,6 +93,7 @@ from janus.models.config.request_inputs import (
     _parse_request_input_entry,
     _request_input_field_names_for,
 )
+from janus.models.config.strategy_registry import STRATEGY_REGISTRY, StrategyRegistry
 from janus.models.config.types import (
     _INVALID_DATE_BOUND,
     AccessConfig,
@@ -118,6 +119,7 @@ __all__ = [
     "DEFAULT_PAST_END_STATUS_CODES",
     "REQUEST_INPUT_BINDING_PREFIX",
     "RETRYABLE_CLIENT_STATUS_CODES",
+    "STRATEGY_REGISTRY",
     "SUPPORTED_AUTH_TYPES",
     "SUPPORTED_BACKOFF_STRATEGIES",
     "SUPPORTED_CHECKPOINT_STRATEGIES",
@@ -155,6 +157,7 @@ __all__ = [
     "SourceConfig",
     "SourceConfigValidationError",
     "SparkConfig",
+    "StrategyRegistry",
     "ValidationIssue",
     "_build_access_config",
     "_build_auth_config",
@@ -218,8 +221,20 @@ class SourceConfig:
     tags: tuple[str, ...] = ()
 
     @classmethod
-    def from_mapping(cls, data: Mapping[str, Any], config_path: Path) -> Self:
-        """Validate a raw source mapping and return the typed source contract."""
+    def from_mapping(
+        cls,
+        data: Mapping[str, Any],
+        config_path: Path,
+        *,
+        registry: StrategyRegistry = STRATEGY_REGISTRY,
+    ) -> Self:
+        """Validate a raw source mapping and return the typed source contract.
+
+        ``registry`` is the injection seam for the strategy family/variant set: it is
+        keyword-only with the canonical default, so every existing call site keeps
+        working while a test or a future profile can widen the accepted variants
+        without editing this module.
+        """
         issues: list[ValidationIssue] = []
 
         source_id = _require_string(data, "source_id", issues)
@@ -249,16 +264,13 @@ class SourceConfig:
                 )
             )
 
-        if strategy and strategy_variant:
-            supported_variants = SUPPORTED_STRATEGY_VARIANTS.get(strategy, frozenset())
-            if strategy_variant not in supported_variants:
-                allowed_variants = ", ".join(sorted(supported_variants))
-                issues.append(
-                    ValidationIssue(
-                        "strategy_variant",
-                        f"must be one of: {allowed_variants}",
-                    )
+        if strategy and strategy_variant and not registry.supports(strategy, strategy_variant):
+            issues.append(
+                ValidationIssue(
+                    "strategy_variant",
+                    f"must be one of: {registry.describe_variants(strategy)}",
                 )
+            )
 
         if public_access is False:
             issues.append(

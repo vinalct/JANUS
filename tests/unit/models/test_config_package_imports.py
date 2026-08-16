@@ -38,6 +38,7 @@ PUBLIC_NAMES: tuple[str, ...] = (
     "RateLimitConfig",
     "RequestInputsConfig",
     "RetryConfig",
+    "STRATEGY_REGISTRY",
     "SUPPORTED_AUTH_TYPES",
     "SUPPORTED_BACKOFF_STRATEGIES",
     "SUPPORTED_CHECKPOINT_STRATEGIES",
@@ -60,6 +61,7 @@ PUBLIC_NAMES: tuple[str, ...] = (
     "SourceConfig",
     "SourceConfigValidationError",
     "SparkConfig",
+    "StrategyRegistry",
     "ValidationIssue",
     "annotations",
     "dataclass",
@@ -149,6 +151,7 @@ MODELS_ALL: tuple[str, ...] = (
 LAYER_RANK: dict[str, int] = {
     "constants": 0,
     "issues": 1,
+    "strategy_registry": 1,  # imports constants (0) only; never imports issues, and vice versa
     "coercion": 2,
     "types": 3,
     "extraction": 4,
