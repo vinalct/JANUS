@@ -9,7 +9,7 @@ from zipfile import ZipFile
 
 import pytest
 
-import janus.scripts.raw_to_bronze as raw_to_bronze
+import janus.scripts.checksums as checksums
 from janus.models import ExecutionPlan, RunContext, WriteResult
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
@@ -484,7 +484,10 @@ def _spy_on_sha256(monkeypatch) -> list[Path]:
         hashed.append(Path(path))
         return _sha256(path)
 
-    monkeypatch.setattr(raw_to_bronze, "_sha256", spy)
+    # `_resolve_raw_checksum` calls `_sha256` through its own module globals, so the spy
+    # has to land there — patching the `raw_to_bronze` re-export would rebind a name
+    # nothing reads.
+    monkeypatch.setattr(checksums, "_sha256", spy)
     return hashed
 
 

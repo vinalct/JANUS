@@ -5,8 +5,6 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
-import pytest
-
 import janus
 
 #: Hard ceiling. No module may exceed this, ever, without an explicit decision.
@@ -63,15 +61,6 @@ def test_the_sweep_actually_measures_the_package():
     assert len(counts) >= 40, f"only {len(counts)} modules swept; the sweep looks truncated"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "bring api/core, catalog/core, source_config, files/core "
-        "and raw_to_bronze under the ceiling. strict=True means this test FAILS THE "
-        "SUITE the moment the last split lands and the xfail becomes a lie — that is "
-        "the signal to delete this marker."
-    ),
-)
 def test_no_module_exceeds_the_hard_ceiling():
     """No module in ``src/janus`` may exceed HARD_CEILING physical lines."""
     over = {path: loc for path, loc in _module_line_counts().items() if loc > HARD_CEILING}
