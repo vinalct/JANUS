@@ -154,12 +154,6 @@ def test_the_sweep_actually_covers_the_config_package():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="moves these rules into models/config/policy.py; "
-    "this xfail must turn into an XPASS failure the moment it lands, "
-    "at which point the marker is removed in the same commit",
-)
 def test_no_module_outside_policy_decides_phase_scope():
     findings = [
         finding

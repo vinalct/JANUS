@@ -234,14 +234,20 @@ class SourceConfig:
         data: Mapping[str, Any],
         config_path: Path,
         *,
+        policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
         registry: StrategyRegistry = STRATEGY_REGISTRY,
     ) -> Self:
         """Validate a raw source mapping and return the typed source contract.
 
-        ``registry`` is the injection seam for the strategy family/variant set: it is
-        keyword-only with the canonical default, so every existing call site keeps
-        working while a test or a future profile can widen the accepted variants
-        without editing this module.
+        ``policy`` and ``registry`` are the two injection seams, both keyword-only with
+        their canonical defaults so every existing call site keeps working. ``policy``
+        owns the phase-scope decisions — which source types, strategies and federation
+        levels JANUS has chosen to onboard, whether a strategy must match its source
+        type, and whether a source must be public. ``registry`` owns the strategy
+        family/variant set. Broadening either is an injected object, not an edit here.
+
+        Policy methods append to ``issues`` and never raise: the single raise site below
+        is what makes a config with five problems report five.
         """
         issues: list[ValidationIssue] = []
 
@@ -249,11 +255,11 @@ class SourceConfig:
         name = _require_string(data, "name", issues)
         owner = _require_string(data, "owner", issues)
         enabled = _require_bool(data, "enabled", issues)
-        source_type = _require_enum(data, "source_type", SUPPORTED_SOURCE_TYPES, issues)
-        strategy = _require_enum(data, "strategy", SUPPORTED_STRATEGIES, issues)
+        source_type = _require_enum(data, "source_type", policy.allowed_source_types, issues)
+        strategy = _require_enum(data, "strategy", policy.allowed_strategies, issues)
         strategy_variant = _require_string(data, "strategy_variant", issues)
         federation_level = _require_enum(
-            data, "federation_level", SUPPORTED_FEDERATION_LEVELS, issues
+            data, "federation_level", policy.allowed_federation_levels, issues
         )
         domain = _require_string(data, "domain", issues)
         public_access = _require_bool(data, "public_access", issues)
@@ -261,16 +267,7 @@ class SourceConfig:
         source_hook = _optional_string(data, "source_hook", issues)
         tags = _optional_string_list(data, "tags", issues)
 
-        if source_type and strategy and source_type != strategy:
-            issues.append(
-                ValidationIssue(
-                    "strategy",
-                    (
-                        f"must match source_type {source_type!r} "
-                        "for the current JANUS strategy families"
-                    ),
-                )
-            )
+        policy.validate_strategy_pairing(source_type, strategy, issues)
 
         if strategy and strategy_variant and not registry.supports(strategy, strategy_variant):
             issues.append(
@@ -280,13 +277,7 @@ class SourceConfig:
                 )
             )
 
-        if public_access is False:
-            issues.append(
-                ValidationIssue(
-                    "public_access",
-                    "must be true because JANUS only supports public federal sources in phase 1",
-                )
-            )
+        policy.validate_public_access(public_access, issues)
 
         access = _build_access_config(data.get("access"), source_type, issues)
         extraction = _build_extraction_config(data.get("extraction"), issues)
