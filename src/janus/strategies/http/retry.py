@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from janus.models import ExecutionPlan
+from janus.models.config.constants import DEFAULT_RETRYABLE_STATUS_CODES
 from janus.strategies.common import _retry_delay_seconds
 from janus.strategies.http.throttle import HttpRequestThrottle
 from janus.strategies.http.transport import (
@@ -26,7 +27,9 @@ from janus.strategies.http.transport import (
 )
 from janus.utils.logging import StructuredLogger
 
-RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+#: The statuses re-sent when a source declares no ``extraction.retry.retryable_status_codes``.
+#: The tuple is owned by the config layer so the loop and the validator cannot drift apart.
+RETRYABLE_STATUS_CODES = frozenset(DEFAULT_RETRYABLE_STATUS_CODES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,8 +83,16 @@ def send_with_retries(
       ``response.status_code``, never on ``payload is None``.
 
     The default empty set keeps every existing caller bit-for-bit unchanged.
+
+    Which *failures* are worth re-sending is read from the plan's
+    ``extraction.retry.retryable_status_codes`` rather than from a constant here: "transient"
+    is a property of the upstream API, not of HTTP. A status outside that set is raised on the
+    first attempt without consuming ``max_attempts``, so an API that answers a valid request
+    with an unusual client error can end a whole run on one response unless the source
+    declares it.
     """
     retry_config = plan.source_config.extraction.retry
+    retryable_status_codes = frozenset(retry_config.retryable_status_codes)
     last_transport_error: Exception | None = None
 
     for attempt in range(1, retry_config.max_attempts + 1):
@@ -121,7 +132,7 @@ def send_with_retries(
             return response, None, attempt
 
         if (
-            response.status_code not in RETRYABLE_STATUS_CODES
+            response.status_code not in retryable_status_codes
             or attempt == retry_config.max_attempts
         ):
             raise policy.response_error_factory(response)

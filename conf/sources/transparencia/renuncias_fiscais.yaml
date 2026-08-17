@@ -46,6 +46,7 @@ sources:
         max_attempts: 4
         backoff_strategy: exponential
         backoff_seconds: 5
+        retryable_status_codes: [400, 408, 429, 500, 502, 503, 504]
 
     schema:
       mode: infer
@@ -124,6 +125,9 @@ sources:
         max_attempts: 4
         backoff_strategy: exponential
         backoff_seconds: 5
+        # This API answers a valid page with 400 under sustained paging; treating that as
+        # permanent ended a 9,686-page run on its first attempt (run 20260816T195656Z).
+        retryable_status_codes: [400, 408, 429, 500, 502, 503, 504]
 
     schema:
       mode: infer
@@ -202,6 +206,9 @@ sources:
         max_attempts: 4
         backoff_strategy: exponential
         backoff_seconds: 5
+        # This API answers a valid page with 400 under sustained paging; treating that as
+        # permanent ended a 9,686-page run on its first attempt (run 20260816T195656Z).
+        retryable_status_codes: [400, 408, 429, 500, 502, 503, 504]
 
     schema:
       mode: infer

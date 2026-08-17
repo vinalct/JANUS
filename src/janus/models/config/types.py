@@ -11,7 +11,10 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Final
 
-from janus.models.config.constants import DEFAULT_PAST_END_STATUS_CODES
+from janus.models.config.constants import (
+    DEFAULT_PAST_END_STATUS_CODES,
+    DEFAULT_RETRYABLE_STATUS_CODES,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,9 +143,20 @@ class AccessConfig:
 
 @dataclass(frozen=True, slots=True)
 class RetryConfig:
+    """How one HTTP attempt is repeated, and which responses are worth repeating.
+
+    ``retryable_status_codes`` is per-source because "this status is transient" is a
+    property of the upstream API, not of HTTP. Portal da Transparência, for one, answers a
+    perfectly valid page with ``400`` under load; with the hard-coded set that single
+    response ended a multi-hour run on its first attempt, because a status outside the set
+    is raised without consuming ``max_attempts``. Declaring it here makes ``max_attempts``
+    actually govern it.
+    """
+
     max_attempts: int
     backoff_strategy: str
     backoff_seconds: int
+    retryable_status_codes: tuple[int, ...] = DEFAULT_RETRYABLE_STATUS_CODES
 
 
 @dataclass(frozen=True, slots=True)

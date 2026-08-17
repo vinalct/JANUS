@@ -38,6 +38,7 @@ from janus.strategies.http import (
     RetryErrorPolicy,
     UrllibApiTransport,
     inject_auth,
+    response_body_excerpt,
     send_with_retries,
 )
 from janus.utils.logging import StructuredLogger, redact_url
@@ -54,10 +55,19 @@ CHECKSUM_HEADER_CANDIDATES = ("x-checksum-sha256", "x-amz-checksum-sha256")
 
 
 def _file_response_error(response: ApiResponse) -> FileDownloadError:
-    return FileDownloadError(
+    """Build the family's status error, carrying whatever the server said about it.
+
+    ``FileDownloadError`` holds no response object, so the bounded body excerpt goes into
+    the message — the only place downstream logging and dead-lettering will read it.
+    """
+    message = (
         "File request failed with status "
         f"{response.status_code} for {redact_url(response.request.full_url())}"
     )
+    excerpt = response_body_excerpt(response)
+    if excerpt is not None:
+        message = f"{message}: {excerpt}"
+    return FileDownloadError(message)
 
 
 #: Configuration of the *one* call this module makes into the shared retry loop.

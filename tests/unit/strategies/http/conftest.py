@@ -59,7 +59,7 @@ class FamilyUnderTest:
     retry_log_event: str
     returns_payload: bool
     response_error_has_response: bool
-    status_error_message: Callable[[int, str], str]
+    status_error_message: Callable[..., str]
     send_with_retries: Callable[..., Any]
     decode_payload: Callable[..., Any] | None
 
@@ -73,6 +73,15 @@ class SharedBinding:
     resolve_url: Callable[..., str]
     default_checkpoint_params: Callable[..., dict[str, str]]
     checkpoint_request_value: Callable[..., str | None]
+
+
+def _status_message(prefix: str, excerpt: str | None) -> str:
+    """Compose a family status-error message, body clause included when there is one.
+
+    Every family appends a bounded excerpt of the failed response body, so the expected
+    message is a function of the body the test scripted, not of the status alone.
+    """
+    return prefix if excerpt is None else f"{prefix}: {excerpt}"
 
 
 def _decode_via_api_executor(strategy, plan, response):
@@ -123,7 +132,9 @@ FAMILIES: dict[str, FamilyUnderTest] = {
         returns_payload=True,
         response_error_has_response=True,
         status_error_message=(
-            lambda status, url: f"API request failed with status {status} for {url}"
+            lambda status, url, excerpt=None: _status_message(
+                f"API request failed with status {status} for {url}", excerpt
+            )
         ),
         send_with_retries=_shared_send_via(
             api_requests,
@@ -144,7 +155,9 @@ FAMILIES: dict[str, FamilyUnderTest] = {
         returns_payload=True,
         response_error_has_response=True,
         status_error_message=(
-            lambda status, url: f"Catalog request failed with status {status} for {url}"
+            lambda status, url, excerpt=None: _status_message(
+                f"Catalog request failed with status {status} for {url}", excerpt
+            )
         ),
         send_with_retries=_shared_send_via(
             catalog_requests,
@@ -165,7 +178,9 @@ FAMILIES: dict[str, FamilyUnderTest] = {
         returns_payload=False,
         response_error_has_response=False,
         status_error_message=(
-            lambda status, url: f"File request failed with status {status} for {url}"
+            lambda status, url, excerpt=None: _status_message(
+                f"File request failed with status {status} for {url}", excerpt
+            )
         ),
         send_with_retries=_shared_send_via(files_download, decode_via=None, payload_error=None),
         decode_payload=None,
@@ -356,6 +371,7 @@ def build_source_config(
     retry_max_attempts: int = 3,
     retry_backoff_seconds: int = 2,
     retry_backoff_strategy: str = "fixed",
+    retry_retryable_status_codes: list[int] | None = None,
     rate_limit_backoff_seconds: int | None = 5,
     requests_per_minute: int | None = None,
 ) -> SourceConfig:
@@ -418,6 +434,11 @@ def build_source_config(
                     "max_attempts": retry_max_attempts,
                     "backoff_strategy": retry_backoff_strategy,
                     "backoff_seconds": retry_backoff_seconds,
+                    **(
+                        {}
+                        if retry_retryable_status_codes is None
+                        else {"retryable_status_codes": retry_retryable_status_codes}
+                    ),
                 },
             },
             "schema": {"mode": "infer"},
