@@ -13,7 +13,11 @@ from janus.strategies.http.binding import (
     resolve_url,
     split_path_and_query_params,
 )
-from janus.strategies.http.errors import HttpStrategyError
+from janus.strategies.http.errors import (
+    RESPONSE_BODY_EXCERPT_LIMIT,
+    HttpStrategyError,
+    response_body_excerpt,
+)
 from janus.strategies.http.payload import (
     ALL_PAYLOAD_FORMATS,
     PayloadDecodeError,
@@ -46,6 +50,7 @@ __all__ = [
     "HTTP_STATUS_MIN",
     "HTTP_STATUS_REDIRECT",
     "HTTP_STATUS_SUCCESS",
+    "RESPONSE_BODY_EXCERPT_LIMIT",
     "RETRYABLE_STATUS_CODES",
     "ApiClient",
     "ApiRequest",
@@ -63,6 +68,7 @@ __all__ = [
     "default_checkpoint_params",
     "inject_auth",
     "resolve_url",
+    "response_body_excerpt",
     "send_with_retries",
     "split_path_and_query_params",
 ]

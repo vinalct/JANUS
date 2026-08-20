@@ -51,3 +51,34 @@ def _validate_concurrency_contract(
                 f"{access.pagination.type!r} pagination",
             )
         )
+
+
+def _validate_retry_status_contract(
+    access: AccessConfig,
+    extraction: ExtractionConfig,
+    issues: list[ValidationIssue],
+) -> None:
+    """A status cannot mean both "the stream ended" and "try that again".
+
+    The retry loop resolves the overlap deterministically — terminal is checked first — but
+    a config that has to be read alongside the loop's branch order to be understood is a
+    config that will eventually be misread. Rejecting the overlap keeps each status with
+    exactly one meaning.
+    """
+
+    overlap = sorted(
+        set(extraction.retry.retryable_status_codes)
+        & set(access.pagination.past_end_status_codes)
+    )
+    if not overlap:
+        return
+
+    listed = ", ".join(str(code) for code in overlap)
+    issues.append(
+        ValidationIssue(
+            "extraction.retry.retryable_status_codes",
+            f"must not also appear in access.pagination.past_end_status_codes ({listed}) — "
+            "a status is either evidence the stream ended or a transient failure worth "
+            "re-sending, never both",
+        )
+    )

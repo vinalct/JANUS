@@ -361,6 +361,7 @@ def run_api_extraction(
                     request_input_key=request_input_key,
                     file_index=resume.completed_by_key[request_input_key],
                     request_input_count=request_input_count,
+                    raw_path_prefix=raw_path_prefix,
                     logger=request_input_logger,
                 )
             )
@@ -483,7 +484,12 @@ def run_api_extraction(
         dead_letter_skip_count=dead_letter_skip_count,
     )
 
-    progress_store.clear(plan)
+    _clear_progress_if_run_is_complete(
+        plan,
+        progress_store,
+        dead_letter_skip_count=dead_letter_skip_count,
+        logger=context.logger,
+    )
 
     return ApiExtractionOutcome(
         totals=totals,
@@ -495,6 +501,38 @@ def run_api_extraction(
         dead_letter_skip_count=dead_letter_skip_count,
         raw_path_prefix=raw_path_prefix,
     )
+
+
+def _clear_progress_if_run_is_complete(
+    plan: ExecutionPlan,
+    progress_store: ExtractionProgressStore,
+    *,
+    dead_letter_skip_count: int,
+    logger: StructuredLogger | None,
+) -> None:
+    """Discard resume state only when there is nothing left to resume.
+
+    Falling out of the request-input loop is not the same as having extracted anything. An
+    input that was skipped because a previous run dead-lettered it — or dead-lettered in this
+    run and continued past — leaves the loop by the same door as a completed one, and the
+    unconditional clear that used to live here then deleted the progress record on its way
+    out. That is how a run extracting *zero* records destroyed the position a three-hour
+    extraction had reached: the dead-letter check runs before rehydration, so the skip
+    happened first and the clear finished the job.
+
+    Keeping the record costs nothing when it is stale — a later successful run clears it —
+    while deleting it early is unrecoverable.
+    """
+    if dead_letter_skip_count:
+        if logger is not None:
+            logger.info(
+                "api_extraction_progress_retained",
+                dead_letter_skipped_count=dead_letter_skip_count,
+                reason="request inputs were skipped or dead-lettered; the run is incomplete",
+            )
+        return
+
+    progress_store.clear(plan)
 
 
 def build_extraction_result(

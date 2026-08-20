@@ -7,7 +7,7 @@ imports them. Mirrors ``strategies/http/errors.py``.
 
 from __future__ import annotations
 
-from janus.strategies.http import ApiResponse, HttpStrategyError
+from janus.strategies.http import ApiResponse, HttpStrategyError, response_body_excerpt
 from janus.utils.logging import redact_url
 
 
@@ -16,14 +16,22 @@ class ApiStrategyError(HttpStrategyError):
 
 
 class ApiResponseError(ApiStrategyError):
-    """Raised when an API call finished with a non-success response."""
+    """Raised when an API call finished with a non-success response.
+
+    Carries a bounded excerpt of the response body. The status and URL alone say what
+    happened but never why, and this error is what the dead-letter entry records — so
+    anything the body explained was previously lost at the moment it mattered most.
+    """
 
     def __init__(self, response: ApiResponse) -> None:
         self.response = response
+        self.body_excerpt = response_body_excerpt(response)
         message = (
             f"API request failed with status {response.status_code} for "
             f"{redact_url(response.request.full_url())}"
         )
+        if self.body_excerpt is not None:
+            message = f"{message}: {self.body_excerpt}"
         super().__init__(message)
 
 

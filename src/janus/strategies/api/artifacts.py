@@ -16,7 +16,7 @@ from typing import Any
 
 from janus.models import ExecutionPlan, ExtractedArtifact
 from janus.strategies.api.pagination import PaginationState
-from janus.strategies.common import _raw_page_path
+from janus.strategies.common import _raw_page_path, _raw_run_path_prefix
 from janus.utils.storage import StorageLayout
 
 #: Filename suffix written for each supported raw payload format. Shared by the write path
@@ -49,9 +49,12 @@ def _pages_dir(
     storage_layout: StorageLayout,
     request_input_index: int,
     request_input_count: int,
+    raw_path_prefix: Path | None = None,
 ) -> Path:
     """Return the raw subdirectory for one request input, mirroring _raw_relative_path."""
     raw_dir = storage_layout.resolve_output(plan, "raw").resolved_path
+    if raw_path_prefix is not None:
+        raw_dir = raw_dir / raw_path_prefix
     if request_input_count > 1:
         return raw_dir / f"request-input-{request_input_index:06d}"
     return raw_dir / "pages"
@@ -62,11 +65,14 @@ def _rediscover_all_artifacts_for_input(
     storage_layout: StorageLayout,
     request_input_index: int,
     request_input_count: int,
+    raw_path_prefix: Path | None = None,
 ) -> list[ExtractedArtifact]:
     """Return all raw artifacts written for a fully completed request input."""
     raw_format = plan.source_config.outputs.raw.format
     suffix = RAW_FILE_SUFFIXES.get(raw_format, "")
-    directory = _pages_dir(plan, storage_layout, request_input_index, request_input_count)
+    directory = _pages_dir(
+        plan, storage_layout, request_input_index, request_input_count, raw_path_prefix
+    )
 
     if not directory.exists():
         return []
@@ -94,10 +100,21 @@ def _rediscover_raw_artifacts(
     request_input_index: int = 1,
     request_input_count: int = 1,
 ) -> list[ExtractedArtifact]:
-    """Re-discover raw artifact files written by a previous partial run."""
+    """Re-discover raw artifact files written by a previous partial run.
+
+    The directory is derived from ``progress`` rather than from the current run: the pages
+    being recovered were written by the interrupted attempt, under *its* raw path prefix,
+    which is exactly what ``_raw_run_path_prefix`` reads back out of the progress record.
+    """
     raw_format = plan.source_config.outputs.raw.format
     suffix = RAW_FILE_SUFFIXES.get(raw_format, "")
-    directory = _pages_dir(plan, storage_layout, request_input_index, request_input_count)
+    directory = _pages_dir(
+        plan,
+        storage_layout,
+        request_input_index,
+        request_input_count,
+        _raw_run_path_prefix(plan, progress),
+    )
 
     if not directory.exists():
         return []

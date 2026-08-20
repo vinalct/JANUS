@@ -54,6 +54,7 @@ from janus.models.config.constants import (
     _SUPPORTED_SUB_REQUEST_INPUT_TYPES,
     CONCURRENT_PAGINATION_TYPES,
     DEFAULT_PAST_END_STATUS_CODES,
+    DEFAULT_RETRYABLE_STATUS_CODES,
     REQUEST_INPUT_BINDING_PREFIX,
     RETRYABLE_CLIENT_STATUS_CODES,
     SUPPORTED_AUTH_TYPES,
@@ -77,8 +78,13 @@ from janus.models.config.constants import (
 from janus.models.config.contracts import (
     _validate_concurrency_contract,
     _validate_incremental_contract,
+    _validate_retry_status_contract,
 )
-from janus.models.config.extraction import _build_extraction_config, _build_retry_config
+from janus.models.config.extraction import (
+    _build_extraction_config,
+    _build_retry_config,
+    _resolve_retryable_status_codes,
+)
 from janus.models.config.issues import SourceConfigValidationError, ValidationIssue
 from janus.models.config.outputs import (
     _build_output_target,
@@ -123,6 +129,7 @@ __all__ = [
     "CONCURRENT_PAGINATION_TYPES",
     "DEFAULT_PAST_END_STATUS_CODES",
     "DEFAULT_VALIDATION_POLICY",
+    "DEFAULT_RETRYABLE_STATUS_CODES",
     "REQUEST_INPUT_BINDING_PREFIX",
     "RETRYABLE_CLIENT_STATUS_CODES",
     "STRATEGY_REGISTRY",
@@ -198,10 +205,12 @@ __all__ = [
     "_require_non_empty_string_mapping",
     "_require_string",
     "_resolve_past_end_status_codes",
+    "_resolve_retryable_status_codes",
     "_validate_concurrency_contract",
     "_validate_dotted_path",
     "_validate_incremental_contract",
     "_validate_parameter_binding_source",
+    "_validate_retry_status_contract",
 ]
 
 
@@ -288,6 +297,7 @@ class SourceConfig:
 
         _validate_incremental_contract(extraction, quality, issues)
         _validate_concurrency_contract(source_type, access, issues)
+        _validate_retry_status_contract(access, extraction, issues)
 
         if issues:
             raise SourceConfigValidationError(config_path, issues)

@@ -175,14 +175,22 @@ def recover_completed_input(
     request_input_key: str,
     file_index: int,
     request_input_count: int,
+    raw_path_prefix: Path | None,
     logger: StructuredLogger | None,
 ) -> list[ExtractedArtifact]:
-    """Return the artifacts a previous attempt already wrote for a finished input."""
+    """Return the artifacts a previous attempt already wrote for a finished input.
+
+    ``raw_path_prefix`` is the run-scoped raw segment the completed attempt wrote under,
+    resolved once by the caller from the same progress record that named the input complete.
+    Reading it from the *current* run instead would look in a directory that cannot contain
+    those pages.
+    """
     pre_artifacts = _rediscover_all_artifacts_for_input(
         plan,
         storage_layout,
         file_index,
         request_input_count,
+        raw_path_prefix,
     )
     if logger is not None:
         logger.info(

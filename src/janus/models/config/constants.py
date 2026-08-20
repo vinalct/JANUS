@@ -22,9 +22,17 @@ SUPPORTED_EXTRACTION_MODES = frozenset({"full_refresh", "incremental", "snapshot
 SUPPORTED_CHECKPOINT_STRATEGIES = frozenset({"date_window", "max_value", "none"})
 SUPPORTED_PAGINATION_TYPES = frozenset({"cursor", "none", "offset", "page_number"})
 DEFAULT_PAST_END_STATUS_CODES: tuple[int, ...] = (404, 416)
-RETRYABLE_CLIENT_STATUS_CODES: frozenset[int] = frozenset({408, 429})
 CLIENT_ERROR_STATUS_MIN = 400
 CLIENT_ERROR_STATUS_MAX_EXCLUSIVE = 500
+SERVER_ERROR_STATUS_MAX_EXCLUSIVE = 600
+
+DEFAULT_RETRYABLE_STATUS_CODES: tuple[int, ...] = (408, 429, 500, 502, 503, 504)
+
+RETRYABLE_CLIENT_STATUS_CODES: frozenset[int] = frozenset(
+    code
+    for code in DEFAULT_RETRYABLE_STATUS_CODES
+    if CLIENT_ERROR_STATUS_MIN <= code < CLIENT_ERROR_STATUS_MAX_EXCLUSIVE
+)
 CONCURRENT_PAGINATION_TYPES: frozenset[str] = frozenset({"page_number", "offset"})
 SUPPORTED_SCHEMA_MODES = frozenset({"explicit", "infer"})
 SUPPORTED_DATA_FORMATS = frozenset(

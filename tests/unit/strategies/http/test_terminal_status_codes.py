@@ -113,7 +113,7 @@ def test_non_terminal_error_still_raises_response_error(tmp_path):
         _send(plan, [ResponseSpec(status_code=404)], terminal=frozenset({416}))
 
     assert excinfo.value.response.status_code == 404
-    assert str(excinfo.value) == f"API request failed with status 404 for {REQUEST_URL}"
+    assert str(excinfo.value) == f"API request failed with status 404 for {REQUEST_URL}: {{}}"
 
 
 def test_retryable_status_outside_the_terminal_set_still_retries(tmp_path):

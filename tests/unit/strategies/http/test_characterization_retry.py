@@ -145,7 +145,7 @@ def test_non_retryable_status_raises_immediately_with_family_shape(family, tmp_p
         _send(family, plan, [ResponseSpec(status_code=404)])
 
     assert type(excinfo.value) is family.response_error
-    assert str(excinfo.value) == family.status_error_message(404, REQUEST_URL)
+    assert str(excinfo.value) == family.status_error_message(404, REQUEST_URL, "{}")
     if family.response_error_has_response:
         assert excinfo.value.response.status_code == 404
 
@@ -191,7 +191,7 @@ def test_retryable_status_exhaustion_raises_family_response_error(family, tmp_pa
         )
 
     assert type(excinfo.value) is family.response_error
-    assert str(excinfo.value) == family.status_error_message(503, REQUEST_URL)
+    assert str(excinfo.value) == family.status_error_message(503, REQUEST_URL, "{}")
 
 
 def test_retryable_status_exhaustion_sleeps_between_all_attempts(family, tmp_path):
