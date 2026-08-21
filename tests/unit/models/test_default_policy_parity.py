@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import inspect
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 
+from janus.lineage import compute_config_version
 from janus.models.config.policy import DEFAULT_VALIDATION_POLICY
 from janus.models.config.strategy_registry import STRATEGY_REGISTRY
 from janus.models.source_config import SourceConfig, SourceConfigValidationError
+from janus.registry import load_registry
 
 CONFIG_PATH = Path("conf/sources/example/default_policy_parity.yaml")
 
@@ -239,3 +242,73 @@ def test_valid_config_still_round_trips():
     assert config.source_type == config.strategy
     assert config.federation_level == "federal"
     assert config.public_access is True
+
+
+# ── whole-tree parity ────────────────────────────────────────────────────────
+
+CHECKED_IN_SOURCE_IDS: tuple[str, ...] = (
+    "dados_abertos_catalog__conjunto_dados__full_refresh",
+    "dados_abertos_catalog__conjunto_dados_details__full_refresh",
+    "federal_open_data_example",
+    "ibge_agro_abacaxi_pronaf",
+    "ibge_pib_brasil",
+    "inep_censo_escolar_microdados",
+    "receita_federal__cnpj__cnaes_full_refresh",
+    "receita_federal__cnpj__empresas_full_refresh",
+    "receita_federal__cnpj__estabelecimentos_full_refresh",
+    "receita_federal__cnpj__motivos_full_refresh",
+    "receita_federal__cnpj__municipios_full_refresh",
+    "receita_federal__cnpj__naturezas_full_refresh",
+    "receita_federal__cnpj__paises_full_refresh",
+    "receita_federal__cnpj__qualificacoes_full_refresh",
+    "receita_federal__cnpj__simples_full_refresh",
+    "receita_federal__cnpj__socios_full_refresh",
+    "transparencia__contratos__contratos__full_refresh",
+    "transparencia__emendas_parlamentares__documentos__full_refresh",
+    "transparencia__emendas_parlamentares__emendas__full_refresh",
+    "transparencia__gastos_cartoes__cartoes__full_refresh",
+    "transparencia__gastos_cartoes__cartoes__incremental",
+    "transparencia__licitacoes__licitacoes__full_refresh",
+    "transparencia__licitacoes__modalidades__full_refresh",
+    "transparencia__licitacoes__unidades_gestoras__full_refresh",
+    "transparencia__orgaos__siafi__full_refresh",
+    "transparencia__orgaos__siape__full_refresh",
+    "transparencia__poder_executivo_federal__servidores__full_refresh",
+    "transparencia__poder_executivo_federal__servidores_por_orgao__full_refresh",
+    "transparencia__renuncias_fiscais__empresas_habilitadas__full_refresh",
+    "transparencia__renuncias_fiscais__empresas_imunes_isentas__full_refresh",
+    "transparencia__renuncias_fiscais__renuncias_valores__full_refresh",
+)
+
+
+def test_every_checked_in_source_still_validates():
+    """The whole tree, pinned as a set rather than as a count.
+
+    ``tests/unit/registry/test_registry_sweep.py`` already asserts the tree loads and is
+    non-empty. This pins *which* sources come back, so a default policy that stopped
+    rejecting something is as loud a failure as one that started rejecting something.
+    """
+    registry = load_registry(PROJECT_ROOT)
+
+    loaded = tuple(sorted(source.source_id for source in registry.list_sources(enabled_only=False)))
+
+    assert loaded == CHECKED_IN_SOURCE_IDS, (
+        "the set of sources that validate under the default policy changed.\n"
+        f"  no longer accepted: {sorted(set(CHECKED_IN_SOURCE_IDS) - set(loaded))}\n"
+        f"  newly accepted:     {sorted(set(loaded) - set(CHECKED_IN_SOURCE_IDS))}\n"
+        "Both directions are AC-1 breaks. If a source was deliberately added or removed "
+        "from conf/sources, update this tuple — that edit is the review conversation."
+    )
+
+
+def test_config_version_hashes_are_unchanged():
+    """Not applicable as a checked-in digest — and this pins *why*, so it stays that way."""
+    config_path = PROJECT_ROOT / "conf/sources/inep/inep.yaml"
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    strict = SourceConfig.from_mapping(data, config_path, policy=DEFAULT_VALIDATION_POLICY)
+
+    assert compute_config_version(config_path) == sha256(
+        config_path.read_bytes()
+    ).hexdigest()
+    assert compute_config_version(strict.config_path) == compute_config_version(config_path)
