@@ -494,8 +494,22 @@ def _as_grouped_entry(source_yaml: str) -> str:
     return "\n".join(rendered)
 
 
-def _valid_source_yaml(source_id: str, *, enabled: bool) -> str:
+def _valid_source_yaml(
+    source_id: str,
+    *,
+    enabled: bool,
+    strategy_variant: str = "page_number_api",
+    federation_level: str = "federal",
+    public_access: bool = True,
+) -> str:
+    """Render a source config that the default phase-1 policy accepts.
+
+    The three phase-scope fields are overridable so policy tests can make exactly one of
+    them fail without a second, near-identical builder drifting alongside this one. Their
+    defaults render the same document this helper has always rendered.
+    """
     enabled_value = "true" if enabled else "false"
+    public_access_value = "true" if public_access else "false"
     return f"""
 source_id: {source_id}
 name: {source_id}
@@ -503,10 +517,10 @@ owner: janus
 enabled: {enabled_value}
 source_type: api
 strategy: api
-strategy_variant: page_number_api
-federation_level: federal
+strategy_variant: {strategy_variant}
+federation_level: {federation_level}
 domain: example
-public_access: true
+public_access: {public_access_value}
 
 access:
   base_url: https://example.invalid
