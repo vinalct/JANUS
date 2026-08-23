@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Self
 
 from janus.models import ExecutionPlan, ExtractionResult, RunContext, WriteResult
-from janus.models.source_config import SUPPORTED_STRATEGY_VARIANTS, SourceConfig
+from janus.models.config.strategy_registry import STRATEGY_REGISTRY, StrategyRegistry
+from janus.models.source_config import SourceConfig
 from janus.registry import load_registry
 from janus.strategies.base import BaseStrategy, SourceHook
 
@@ -123,20 +124,33 @@ class StrategyCatalog:
         object.__setattr__(self, "_bindings_by_key", bindings_by_key)
 
     @classmethod
-    def with_defaults(cls) -> Self:
+    def with_defaults(cls, registry: StrategyRegistry = STRATEGY_REGISTRY) -> Self:
+        """Bind one implementation per family, over every pair the registry declares.
+
+        The registry owns the *names*; this method owns the *implementations*. Adding a
+        variant is therefore a registry-only edit, and adding a family fails loudly here
+        instead of raising a bare ``KeyError`` at every planner construction.
+        """
         from janus.strategies.api import ApiStrategy
         from janus.strategies.catalog import CatalogStrategy
         from janus.strategies.files import FileStrategy
 
-        strategies: dict[str, BaseStrategy] = {
+        implementations: dict[str, BaseStrategy] = {
             "api": ApiStrategy(),
             "catalog": CatalogStrategy(),
             "file": FileStrategy(),
         }
+        missing = sorted(registry.families - implementations.keys())
+        if missing:
+            raise PlannerError(
+                "No strategy implementation is registered for family/families "
+                f"{', '.join(missing)} declared in the strategy registry. Add the binding in "
+                "StrategyCatalog.with_defaults, or remove the family from "
+                "janus.models.config.constants.SUPPORTED_STRATEGY_VARIANTS."
+            )
         bindings = tuple(
-            StrategyBinding(family=family, variant=variant, strategy=strategies[family])
-            for family, variants in sorted(SUPPORTED_STRATEGY_VARIANTS.items())
-            for variant in sorted(variants)
+            StrategyBinding(family=family, variant=variant, strategy=implementations[family])
+            for family, variant in registry.dispatch_keys()
         )
         return cls(bindings=bindings)
 

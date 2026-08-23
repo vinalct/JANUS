@@ -8,9 +8,13 @@ from typing import Any, Self
 import yaml
 
 from janus.models.source_config import (
+    DEFAULT_VALIDATION_POLICY,
+    STRATEGY_REGISTRY,
     SourceConfig,
     SourceConfigValidationError,
+    StrategyRegistry,
     ValidationIssue,
+    ValidationPolicy,
 )
 
 
@@ -62,8 +66,21 @@ class SourceRegistry:
         )
 
     @classmethod
-    def load(cls, project_root: Path) -> Self:
-        """Load app settings, discover source YAML files, and return the typed registry."""
+    def load(
+        cls,
+        project_root: Path,
+        *,
+        policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
+        strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
+    ) -> Self:
+        """Load app settings, discover source YAML files, and return the typed registry.
+
+        ``policy`` and ``strategy_registry`` are load-time inputs, forwarded untouched to
+        every ``SourceConfig.from_mapping`` call this discovery makes. Neither is stored on
+        the returned registry: which policy validated a load is lineage, not registry state,
+        and a field would change ``__eq__`` and ``repr`` for every consumer to record
+        something nobody reads afterwards.
+        """
         resolved_project_root = project_root.resolve()
         app_config = load_app_config(resolved_project_root)
         sources_dir = app_config.registry.resolve_sources_dir(resolved_project_root)
@@ -76,7 +93,11 @@ class SourceRegistry:
             sources_dir,
             app_config.registry.file_pattern,
         ):
-            for source in _load_source_configs(config_path):
+            for source in _load_source_configs(
+                config_path,
+                policy=policy,
+                strategy_registry=strategy_registry,
+            ):
                 previous_path = seen_source_ids.get(source.source_id)
                 if previous_path is not None:
                     raise ValueError(
@@ -141,9 +162,18 @@ def load_app_config(project_root: Path) -> AppConfig:
     )
 
 
-def load_registry(project_root: Path) -> SourceRegistry:
+def load_registry(
+    project_root: Path,
+    *,
+    policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
+    strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
+) -> SourceRegistry:
     """Public convenience wrapper that loads the full source registry."""
-    return SourceRegistry.load(project_root)
+    return SourceRegistry.load(
+        project_root,
+        policy=policy,
+        strategy_registry=strategy_registry,
+    )
 
 
 def _discover_source_config_paths(sources_dir: Path, file_pattern: str) -> tuple[Path, ...]:
@@ -157,20 +187,40 @@ def _discover_source_config_paths(sources_dir: Path, file_pattern: str) -> tuple
     )
 
 
-def _load_source_configs(config_path: Path) -> tuple[SourceConfig, ...]:
+def _load_source_configs(
+    config_path: Path,
+    *,
+    policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
+    strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
+) -> tuple[SourceConfig, ...]:
     """Read one YAML file and return one or more validated source configs."""
     raw = _load_yaml_document(config_path)
     if not isinstance(raw, Mapping):
         raise ValueError(f"Config file must contain a mapping: {config_path}")
 
     if "sources" not in raw:
-        return (SourceConfig.from_mapping(raw, config_path),)
-    return _load_grouped_source_configs(raw, config_path)
+        return (
+            SourceConfig.from_mapping(
+                raw,
+                config_path,
+                policy=policy,
+                registry=strategy_registry,
+            ),
+        )
+    return _load_grouped_source_configs(
+        raw,
+        config_path,
+        policy=policy,
+        strategy_registry=strategy_registry,
+    )
 
 
 def _load_grouped_source_configs(
     raw: Mapping[str, Any],
     config_path: Path,
+    *,
+    policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
+    strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
 ) -> tuple[SourceConfig, ...]:
     """Load a grouped source file whose top level is a `sources:` list."""
     issues: list[ValidationIssue] = []
@@ -199,7 +249,14 @@ def _load_grouped_source_configs(
             issues.append(ValidationIssue(entry_path, "must be a mapping"))
             continue
         try:
-            sources.append(SourceConfig.from_mapping(item, config_path))
+            sources.append(
+                SourceConfig.from_mapping(
+                    item,
+                    config_path,
+                    policy=policy,
+                    registry=strategy_registry,
+                )
+            )
         except SourceConfigValidationError as exc:
             issues.extend(
                 ValidationIssue(f"{entry_path}.{issue.path}", issue.message)

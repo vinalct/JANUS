@@ -108,6 +108,45 @@ Every source should define:
 
 Keep `source_type` and `strategy` aligned. In the current JANUS design, family and strategy are the same concept.
 
+### The default posture, and what to do when your source does not fit it
+
+JANUS validates every source against a **phase-scope policy**: public sources, `federation_level: federal`,
+and `strategy` equal to `source_type`. A config that breaks any of these is rejected at load time:
+
+```
+Invalid source config: conf/sources/example/my_source.yaml
+- public_access: must be true because JANUS only supports public federal sources in phase 1
+```
+
+**That is a policy decision, not a bug.** It says what JANUS has chosen to onboard so far, not what the code
+can do. If you believe your source should be an exception — a state-level dataset, a credentialed feed — the
+answer is not to edit `models/source_config.py`. The rules live in `src/janus/models/config/policy.py` as a
+swappable `ValidationPolicy`, and broadening them is a scope decision someone makes deliberately, with its
+own order. Take it there.
+
+### Adding a new variant to an existing family
+
+One edit. Add the name to `SUPPORTED_STRATEGY_VARIANTS` in `src/janus/models/config/constants.py`:
+
+```python
+"api": frozenset(
+    {"cursor_api", "date_window_api", "offset_api", "page_number_api", "keyset_api"}
+),
+```
+
+Then implement the variant's behaviour in the family strategy. The planner picks it up automatically — it
+builds its dispatch table from the registry, so there is no second list to keep in step.
+
+### Adding a new family
+
+Two edits, and the second is easy to forget:
+
+1. the registry entry in `constants.py`;
+2. the implementation binding in `StrategyCatalog.with_defaults` (`src/janus/planner/core.py`).
+
+`tests/unit/planner/test_strategy_registry_drift.py` fails if you do one and not the other, in either
+direction — a family with no implementation, or an implementation for a family nobody registered.
+
 ### What The Main Blocks Currently Support
 
 The registry contract is intentionally small. The most important current options are:

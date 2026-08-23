@@ -3,8 +3,9 @@
 The package layers strictly downward::
 
     constants -> issues -> coercion -> types -> request_inputs -> bindings -> access
-                                            -> extraction, outputs
-                                            -> contracts -> source_config
+              |                             -> extraction, outputs
+              |                             -> contracts -> source_config
+              -> strategy_registry -> policy, source_config, janus.planner
 
 ``access`` composes ``request_inputs`` and ``bindings`` because it must report their
 issues in a fixed order; those are the only builder-to-builder edges. Nothing in this
@@ -43,6 +44,12 @@ from janus.models.config.constants import (
     SUPPORTED_WRITE_MODES,
 )
 from janus.models.config.issues import SourceConfigValidationError, ValidationIssue
+from janus.models.config.policy import (
+    DEFAULT_VALIDATION_POLICY,
+    PhaseValidationPolicy,
+    ValidationPolicy,
+)
+from janus.models.config.strategy_registry import STRATEGY_REGISTRY, StrategyRegistry
 from janus.models.config.types import (
     AccessConfig,
     AuthConfig,
@@ -66,8 +73,10 @@ __all__ = [
     "CONCURRENT_PAGINATION_TYPES",
     "DEFAULT_PAST_END_STATUS_CODES",
     "DEFAULT_RETRYABLE_STATUS_CODES",
+    "DEFAULT_VALIDATION_POLICY",
     "REQUEST_INPUT_BINDING_PREFIX",
     "RETRYABLE_CLIENT_STATUS_CODES",
+    "STRATEGY_REGISTRY",
     "SUPPORTED_AUTH_TYPES",
     "SUPPORTED_BACKOFF_STRATEGIES",
     "SUPPORTED_CHECKPOINT_STRATEGIES",
@@ -95,6 +104,7 @@ __all__ = [
     "OutputsConfig",
     "PaginationConfig",
     "ParameterBinding",
+    "PhaseValidationPolicy",
     "QualityConfig",
     "RateLimitConfig",
     "RequestInputsConfig",
@@ -102,5 +112,7 @@ __all__ = [
     "SchemaConfig",
     "SourceConfigValidationError",
     "SparkConfig",
+    "StrategyRegistry",
     "ValidationIssue",
+    "ValidationPolicy",
 ]
