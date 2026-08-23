@@ -13,6 +13,15 @@ ICEBERG_SESSION_EXTENSIONS = (
     "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
 )
 ICEBERG_CATALOG_IMPL = "org.apache.iceberg.spark.SparkCatalog"
+JDBC_CATALOG_TYPE = "jdbc"
+REST_CATALOG_TYPE = "rest"
+HADOOP_CATALOG_TYPE = "hadoop"
+SUPPORTED_CATALOG_TYPES = frozenset(
+    {JDBC_CATALOG_TYPE, REST_CATALOG_TYPE, HADOOP_CATALOG_TYPE}
+)
+CATALOG_TYPES_REQUIRING_URI = frozenset({JDBC_CATALOG_TYPE, REST_CATALOG_TYPE})
+CATALOG_TYPE_KEY = "catalog_type"
+JDBC_CREDENTIAL_OPTIONS = (("user", "jdbc.user"), ("password", "jdbc.password"))
 RUNTIME_SCRATCH_DIR_ENV = "JANUS_RUNTIME_SCRATCH_DIR"
 DEFAULT_RUNTIME_SCRATCH_DIR = "/tmp/janus/runtime"
 FALLBACK_RUNTIME_PATH_KEYS = frozenset(
@@ -122,34 +131,7 @@ def build_spark_options(
 
     iceberg = spark_config.get("iceberg")
     if isinstance(iceberg, dict) and iceberg:
-        catalog_name = iceberg["catalog_name"]
-        runtime_package = iceberg["runtime_package"]
-
-        options["spark.jars.packages"] = merge_csv_values(
-            options.get("spark.jars.packages"), runtime_package
-        )
-        options["spark.sql.extensions"] = merge_csv_values(
-            options.get("spark.sql.extensions"), ICEBERG_SESSION_EXTENSIONS
-        )
-        options.setdefault("spark.sql.defaultCatalog", catalog_name)
-        options.setdefault(f"spark.sql.catalog.{catalog_name}", ICEBERG_CATALOG_IMPL)
-        options.setdefault(f"spark.sql.catalog.{catalog_name}.type", "hadoop")
-
-        iceberg_warehouse_dir = resolved_paths.get("iceberg_warehouse_dir")
-        if iceberg_warehouse_dir is None:
-            raise KeyError("Resolved Iceberg warehouse path is missing")
-
-        options.setdefault(
-            f"spark.sql.catalog.{catalog_name}.warehouse",
-            str(iceberg_warehouse_dir),
-        )
-
-        default_namespace = iceberg.get("default_namespace")
-        if default_namespace:
-            options.setdefault(
-                f"spark.sql.catalog.{catalog_name}.default-namespace",
-                str(default_namespace),
-            )
+        _apply_iceberg_catalog_options(options, iceberg, resolved_paths)
 
     return options
 
@@ -168,6 +150,125 @@ def build_spark_session(config: dict[str, Any], resolved_paths: dict[str, Path])
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel(config.get("runtime", {}).get("log_level", "WARN"))
     return spark
+
+
+def _apply_iceberg_catalog_options(
+    options: dict[str, str], iceberg: dict[str, Any], resolved_paths: dict[str, Path]
+) -> None:
+    """Emit the Iceberg catalog block for the catalog type the profile declares.
+
+    Explicit `spark.config` entries are already in `options` by the time this runs, so
+    every catalog key is written with `setdefault` — a profile override still wins.
+    """
+
+    catalog_name = iceberg["catalog_name"]
+    catalog_type = _resolve_catalog_type(iceberg)
+    catalog_prefix = f"spark.sql.catalog.{catalog_name}"
+
+    packages = merge_csv_values(
+        options.get("spark.jars.packages"), iceberg["runtime_package"]
+    )
+    for package in _catalog_jar_packages(catalog_type, iceberg):
+        packages = merge_csv_values(packages, package)
+    options["spark.jars.packages"] = packages
+
+    options["spark.sql.extensions"] = merge_csv_values(
+        options.get("spark.sql.extensions"), ICEBERG_SESSION_EXTENSIONS
+    )
+    options.setdefault("spark.sql.defaultCatalog", catalog_name)
+    options.setdefault(catalog_prefix, ICEBERG_CATALOG_IMPL)
+
+    for suffix, value in _catalog_type_options(catalog_type, iceberg):
+        options.setdefault(f"{catalog_prefix}.{suffix}", value)
+
+    iceberg_warehouse_dir = resolved_paths.get("iceberg_warehouse_dir")
+    if iceberg_warehouse_dir is None:
+        raise KeyError("Resolved Iceberg warehouse path is missing")
+
+    options.setdefault(f"{catalog_prefix}.warehouse", str(iceberg_warehouse_dir))
+
+    default_namespace = iceberg.get("default_namespace")
+    if default_namespace:
+        options.setdefault(
+            f"{catalog_prefix}.default-namespace", str(default_namespace)
+        )
+
+
+def _resolve_catalog_type(iceberg: dict[str, Any]) -> str:
+    """The declared catalog type, or a named error. There is no default on purpose.
+
+    A code-side default is how an unsafe catalog sneaks back into a profile that
+    forgot the key; the default belongs to the profile.
+    """
+
+    catalog_type = _non_empty_text(iceberg.get(CATALOG_TYPE_KEY))
+    supported = ", ".join(sorted(SUPPORTED_CATALOG_TYPES))
+    if catalog_type is None:
+        raise ValueError(
+            f"Environment config must set spark.iceberg.{CATALOG_TYPE_KEY} in the "
+            f"environment profile; supported values: {supported}"
+        )
+    if catalog_type not in SUPPORTED_CATALOG_TYPES:
+        raise ValueError(
+            f"Environment config has an unsupported spark.iceberg.{CATALOG_TYPE_KEY}: "
+            f"{catalog_type!r}; supported values: {supported}"
+        )
+    return catalog_type
+
+
+def _catalog_type_options(
+    catalog_type: str, iceberg: dict[str, Any]
+) -> list[tuple[str, str]]:
+    emitted = [("type", catalog_type)]
+    if catalog_type in CATALOG_TYPES_REQUIRING_URI:
+        emitted.append(("uri", _required_catalog_value(iceberg, "uri", catalog_type)))
+    if catalog_type == JDBC_CATALOG_TYPE:
+        emitted.extend(_jdbc_credential_options(iceberg))
+    return emitted
+
+
+def _catalog_jar_packages(catalog_type: str, iceberg: dict[str, Any]) -> list[str]:
+    if catalog_type != JDBC_CATALOG_TYPE:
+        return []
+    driver_package = _non_empty_text(iceberg.get("driver_package"))
+    return [driver_package] if driver_package is not None else []
+
+
+def _jdbc_credential_options(iceberg: dict[str, Any]) -> list[tuple[str, str]]:
+    credentials = iceberg.get("credentials")
+    if not isinstance(credentials, dict):
+        return []
+    emitted = []
+    for key, suffix in JDBC_CREDENTIAL_OPTIONS:
+        value = _non_empty_text(credentials.get(key))
+        if value is not None:
+            emitted.append((suffix, value))
+    return emitted
+
+
+def _required_catalog_value(
+    iceberg: dict[str, Any], key: str, catalog_type: str
+) -> str:
+    """Read a per-type required key, treating an unset `${VAR:-}` expansion as missing.
+
+    Env expansion yields `""` for an unset variable, and `""` must never reach Spark
+    as a catalog URI.
+    """
+
+    value = _non_empty_text(iceberg.get(key))
+    if value is None:
+        raise ValueError(
+            f"Environment config must set a non-empty spark.iceberg.{key} for "
+            f"spark.iceberg.{CATALOG_TYPE_KEY} {catalog_type!r} in the environment profile"
+        )
+    return value
+
+
+def _non_empty_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _ensure_writable_directory(path: Path) -> None:

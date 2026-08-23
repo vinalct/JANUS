@@ -34,6 +34,7 @@ def test_load_local_environment_uses_checked_in_defaults(monkeypatch):
     monkeypatch.delenv("JANUS_SPARK_DRIVER_HOST", raising=False)
     monkeypatch.delenv("JANUS_RAW_DIR", raising=False)
     monkeypatch.delenv("JANUS_ICEBERG_RUNTIME_PACKAGE", raising=False)
+    monkeypatch.delenv("JANUS_ICEBERG_CATALOG_TYPE", raising=False)
 
     config = load_environment_config("local", PROJECT_ROOT)
     assert config["name"] == "local"
@@ -42,6 +43,7 @@ def test_load_local_environment_uses_checked_in_defaults(monkeypatch):
     assert config["spark"]["config"]["spark.driver.host"] == "127.0.0.1"
     assert config["spark"]["ivy_dir"] == "data/metadata/ivy"
     assert config["spark"]["iceberg"]["catalog_name"] == "janus"
+    assert config["spark"]["iceberg"]["catalog_type"] == "hadoop"
     assert config["spark"]["iceberg"]["runtime_package"] == ICEBERG_RUNTIME_PACKAGE
     assert config["storage"]["raw_dir"] == "data/raw"
 
@@ -99,6 +101,7 @@ def test_build_spark_options_merges_iceberg_runtime_settings(tmp_path):
             "ivy_dir": "data/metadata/ivy",
             "iceberg": {
                 "catalog_name": "janus",
+                "catalog_type": "hadoop",
                 "warehouse_dir": "data/bronze/iceberg",
                 "runtime_package": ICEBERG_RUNTIME_PACKAGE,
                 "default_namespace": "bronze",

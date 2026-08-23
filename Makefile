@@ -5,6 +5,7 @@ ENVIRONMENT ?= local
 JANUS_UID := $(shell id -u)
 JANUS_GID := $(shell id -g)
 JANUS_PROJECT_ROOT := $(CURDIR)
+COMMA := ,
 
 # Iceberg runtime jar is vendored under deps/ (data/metadata/** is ignored) and seeded into the
 # path the Spark session resolves from, so Iceberg never resolves over the network.
@@ -63,6 +64,10 @@ logs: check-compose
 shell: ensure-up
 	$(call RUN_COMPOSE,exec $(SERVICE) sh)
 
+# The REPL reads the same catalog knobs the environment profile does
+# (conf/environments/*.yaml) so `make pyspark-local` and the app cannot drift onto
+# different catalogs. The `hadoop` default here is the profile's default, and moves
+# with it.
 pyspark-local: ensure-up
 	$(call RUN_COMPOSE,exec $(SERVICE) sh -lc '\
 	ivy_dir="$${JANUS_SPARK_IVY_DIR:-data/metadata/ivy}"; \
@@ -71,20 +76,36 @@ pyspark-local: ensure-up
 	if [ "$$iceberg_warehouse" = "$${iceberg_warehouse#/}" ]; then iceberg_warehouse="/workspace/$$iceberg_warehouse"; fi; \
 	spark_warehouse="$${JANUS_SPARK_WAREHOUSE_DIR:-data/metadata/spark-warehouse}"; \
 	if [ "$$spark_warehouse" = "$${spark_warehouse#/}" ]; then spark_warehouse="/workspace/$$spark_warehouse"; fi; \
+	catalog="$${JANUS_ICEBERG_CATALOG_NAME:-janus}"; \
+	catalog_type="$${JANUS_ICEBERG_CATALOG_TYPE:-hadoop}"; \
+	packages="$${JANUS_ICEBERG_RUNTIME_PACKAGE:-org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1}"; \
+	catalog_conf="--conf spark.sql.catalog.$$catalog.type=$$catalog_type"; \
+	if [ "$$catalog_type" = jdbc ] || [ "$$catalog_type" = rest ]; then \
+		if [ -z "$${JANUS_ICEBERG_CATALOG_URI:-}" ]; then \
+			echo "JANUS_ICEBERG_CATALOG_URI must be set for catalog type $$catalog_type" >&2; \
+			exit 1; \
+		fi; \
+		catalog_conf="$$catalog_conf --conf spark.sql.catalog.$$catalog.uri=$$JANUS_ICEBERG_CATALOG_URI"; \
+	fi; \
+	if [ "$$catalog_type" = jdbc ]; then \
+		if [ -n "$${JANUS_ICEBERG_JDBC_DRIVER_PACKAGE:-}" ]; then packages="$$packages$(COMMA)$$JANUS_ICEBERG_JDBC_DRIVER_PACKAGE"; fi; \
+		if [ -n "$${JANUS_ICEBERG_CATALOG_USER:-}" ]; then catalog_conf="$$catalog_conf --conf spark.sql.catalog.$$catalog.jdbc.user=$$JANUS_ICEBERG_CATALOG_USER"; fi; \
+		if [ -n "$${JANUS_ICEBERG_CATALOG_PASSWORD:-}" ]; then catalog_conf="$$catalog_conf --conf spark.sql.catalog.$$catalog.jdbc.password=$$JANUS_ICEBERG_CATALOG_PASSWORD"; fi; \
+	fi; \
 	pyspark \
-		--packages "$${JANUS_ICEBERG_RUNTIME_PACKAGE:-org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1}" \
+		--packages "$$packages" \
 		--conf spark.jars.ivy="$$ivy_dir" \
 		--conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
-		--conf spark.sql.defaultCatalog="$${JANUS_ICEBERG_CATALOG_NAME:-janus}" \
-		--conf spark.sql.catalog.$${JANUS_ICEBERG_CATALOG_NAME:-janus}=org.apache.iceberg.spark.SparkCatalog \
---conf spark.sql.catalog.$${JANUS_ICEBERG_CATALOG_NAME:-janus}.type=hadoop \
---conf spark.sql.catalog.$${JANUS_ICEBERG_CATALOG_NAME:-janus}.warehouse="$$iceberg_warehouse" \
---conf spark.sql.catalog.$${JANUS_ICEBERG_CATALOG_NAME:-janus}.default-namespace="$${JANUS_ICEBERG_DEFAULT_NAMESPACE:-bronze}" \
---conf spark.sql.warehouse.dir="$$spark_warehouse" \
---conf spark.driver.bindAddress="$${JANUS_SPARK_DRIVER_BIND_ADDRESS:-127.0.0.1}" \
---conf spark.driver.host="$${JANUS_SPARK_DRIVER_HOST:-127.0.0.1}" \
---conf spark.sql.session.timeZone=UTC \
-	--conf spark.ui.enabled=false')
+		--conf spark.sql.defaultCatalog="$$catalog" \
+		--conf spark.sql.catalog.$$catalog=org.apache.iceberg.spark.SparkCatalog \
+		$$catalog_conf \
+		--conf spark.sql.catalog.$$catalog.warehouse="$$iceberg_warehouse" \
+		--conf spark.sql.catalog.$$catalog.default-namespace="$${JANUS_ICEBERG_DEFAULT_NAMESPACE:-bronze}" \
+		--conf spark.sql.warehouse.dir="$$spark_warehouse" \
+		--conf spark.driver.bindAddress="$${JANUS_SPARK_DRIVER_BIND_ADDRESS:-127.0.0.1}" \
+		--conf spark.driver.host="$${JANUS_SPARK_DRIVER_HOST:-127.0.0.1}" \
+		--conf spark.sql.session.timeZone=UTC \
+		--conf spark.ui.enabled=false')
 
 lint: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m ruff check src tests)
