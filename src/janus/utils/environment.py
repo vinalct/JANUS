@@ -162,7 +162,7 @@ def _apply_iceberg_catalog_options(
     """
 
     catalog_name = iceberg["catalog_name"]
-    catalog_type = _resolve_catalog_type(iceberg)
+    catalog_type = resolve_catalog_type(iceberg)
     catalog_prefix = f"spark.sql.catalog.{catalog_name}"
 
     packages = merge_csv_values(
@@ -194,14 +194,18 @@ def _apply_iceberg_catalog_options(
         )
 
 
-def _resolve_catalog_type(iceberg: dict[str, Any]) -> str:
+def resolve_catalog_type(iceberg: dict[str, Any]) -> str:
     """The declared catalog type, or a named error. There is no default on purpose.
 
     A code-side default is how an unsafe catalog sneaks back into a profile that
     forgot the key; the default belongs to the profile.
+
+    Public because `utils/catalog_properties.py` derives a second engine's catalog config
+    from the same block: one reader means a profile either configures both engines or is
+    rejected by both, with the same message.
     """
 
-    catalog_type = _non_empty_text(iceberg.get(CATALOG_TYPE_KEY))
+    catalog_type = non_empty_text(iceberg.get(CATALOG_TYPE_KEY))
     supported = ", ".join(sorted(SUPPORTED_CATALOG_TYPES))
     if catalog_type is None:
         raise ValueError(
@@ -221,7 +225,7 @@ def _catalog_type_options(
 ) -> list[tuple[str, str]]:
     emitted = [("type", catalog_type)]
     if catalog_type in CATALOG_TYPES_REQUIRING_URI:
-        emitted.append(("uri", _required_catalog_value(iceberg, "uri", catalog_type)))
+        emitted.append(("uri", required_catalog_value(iceberg, "uri", catalog_type)))
     if catalog_type == JDBC_CATALOG_TYPE:
         emitted.extend(_jdbc_credential_options(iceberg))
     return emitted
@@ -230,7 +234,7 @@ def _catalog_type_options(
 def _catalog_jar_packages(catalog_type: str, iceberg: dict[str, Any]) -> list[str]:
     if catalog_type != JDBC_CATALOG_TYPE:
         return []
-    driver_package = _non_empty_text(iceberg.get("driver_package"))
+    driver_package = non_empty_text(iceberg.get("driver_package"))
     return [driver_package] if driver_package is not None else []
 
 
@@ -240,22 +244,22 @@ def _jdbc_credential_options(iceberg: dict[str, Any]) -> list[tuple[str, str]]:
         return []
     emitted = []
     for key, suffix in JDBC_CREDENTIAL_OPTIONS:
-        value = _non_empty_text(credentials.get(key))
+        value = non_empty_text(credentials.get(key))
         if value is not None:
             emitted.append((suffix, value))
     return emitted
 
 
-def _required_catalog_value(
+def required_catalog_value(
     iceberg: dict[str, Any], key: str, catalog_type: str
 ) -> str:
     """Read a per-type required key, treating an unset `${VAR:-}` expansion as missing.
 
     Env expansion yields `""` for an unset variable, and `""` must never reach Spark
-    as a catalog URI.
+    as a catalog URI. Shared with `utils/catalog_properties.py`, per `resolve_catalog_type`.
     """
 
-    value = _non_empty_text(iceberg.get(key))
+    value = non_empty_text(iceberg.get(key))
     if value is None:
         raise ValueError(
             f"Environment config must set a non-empty spark.iceberg.{key} for "
@@ -264,7 +268,9 @@ def _required_catalog_value(
     return value
 
 
-def _non_empty_text(value: Any) -> str | None:
+def non_empty_text(value: Any) -> str | None:
+    """The single empty-guard both catalog emitters apply to an expanded profile value."""
+
     if value is None:
         return None
     text = str(value).strip()

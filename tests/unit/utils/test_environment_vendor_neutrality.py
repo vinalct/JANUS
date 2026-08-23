@@ -1,16 +1,19 @@
-"""Vendor-neutrality sweep over `janus.utils.environment`."""
+"""Vendor-neutrality sweep over the `janus.utils` package."""
 
 from __future__ import annotations
 
 import ast
-import inspect
 from pathlib import Path
 
 import pytest
 
-import janus.utils.environment as environment
+import janus.utils as utils_package
 
-# Names that would betray a provider-specific branch in the environment module.
+# Every module the rule binds, and the ones the coverage check insists on finding.
+SWEPT_PACKAGE = "janus/utils"
+REQUIRED_MODULES = ("environment.py", "catalog_properties.py")
+
+# Names that would betray a provider-specific branch in a swept module.
 VENDOR_TOKENS = (
     "glue",
     "emr",
@@ -74,20 +77,25 @@ def _vendor_violations(source: str) -> list[str]:
     ]
 
 
-def _environment_module_source() -> str:
-    return Path(inspect.getfile(environment)).read_text(encoding="utf-8")
+def _swept_modules() -> list[Path]:
+    package_root = Path(utils_package.__file__).parent
+    return sorted(module for module in package_root.glob("*.py") if module.name != "__init__.py")
 
 
 # ── the sweep ────────────────────────────────────────────────────────────────
 
 
-def test_environment_logic_does_not_branch_on_a_vendor():
-    """NFR-1: no conditional in `utils/environment.py` names a specific provider."""
+def test_no_module_in_the_utils_package_branches_on_a_vendor():
+    """NFR-1: no conditional under `utils/` names a specific provider."""
 
-    violations = _vendor_violations(_environment_module_source())
+    violations = [
+        f"{module.name}: {violation}"
+        for module in _swept_modules()
+        for violation in _vendor_violations(module.read_text(encoding="utf-8"))
+    ]
 
     assert not violations, (
-        "vendor-specific names found in a branch of utils/environment.py — swapping "
+        f"vendor-specific names found in a branch of {SWEPT_PACKAGE}/ — swapping "
         "the catalog backing store must stay config-only. Impl-class "
         "strings belong in module-level constants, never in a conditional:\n"
         + "\n".join(violations)
@@ -95,19 +103,26 @@ def test_environment_logic_does_not_branch_on_a_vendor():
 
 
 def test_the_sweep_actually_parsed_branching_logic():
-    """The sweep cannot pass by matching nothing: the module has real branches.
+    """The sweep cannot pass by matching nothing: those modules have real branches.
 
-    A refactor that emptied the module (or a detector that stopped finding
-    conditions) would make the assertion above vacuously green; this pins the
-    detector to a non-empty vocabulary drawn from the real module.
+    A refactor that emptied a module, a glob that stopped matching it, or a detector that
+    stopped finding conditions would make the assertion above vacuously green; this pins the
+    sweep to the modules that carry the catalog logic and to a non-empty vocabulary drawn from
+    each of them.
     """
 
-    vocabulary = _branch_vocabulary(ast.parse(_environment_module_source()))
+    swept = {module.name: module.read_text(encoding="utf-8") for module in _swept_modules()}
 
-    assert vocabulary, (
-        "the vendor-neutrality sweep found no branch conditions in utils/environment.py "
-        "— either the module lost all its logic or the detector went blind"
+    missing = [name for name in REQUIRED_MODULES if name not in swept]
+    assert not missing, (
+        f"the vendor-neutrality sweep never reached {missing} — either they moved out of "
+        f"{SWEPT_PACKAGE}/ or the sweep went blind"
     )
+    for name in REQUIRED_MODULES:
+        assert _branch_vocabulary(ast.parse(swept[name])), (
+            f"the vendor-neutrality sweep found no branch conditions in {SWEPT_PACKAGE}/{name} "
+            "— either the module lost all its logic or the detector went blind"
+        )
 
 
 # ── detector meta-tests, per repo convention ─────────────────────────────────
