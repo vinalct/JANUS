@@ -7,11 +7,18 @@ JANUS_GID := $(shell id -g)
 JANUS_PROJECT_ROOT := $(CURDIR)
 COMMA := ,
 
-# Iceberg runtime jar is vendored under deps/ (data/metadata/** is ignored) and seeded into the
-# path the Spark session resolves from, so Iceberg never resolves over the network.
-IVY_JAR_NAME := org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar
-IVY_JAR_SRC := deps/$(IVY_JAR_NAME)
+ICEBERG_JAR_NAME := org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar
+SQLITE_JAR_VERSION := 3.53.2.1
+SQLITE_JAR_NAME := org.xerial_sqlite-jdbc-$(SQLITE_JAR_VERSION).jar
+SQLITE_DRIVER_PACKAGE := org.xerial:sqlite-jdbc:$(SQLITE_JAR_VERSION)
+IVY_JAR_NAMES := $(ICEBERG_JAR_NAME) $(SQLITE_JAR_NAME)
 IVY_JAR_DEST_DIR := data/metadata/ivy/jars
+
+# The catalog the local profile points at, and the defaults `pyspark-local` falls back to so
+# the REPL and the app open the same one. Keep in lockstep with conf/environments/local.yaml.
+ICEBERG_CATALOG_DIR := data/metadata/iceberg-catalog
+ICEBERG_CATALOG_URI := jdbc:sqlite:$(ICEBERG_CATALOG_DIR)/catalog.sqlite?journal_mode=WAL&busy_timeout=30000
+ICEBERG_JDBC_SCHEMA_VERSION := V1
 
 DETECT_COMPOSE = if podman compose version >/dev/null 2>&1; then echo 'podman compose'; elif command -v podman-compose >/dev/null 2>&1; then echo podman-compose; elif docker compose version >/dev/null 2>&1; then echo 'docker compose'; elif command -v docker-compose >/dev/null 2>&1; then echo docker-compose; else exit 1; fi
 
@@ -28,11 +35,13 @@ endef
 .PHONY: bootstrap check-compose up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test ci run-local run-local-config docker-build docker-run clean
 
 seed-ivy:
-	@if [ ! -f "$(IVY_JAR_DEST_DIR)/$(IVY_JAR_NAME)" ]; then \
-		echo "Seeding Iceberg runtime jar from $(IVY_JAR_SRC)"; \
-		mkdir -p "$(IVY_JAR_DEST_DIR)"; \
-		cp "$(IVY_JAR_SRC)" "$(IVY_JAR_DEST_DIR)/$(IVY_JAR_NAME)"; \
-	fi
+	@mkdir -p "$(IVY_JAR_DEST_DIR)" "$(ICEBERG_CATALOG_DIR)"; \
+	for jar in $(IVY_JAR_NAMES); do \
+		if [ ! -f "$(IVY_JAR_DEST_DIR)/$$jar" ]; then \
+			echo "Seeding $$jar from deps/"; \
+			cp "deps/$$jar" "$(IVY_JAR_DEST_DIR)/$$jar"; \
+		fi; \
+	done
 
 check-compose:
 	@compose_cmd="$$( $(DETECT_COMPOSE) )" || { \
@@ -66,8 +75,10 @@ shell: ensure-up
 
 # The REPL reads the same catalog knobs the environment profile does
 # (conf/environments/*.yaml) so `make pyspark-local` and the app cannot drift onto
-# different catalogs. The `hadoop` default here is the profile's default, and moves
-# with it.
+# different catalogs. The `jdbc` default here is the profile's default, and moves
+# with it. The project-relative path inside a file-backed URI is resolved the same way
+# the directories below are, because the app resolves it too (build_spark_options) and a
+# relative path would otherwise follow the REPL's working directory.
 pyspark-local: ensure-up
 	$(call RUN_COMPOSE,exec $(SERVICE) sh -lc '\
 	ivy_dir="$${JANUS_SPARK_IVY_DIR:-data/metadata/ivy}"; \
@@ -77,18 +88,24 @@ pyspark-local: ensure-up
 	spark_warehouse="$${JANUS_SPARK_WAREHOUSE_DIR:-data/metadata/spark-warehouse}"; \
 	if [ "$$spark_warehouse" = "$${spark_warehouse#/}" ]; then spark_warehouse="/workspace/$$spark_warehouse"; fi; \
 	catalog="$${JANUS_ICEBERG_CATALOG_NAME:-janus}"; \
-	catalog_type="$${JANUS_ICEBERG_CATALOG_TYPE:-hadoop}"; \
+	catalog_type="$${JANUS_ICEBERG_CATALOG_TYPE:-jdbc}"; \
 	packages="$${JANUS_ICEBERG_RUNTIME_PACKAGE:-org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1}"; \
+	catalog_uri="$${JANUS_ICEBERG_CATALOG_URI:-}"; \
+	if [ "$$catalog_type" = jdbc ] && [ -z "$$catalog_uri" ]; then catalog_uri='$(ICEBERG_CATALOG_URI)'; fi; \
+	uri_path="$${catalog_uri#jdbc:sqlite:}"; \
+	if [ "$$uri_path" != "$$catalog_uri" ] && [ "$$uri_path" = "$${uri_path#/}" ]; then catalog_uri="jdbc:sqlite:/workspace/$$uri_path"; fi; \
 	catalog_conf="--conf spark.sql.catalog.$$catalog.type=$$catalog_type"; \
 	if [ "$$catalog_type" = jdbc ] || [ "$$catalog_type" = rest ]; then \
-		if [ -z "$${JANUS_ICEBERG_CATALOG_URI:-}" ]; then \
+		if [ -z "$$catalog_uri" ]; then \
 			echo "JANUS_ICEBERG_CATALOG_URI must be set for catalog type $$catalog_type" >&2; \
 			exit 1; \
 		fi; \
-		catalog_conf="$$catalog_conf --conf spark.sql.catalog.$$catalog.uri=$$JANUS_ICEBERG_CATALOG_URI"; \
+		catalog_conf="$$catalog_conf --conf spark.sql.catalog.$$catalog.uri=$$catalog_uri"; \
 	fi; \
 	if [ "$$catalog_type" = jdbc ]; then \
-		if [ -n "$${JANUS_ICEBERG_JDBC_DRIVER_PACKAGE:-}" ]; then packages="$$packages$(COMMA)$$JANUS_ICEBERG_JDBC_DRIVER_PACKAGE"; fi; \
+		catalog_conf="$$catalog_conf --conf spark.sql.catalog.$$catalog.jdbc.schema-version=$(ICEBERG_JDBC_SCHEMA_VERSION)"; \
+		driver_package="$${JANUS_ICEBERG_JDBC_DRIVER_PACKAGE:-$(SQLITE_DRIVER_PACKAGE)}"; \
+		if [ -n "$$driver_package" ]; then packages="$$packages$(COMMA)$$driver_package"; fi; \
 		if [ -n "$${JANUS_ICEBERG_CATALOG_USER:-}" ]; then catalog_conf="$$catalog_conf --conf spark.sql.catalog.$$catalog.jdbc.user=$$JANUS_ICEBERG_CATALOG_USER"; fi; \
 		if [ -n "$${JANUS_ICEBERG_CATALOG_PASSWORD:-}" ]; then catalog_conf="$$catalog_conf --conf spark.sql.catalog.$$catalog.jdbc.password=$$JANUS_ICEBERG_CATALOG_PASSWORD"; fi; \
 	fi; \

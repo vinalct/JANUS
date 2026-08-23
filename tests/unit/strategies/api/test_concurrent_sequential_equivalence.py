@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
 from conftest import (
     EMPTY_PAGE_SCRIPT,
     PageScript,
@@ -18,7 +19,6 @@ from conftest import (
     build_concurrent_strategy,
     build_storage_layout,
 )
-
 from janus.checkpoints import ExtractionProgressStore
 from janus.models import ExecutionPlan, ExtractionResult
 from janus.strategies.api.core import CONCURRENCY_ONLY_METADATA_KEYS

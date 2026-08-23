@@ -14,14 +14,19 @@ from typing import Any
 import pytest
 
 from janus.utils.environment import (
+    ICEBERG_CATALOG_DB_PATH_KEY,
     ICEBERG_CATALOG_IMPL,
     ICEBERG_SESSION_EXTENSIONS,
+    JDBC_SCHEMA_VERSION_OPTION,
     build_spark_options,
     materialize_runtime_paths,
+    prepare_runtime,
 )
 
 ICEBERG_RUNTIME_PACKAGE = "org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1"
-SQLITE_DRIVER_PACKAGE = "org.xerial:sqlite-jdbc:3.46.0.0"
+SQLITE_DRIVER_PACKAGE = "org.xerial:sqlite-jdbc:3.53.2.1"
+SQLITE_DATABASE = "data/metadata/janus_catalog.db"
+SQLITE_DRIVER_OPTIONS = "journal_mode=WAL&busy_timeout=30000"
 CATALOG_PREFIX = "spark.sql.catalog.janus"
 SECRET_USER = "janus-catalog-user"
 SECRET_PASSWORD = "janus-catalog-password"
@@ -31,6 +36,12 @@ COMMON_CATALOG_KEYS = {
     CATALOG_PREFIX,
     f"{CATALOG_PREFIX}.warehouse",
     f"{CATALOG_PREFIX}.default-namespace",
+}
+# What `jdbc` adds beyond the common set, credentials aside.
+JDBC_CATALOG_KEYS = {
+    f"{CATALOG_PREFIX}.type",
+    f"{CATALOG_PREFIX}.uri",
+    f"{CATALOG_PREFIX}.{JDBC_SCHEMA_VERSION_OPTION[0]}",
 }
 
 
@@ -90,17 +101,112 @@ def test_hadoop_emits_the_pre_order_13_catalog_block(tmp_path):
 
 
 def test_jdbc_emits_type_and_uri(tmp_path):
+    """The path inside a file-backed URI is resolved project-relative, like the warehouse."""
+
     options = _build_options(
-        tmp_path, catalog_type="jdbc", uri="jdbc:sqlite:data/metadata/janus_catalog.db"
+        tmp_path, catalog_type="jdbc", uri=f"jdbc:sqlite:{SQLITE_DATABASE}"
     )
 
     assert options[f"{CATALOG_PREFIX}.type"] == "jdbc"
-    assert options[f"{CATALOG_PREFIX}.uri"] == "jdbc:sqlite:data/metadata/janus_catalog.db"
+    assert options[f"{CATALOG_PREFIX}.uri"] == f"jdbc:sqlite:{tmp_path / SQLITE_DATABASE}"
     assert options["spark.jars.packages"] == ICEBERG_RUNTIME_PACKAGE
-    assert _catalog_keys(options) == COMMON_CATALOG_KEYS | {
-        f"{CATALOG_PREFIX}.type",
-        f"{CATALOG_PREFIX}.uri",
-    }
+    assert _catalog_keys(options) == COMMON_CATALOG_KEYS | JDBC_CATALOG_KEYS
+
+
+def test_jdbc_asks_for_the_view_capable_catalog_schema(tmp_path):
+    """V0 `iceberg_tables` has no `iceberg_type` column, and that is not a missing extra.
+
+    Every view-aware path then throws "JDBC catalog is initialized without view support" —
+    including the plain `spark.catalog.tableExists` the bronze writer calls before each write.
+    Without this option the whole bronze write path is dead, so it is not a knob to drop.
+    """
+
+    options = _build_options(
+        tmp_path, catalog_type="jdbc", uri=f"jdbc:sqlite:{SQLITE_DATABASE}"
+    )
+
+    assert options[f"{CATALOG_PREFIX}.jdbc.schema-version"] == "V1"
+
+
+@pytest.mark.parametrize(
+    ("catalog_type", "block"),
+    [("hadoop", {}), ("rest", {"uri": "http://catalog:8181"})],
+)
+def test_only_jdbc_asks_for_a_catalog_schema_version(tmp_path, catalog_type, block):
+    """The option is meaningless to the other catalogs; emitting it there would be noise."""
+
+    options = _build_options(tmp_path, catalog_type=catalog_type, **block)
+
+    assert f"{CATALOG_PREFIX}.jdbc.schema-version" not in options
+
+
+def test_a_file_backed_catalog_uri_keeps_its_driver_options_around_the_resolved_path(
+    tmp_path,
+):
+    """Only the path moves. The PRAGMA query the xerial driver reads rides along untouched."""
+
+    options = _build_options(
+        tmp_path,
+        catalog_type="jdbc",
+        uri=f"jdbc:sqlite:{SQLITE_DATABASE}?{SQLITE_DRIVER_OPTIONS}",
+    )
+
+    assert options[f"{CATALOG_PREFIX}.uri"] == (
+        f"jdbc:sqlite:{tmp_path / SQLITE_DATABASE}?{SQLITE_DRIVER_OPTIONS}"
+    )
+
+
+def test_an_absolute_catalog_uri_path_is_left_alone(tmp_path):
+    """`resolve_project_path` treats an absolute path as already resolved; so must the URI."""
+
+    database = tmp_path / "elsewhere" / "catalog.sqlite"
+
+    options = _build_options(tmp_path, catalog_type="jdbc", uri=f"jdbc:sqlite:{database}")
+
+    assert options[f"{CATALOG_PREFIX}.uri"] == f"jdbc:sqlite:{database}"
+
+
+def test_a_server_backed_catalog_uri_is_never_treated_as_a_path(tmp_path):
+    """`jdbc:postgresql://host/db` names a server: there is nothing project-relative in it."""
+
+    options = _build_options(
+        tmp_path, catalog_type="jdbc", uri="jdbc:postgresql://catalog-db:5432/janus"
+    )
+
+    assert options[f"{CATALOG_PREFIX}.uri"] == "jdbc:postgresql://catalog-db:5432/janus"
+
+
+def test_a_file_backed_catalog_gets_its_parent_directory_created(tmp_path):
+    """A first run must not fail because nobody had created the catalog's directory yet."""
+
+    config = _environment_config(
+        catalog_type="jdbc", uri=f"jdbc:sqlite:{SQLITE_DATABASE}?{SQLITE_DRIVER_OPTIONS}"
+    )
+
+    paths = prepare_runtime(config, tmp_path)
+
+    database = paths[ICEBERG_CATALOG_DB_PATH_KEY]
+    assert database == tmp_path / SQLITE_DATABASE
+    assert database.parent.is_dir()
+    # The database itself is the driver's to create — `prepare_runtime` must not mkdir it.
+    assert not database.exists()
+
+
+@pytest.mark.parametrize(
+    ("label", "uri"),
+    [
+        ("hadoop", None),
+        ("server-backed", "jdbc:postgresql://catalog-db:5432/janus"),
+        ("rest", "http://catalog:8181"),
+    ],
+)
+def test_only_a_file_backed_catalog_adds_a_resolved_database_path(tmp_path, label, uri):
+    """The new resolved-path key exists exactly when there is a file to resolve."""
+
+    block: dict[str, Any] = {"catalog_type": "hadoop"} if uri is None else {"uri": uri}
+    config = _environment_config(**block)
+
+    assert ICEBERG_CATALOG_DB_PATH_KEY not in materialize_runtime_paths(config, tmp_path)
 
 
 def test_jdbc_emits_credentials_and_merges_the_driver_package(tmp_path):
@@ -117,9 +223,7 @@ def test_jdbc_emits_credentials_and_merges_the_driver_package(tmp_path):
     assert options["spark.jars.packages"] == (
         f"{ICEBERG_RUNTIME_PACKAGE},{SQLITE_DRIVER_PACKAGE}"
     )
-    assert _catalog_keys(options) == COMMON_CATALOG_KEYS | {
-        f"{CATALOG_PREFIX}.type",
-        f"{CATALOG_PREFIX}.uri",
+    assert _catalog_keys(options) == COMMON_CATALOG_KEYS | JDBC_CATALOG_KEYS | {
         f"{CATALOG_PREFIX}.jdbc.user",
         f"{CATALOG_PREFIX}.jdbc.password",
     }

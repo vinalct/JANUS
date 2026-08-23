@@ -16,6 +16,10 @@ Concept            Spark (``build_spark_options``)         ``pyiceberg`` (this m
 =================  ======================================  =======================================
 catalog type       ``type = jdbc``                         ``type = sql`` (the ``SqlCatalog``)
 SQLite URI         ``jdbc:sqlite:<path>`` (JDBC form)      ``sqlite:///<path>`` (SQLAlchemy form)
+file-backed path   resolved absolute, once, in              the same resolved path — never the
+                   ``materialize_runtime_paths``            profile's project-relative string
+driver options     ``?journal_mode=…`` — PRAGMAs the       carried through; SQLAlchemy ignores
+                   xerial driver applies per connection     unknown query keys (see below)
 Postgres URI       ``jdbc:postgresql://host/db``           ``postgresql+psycopg2://host/db``
 credentials        ``jdbc.user`` / ``jdbc.password``       userinfo inside the URI authority
 warehouse          local path or ``s3://…``                same location, local paths ``file://``
@@ -42,11 +46,13 @@ from urllib.parse import quote
 from janus.utils.environment import (
     CATALOG_TYPE_KEY,
     HADOOP_CATALOG_TYPE,
+    JDBC_AUTHORITY_PREFIX,
     JDBC_CATALOG_TYPE,
+    JDBC_URI_PREFIX,
     REST_CATALOG_TYPE,
     non_empty_text,
-    required_catalog_value,
     resolve_catalog_type,
+    resolve_catalog_uri,
 )
 
 ICEBERG_WAREHOUSE_PATH_KEY = "iceberg_warehouse_dir"
@@ -60,15 +66,12 @@ PYICEBERG_WAREHOUSE_KEY = "warehouse"
 PYICEBERG_SQL_CATALOG_TYPE = "sql"
 PYICEBERG_REST_CATALOG_TYPE = "rest"
 
-JDBC_URI_PREFIX = "jdbc:"
-
 # JDBC subprotocol → the driver-qualified SQLAlchemy scheme `SqlCatalog` can open.
 SQLALCHEMY_SCHEMES = {
     "sqlite": "sqlite",
     "postgresql": "postgresql+psycopg2",
 }
 
-_AUTHORITY_PREFIX = "//"
 _URI_SCHEME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
 
 
@@ -110,7 +113,7 @@ def derive_pyiceberg_catalog_properties(
             "in utils/catalog_properties.py, or the two engines have drifted"
         )
 
-    properties = builder(iceberg)
+    properties = builder(iceberg, resolved_paths)
     properties[PYICEBERG_WAREHOUSE_KEY] = _warehouse_location(resolved_paths)
     return properties
 
@@ -144,26 +147,33 @@ def derive_pyiceberg_default_namespace(config: dict[str, Any]) -> str | None:
     return non_empty_text(_iceberg_block(config).get("default_namespace"))
 
 
-def _jdbc_properties(iceberg: dict[str, Any]) -> dict[str, str]:
+def _jdbc_properties(
+    iceberg: dict[str, Any], resolved_paths: dict[str, Path]
+) -> dict[str, str]:
     """Spark's JDBC catalog is `pyiceberg`'s `SqlCatalog`, over a SQLAlchemy URI."""
 
-    jdbc_uri = required_catalog_value(iceberg, "uri", JDBC_CATALOG_TYPE)
     return {
         PYICEBERG_TYPE_KEY: PYICEBERG_SQL_CATALOG_TYPE,
-        PYICEBERG_URI_KEY: _sqlalchemy_uri(jdbc_uri, *_uri_credentials(iceberg)),
+        PYICEBERG_URI_KEY: _sqlalchemy_uri(
+            resolve_catalog_uri(iceberg, resolved_paths), *_uri_credentials(iceberg)
+        ),
     }
 
 
-def _rest_properties(iceberg: dict[str, Any]) -> dict[str, str]:
+def _rest_properties(
+    iceberg: dict[str, Any], resolved_paths: dict[str, Path]
+) -> dict[str, str]:
     """The easy case: both engines take `type` and `uri` verbatim."""
 
     return {
         PYICEBERG_TYPE_KEY: PYICEBERG_REST_CATALOG_TYPE,
-        PYICEBERG_URI_KEY: required_catalog_value(iceberg, "uri", REST_CATALOG_TYPE),
+        PYICEBERG_URI_KEY: resolve_catalog_uri(iceberg, resolved_paths),
     }
 
 
-_PROPERTY_BUILDERS: dict[str, Callable[[dict[str, Any]], dict[str, str]]] = {
+_PROPERTY_BUILDERS: dict[
+    str, Callable[[dict[str, Any], dict[str, Path]], dict[str, str]]
+] = {
     JDBC_CATALOG_TYPE: _jdbc_properties,
     REST_CATALOG_TYPE: _rest_properties,
 }
@@ -219,8 +229,8 @@ def _sqlalchemy_uri(jdbc_uri: str, user: str | None, password: str | None) -> st
             f"translatable backends: {supported}"
         )
 
-    if target.startswith(_AUTHORITY_PREFIX):
-        authority = target[len(_AUTHORITY_PREFIX) :]
+    if target.startswith(JDBC_AUTHORITY_PREFIX):
+        authority = target[len(JDBC_AUTHORITY_PREFIX) :]
         return f"{scheme}://{_userinfo(user, password)}{authority}"
 
     if user is not None or password is not None:
@@ -232,7 +242,7 @@ def _sqlalchemy_uri(jdbc_uri: str, user: str | None, password: str | None) -> st
         )
     # An empty authority, then the path: `sqlite:///relative/db` — and an absolute target keeps
     # its own leading slash, which is how `sqlite:////absolute/db` gets its fourth.
-    return f"{scheme}:{_AUTHORITY_PREFIX}/{target}"
+    return f"{scheme}:{JDBC_AUTHORITY_PREFIX}/{target}"
 
 
 def _userinfo(user: str | None, password: str | None) -> str:

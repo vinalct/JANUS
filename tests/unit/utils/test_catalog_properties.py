@@ -99,15 +99,34 @@ def _derive(project_root: Path, **iceberg: Any) -> dict[str, str]:
 
 
 def test_a_sqlite_profile_becomes_a_sql_catalog_over_a_sqlalchemy_uri(tmp_path):
-    """`type` is renamed, the JDBC URL is rewritten, and the warehouse gains a scheme."""
+    """`type` is renamed, the JDBC URL is rewritten, and the warehouse gains a scheme.
+
+    The database path arrives already resolved: `materialize_runtime_paths` makes it absolute
+    once, for both engines, so neither depends on the working directory it was started from.
+    """
 
     properties = _derive(tmp_path, **CATALOG_PROFILES["jdbc_sqlite"])
 
     assert properties == {
         "type": PYICEBERG_SQL_CATALOG_TYPE,
-        "uri": f"sqlite:///{SQLITE_DATABASE}",
+        "uri": f"sqlite:///{tmp_path / SQLITE_DATABASE}",
         "warehouse": (tmp_path / "data/bronze/iceberg").as_uri(),
     }
+    assert properties["uri"].startswith("sqlite:////")
+
+
+def test_both_engines_receive_the_same_resolved_database_path(tmp_path):
+    """A project-relative catalog path must not resolve differently per engine or per cwd."""
+
+    config = _environment_config(**CATALOG_PROFILES["jdbc_sqlite"])
+    paths = materialize_runtime_paths(config, tmp_path)
+
+    spark_uri = build_spark_options(config, paths)[f"{CATALOG_PREFIX}.uri"]
+    derived_uri = derive_pyiceberg_catalog_properties(config, paths)["uri"]
+
+    database = str(tmp_path / SQLITE_DATABASE)
+    assert spark_uri == f"jdbc:sqlite:{database}"
+    assert derived_uri == f"sqlite:///{database}"
 
 
 def test_an_absolute_sqlite_path_keeps_its_own_leading_slash(tmp_path):
