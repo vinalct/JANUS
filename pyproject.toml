@@ -47,6 +47,9 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["B", "E", "F", "I", "PL", "RUF", "SIM", "UP"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["tests"]
+
 [tool.ruff.lint.pylint]
 max-branches = 12    # PLR0912 — ruff's default
 max-statements = 50  # PLR0915 — ruff's default

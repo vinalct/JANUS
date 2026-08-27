@@ -11,19 +11,11 @@ import pytest
 from janus.models import BronzeWriteIntent, ExecutionPlan, RunContext
 from janus.normalizers import BaseNormalizer
 from janus.registry import load_registry
-from janus.utils.environment import ICEBERG_CATALOG_IMPL, ICEBERG_SESSION_EXTENSIONS
 from janus.utils.storage import StorageLayout
 from janus.writers import SparkDatasetWriter
+from tests.support.spark_sessions import build_iceberg_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-ICEBERG_RUNTIME_JAR = (
-    PROJECT_ROOT
-    / "data"
-    / "metadata"
-    / "ivy"
-    / "jars"
-    / "org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
-)
 
 MERGE_INTENT = BronzeWriteIntent(
     strategy="merge_on_keys",
@@ -34,26 +26,10 @@ MERGE_INTENT = BronzeWriteIntent(
 
 @pytest.fixture(scope="module")
 def spark(tmp_path_factory):
-    pyspark_sql = pytest.importorskip("pyspark.sql")
-    if not ICEBERG_RUNTIME_JAR.exists():
-        pytest.skip("Iceberg runtime jar is not available in the local Ivy cache")
-    warehouse_root = tmp_path_factory.mktemp("janus-merge-writer-iceberg")
-    session = (
-        pyspark_sql.SparkSession.builder.appName("janus-merge-writer-tests")
-        .master("local[1]")
-        .config("spark.jars", str(ICEBERG_RUNTIME_JAR))
-        .config("spark.sql.extensions", ICEBERG_SESSION_EXTENSIONS)
-        .config("spark.sql.defaultCatalog", "janus")
-        .config("spark.sql.catalog.janus", ICEBERG_CATALOG_IMPL)
-        .config("spark.sql.catalog.janus.type", "hadoop")
-        .config("spark.sql.catalog.janus.warehouse", str(warehouse_root / "iceberg"))
-        .config("spark.sql.catalog.janus.default-namespace", "bronze")
-        .config("spark.sql.warehouse.dir", str(warehouse_root / "spark-warehouse"))
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.ui.enabled", "false")
-        .getOrCreate()
+    session = build_iceberg_session(
+        "janus-merge-writer-tests",
+        tmp_path_factory.mktemp("janus-merge-writer-iceberg"),
     )
-    session.sparkContext.setLogLevel("WARN")
     yield session
     session.stop()
 

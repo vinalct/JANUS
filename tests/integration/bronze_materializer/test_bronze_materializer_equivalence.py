@@ -15,21 +15,13 @@ from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.scripts import ingest_raw_to_bronze
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.strategies.files import FileStrategy
-from janus.utils.environment import ICEBERG_CATALOG_IMPL, ICEBERG_SESSION_EXTENSIONS
 from janus.utils.storage import StorageLayout
+from tests.support.spark_sessions import build_iceberg_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TRANSPARENCIA_FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures" / "transparencia"
 FILE_SOURCE_ID = "inep_censo_escolar_microdados"
 API_SOURCE_ID = "transparencia__poder_executivo_federal__servidores_por_orgao__full_refresh"
-ICEBERG_RUNTIME_JAR = (
-    PROJECT_ROOT
-    / "data"
-    / "metadata"
-    / "ivy"
-    / "jars"
-    / "org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
-)
 ENVIRONMENT_CONFIG = {
     "storage": {
         "root_dir": "data",
@@ -86,26 +78,10 @@ class FixtureTransport:
 
 @pytest.fixture(scope="module")
 def spark(tmp_path_factory):
-    pyspark_sql = pytest.importorskip("pyspark.sql")
-    if not ICEBERG_RUNTIME_JAR.exists():
-        pytest.skip("Iceberg runtime jar is not available in the local Ivy cache")
-    warehouse_root = tmp_path_factory.mktemp("janus-bronze-materializer-iceberg")
-    session = (
-        pyspark_sql.SparkSession.builder.appName("janus-bronze-materializer-equivalence")
-        .master("local[1]")
-        .config("spark.jars", str(ICEBERG_RUNTIME_JAR))
-        .config("spark.sql.extensions", ICEBERG_SESSION_EXTENSIONS)
-        .config("spark.sql.defaultCatalog", "janus")
-        .config("spark.sql.catalog.janus", ICEBERG_CATALOG_IMPL)
-        .config("spark.sql.catalog.janus.type", "hadoop")
-        .config("spark.sql.catalog.janus.warehouse", str(warehouse_root / "iceberg"))
-        .config("spark.sql.catalog.janus.default-namespace", "bronze")
-        .config("spark.sql.warehouse.dir", str(warehouse_root / "spark-warehouse"))
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.ui.enabled", "false")
-        .getOrCreate()
+    session = build_iceberg_session(
+        "janus-bronze-materializer-equivalence",
+        tmp_path_factory.mktemp("janus-bronze-materializer-iceberg"),
     )
-    session.sparkContext.setLogLevel("WARN")
     yield session
     session.stop()
 
