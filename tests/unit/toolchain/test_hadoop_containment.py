@@ -14,9 +14,10 @@ TOKEN = "hadoop"
 #: Directory roots walked in full.
 SWEPT_DIRECTORIES = ("src", "tests", "conf", "docker")
 
-SWEPT_FILES = (
-    PROJECT_ROOT / "Makefile"
-)
+#: Individual files swept outside those roots. Not all are visible in every environment —
+#: the dev container mounts only src/, tests/, conf/ and data/ — so each is filtered by
+#: ``is_file()`` rather than assumed present.
+SWEPT_FILES = (PROJECT_ROOT / "Makefile",)
 
 #: Directory names never swept — build artefacts, not source.
 IGNORED_DIRECTORY_NAMES = frozenset({"__pycache__"})
@@ -25,34 +26,52 @@ IGNORED_DIRECTORY_NAMES = frozenset({"__pycache__"})
 #: Paths are relative to the project root.
 ALLOWED_SITES: dict[str, str] = {
     "src/janus/utils/environment.py": (
-        
+        "The seam's own vocabulary: HADOOP_CATALOG_TYPE and its place in "
+        "SUPPORTED_CATALOG_TYPES. The profile layer must still be able to name the type it "
+        "emits options for, because local-hadoop.yaml and the AC-4 differential both select "
+        "it. This is the one definition; every other site below reads it from here."
     ),
     "src/janus/utils/catalog_properties.py": (
-        
+        "HadoopCatalogUnrepresentableError and the message it raises. pyiceberg implements "
+        "no Hadoop catalog — its commits are filesystem renames — and saying so by name is "
+        "the engine-neutrality gap that justifies this order. An unnamed error would state "
+        "the failure without stating the reason."
     ),
     "conf/environments/local-hadoop.yaml": (
-        
+        "The throwaway pre-migration profile itself, kept so the old commit path stays "
+        "reproducible for the AC-4 baseline. Its header says it is not the supported local "
+        "environment; local.yaml is."
     ),
     "conf/environments/cluster.yaml": (
-        
+        "The cluster profile still defaults to the old catalog."
     ),
     "conf/environments/cluster.env.example": (
-        
+        "The documented default for the cluster profile above, and the same temporary"
     ),
     "tests/integration/catalog_migration/test_bronze_identity_across_catalogs.py": (
-        
+        "The AC-4 differential, and the one test that may build a session on the old "
+        "catalog: the old catalog is the baseline half of the comparison, so removing it "
+        "would remove the evidence that bronze survived the swap."
     ),
     "tests/unit/utils/test_environment_vendor_neutrality.py": (
-       
+        "Names the token only inside a source-text sample the vendor-neutrality detector is "
+        "run against, proving the detector fires on it. A detector meta-test input, not a "
+        "catalog choice — and it builds no Spark session."
     ),
     "tests/unit/utils/test_catalog_options.py": (
-        
+        "Pins the option block `catalog_type: hadoop` still emits (AC-4 for the seam itself) "
+        "and that the supported set holds all three types. Asserts over the returned mapping "
+        "only; builds no Spark session."
     ),
     "tests/unit/utils/test_catalog_properties.py": (
-        
+        "Asserts the named error above, and that _PROPERTY_BUILDERS covers exactly the "
+        "supported types minus hadoop — a set difference that cannot be written without "
+        "naming it. Builds no Spark session."
     ),
     "tests/unit/toolchain/test_hadoop_containment.py": (
-        
+        "This sweep. It must name the token to detect it, and names the session-builder "
+        "marker for the same reason; both are matched against its own text, which is why it "
+        "is in SESSION_BUILD_EXEMPT as well."
     ),
 }
 
