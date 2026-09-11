@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -42,6 +44,8 @@ TEST_SESSION_CONFIG = {
 
 JDBC_SQLITE_PREFIX = "jdbc:sqlite:"
 
+PYICEBERG_UNAVAILABLE = "pyiceberg is not available"
+
 
 def checked_in_iceberg_block() -> dict[str, Any]:
     """The profile's `spark.iceberg` block as a fresh clone gets it.
@@ -79,6 +83,111 @@ def pinned_jars(iceberg: dict[str, Any] | None = None) -> list[Path]:
     return jars
 
 
+@dataclass(frozen=True)
+class CatalogTarget:
+    """One catalog a suite commits against, derived from a profile mapping."""
+
+    id: str
+    iceberg: dict[str, Any]
+    resolved_paths: dict[str, Path]
+
+    @property
+    def warehouse_dir(self) -> Path:
+        return self.resolved_paths["iceberg_warehouse_dir"]
+
+    @property
+    def catalog_db(self) -> Path | None:
+        """The catalog's database file, or `None` when the catalog is server-backed."""
+
+        return self.resolved_paths.get(ICEBERG_CATALOG_DB_PATH_KEY)
+
+    def environment_config(
+        self, catalog_name: str = DEFAULT_CATALOG_NAME
+    ) -> dict[str, Any]:
+        """The environment mapping both engines' emitters read."""
+
+        return {
+            "spark": {
+                "iceberg": {**self.iceberg, "catalog_name": catalog_name},
+                "config": dict(TEST_SESSION_CONFIG),
+            }
+        }
+
+    def session_options(
+        self, catalog_name: str = DEFAULT_CATALOG_NAME
+    ) -> dict[str, str]:
+        """The Spark options the profile emits, pointed at this target."""
+
+        options = dict(
+            build_spark_options(self.environment_config(catalog_name), self.resolved_paths)
+        )
+        options.pop("spark.jars.packages", None)
+        options["spark.jars"] = ",".join(str(jar) for jar in pinned_jars(self.iceberg))
+        return options
+
+    def prepare(self) -> None:
+        """Create what an engine opens but never creates.
+
+        SQLite opens a database file; it does not make the directory path to it. The
+        warehouse is created for the same reason — an engine writes *into* it.
+        """
+
+        self.warehouse_dir.mkdir(parents=True, exist_ok=True)
+        if (database := self.catalog_db) is not None:
+            database.parent.mkdir(parents=True, exist_ok=True)
+
+
+def sqlite_catalog_target(root: Path) -> CatalogTarget:
+    """The catalog `local.yaml` ships, given its own database file under `root`."""
+
+    return _file_backed_target(
+        "sqlite",
+        warehouse_dir=root / "iceberg",
+        catalog_db=catalog_database_path(root),
+        spark_warehouse_dir=root / "spark-warehouse",
+    )
+
+
+
+CATALOG_TARGET_FACTORIES: tuple[Callable[[Path], CatalogTarget], ...] = (
+    sqlite_catalog_target,
+)
+
+
+def catalog_target_ids() -> list[str]:
+    """Test ids for `CATALOG_TARGET_FACTORIES`, so a failure names the catalog it was on."""
+
+    return [
+        factory.__name__.removesuffix("_catalog_target")
+        for factory in CATALOG_TARGET_FACTORIES
+    ]
+
+
+def _file_backed_target(
+    target_id: str,
+    *,
+    warehouse_dir: Path,
+    catalog_db: Path,
+    spark_warehouse_dir: Path | None = None,
+) -> CatalogTarget:
+    """The checked-in profile, redirected at one suite's own warehouse and database."""
+
+    iceberg = checked_in_iceberg_block()
+    return CatalogTarget(
+        id=target_id,
+        iceberg={
+            **iceberg,
+            "warehouse_dir": str(warehouse_dir),
+            "uri": suite_catalog_uri(iceberg, catalog_db),
+        },
+        resolved_paths={
+            "warehouse_dir": spark_warehouse_dir or warehouse_dir.parent / "spark-warehouse",
+            "iceberg_warehouse_dir": warehouse_dir,
+            ICEBERG_CATALOG_DB_PATH_KEY: catalog_db,
+        },
+    )
+
+
 def iceberg_session_options(
     *,
     warehouse_dir: Path,
@@ -89,31 +198,16 @@ def iceberg_session_options(
     """The catalog options the profile emits, pointed at this suite's own locations.
 
     Pure: the caller owns creating `catalog_db`'s parent directory (`build_iceberg_session`
-    does it), because SQLite opens a database file but never creates the path to it.
+    does it, through `CatalogTarget.prepare`), because SQLite opens a database file but
+    never creates the path to it.
     """
 
-    iceberg = checked_in_iceberg_block()
-    config = {
-        "spark": {
-            "iceberg": {
-                **iceberg,
-                "catalog_name": catalog_name,
-                "warehouse_dir": str(warehouse_dir),
-                "uri": suite_catalog_uri(iceberg, catalog_db),
-            },
-            "config": dict(TEST_SESSION_CONFIG),
-        }
-    }
-    resolved_paths = {
-        "warehouse_dir": spark_warehouse_dir or warehouse_dir.parent / "spark-warehouse",
-        "iceberg_warehouse_dir": warehouse_dir,
-        ICEBERG_CATALOG_DB_PATH_KEY: catalog_db,
-    }
-
-    options = dict(build_spark_options(config, resolved_paths))
-    options.pop("spark.jars.packages", None)
-    options["spark.jars"] = ",".join(str(jar) for jar in pinned_jars(iceberg))
-    return options
+    return _file_backed_target(
+        "suite",
+        warehouse_dir=warehouse_dir,
+        catalog_db=catalog_db,
+        spark_warehouse_dir=spark_warehouse_dir,
+    ).session_options(catalog_name=catalog_name)
 
 
 def suite_catalog_uri(iceberg: dict[str, Any], catalog_db: Path) -> str:
@@ -168,6 +262,27 @@ def require_iceberg_runtime():
     return pyspark_sql
 
 
+def require_pyiceberg():
+    """Skip unless the second engine — and the bridge it writes through — is installed."""
+
+    catalog = pytest.importorskip("pyiceberg.catalog", reason=PYICEBERG_UNAVAILABLE)
+    pytest.importorskip("pyarrow", reason=PYICEBERG_UNAVAILABLE)
+    return catalog
+
+
+def start_session(app_name: str, options: dict[str, str], *, master: str = DEFAULT_MASTER):
+    """Start a session over already-emitted options, skipping if the runtime is absent."""
+
+    pyspark_sql = require_iceberg_runtime()
+
+    builder = pyspark_sql.SparkSession.builder.appName(app_name).master(master)
+    for key, value in options.items():
+        builder = builder.config(key, value)
+    session = builder.getOrCreate()
+    session.sparkContext.setLogLevel("WARN")
+    return session
+
+
 def build_iceberg_session(
     app_name: str,
     root: Path,
@@ -182,20 +297,8 @@ def build_iceberg_session(
     session before its temp root is reclaimed.
     """
 
-    pyspark_sql = require_iceberg_runtime()
-
-    catalog_db = catalog_database_path(root)
-    catalog_db.parent.mkdir(parents=True, exist_ok=True)
-    options = iceberg_session_options(
-        warehouse_dir=root / "iceberg",
-        catalog_db=catalog_db,
-        catalog_name=catalog_name,
-        spark_warehouse_dir=root / "spark-warehouse",
+    target = sqlite_catalog_target(root)
+    target.prepare()
+    return start_session(
+        app_name, target.session_options(catalog_name=catalog_name), master=master
     )
-
-    builder = pyspark_sql.SparkSession.builder.appName(app_name).master(master)
-    for key, value in options.items():
-        builder = builder.config(key, value)
-    session = builder.getOrCreate()
-    session.sparkContext.setLogLevel("WARN")
-    return session

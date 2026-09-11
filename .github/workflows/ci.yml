@@ -128,6 +128,16 @@ jobs:
             exit 1
           fi
           echo "OK: SQLite JDBC driver jar was present; the cross-catalog differential executed."
+      - name: Assert the engine-neutrality round trip actually ran
+        run: |
+          if grep -Eiq "pyiceberg is not available" data/pytest-output.txt; then
+            echo "::error::precondition unproven — the pyiceberg round trip was SKIPPED."
+            echo "pyiceberg is a dev dependency (pyproject [project.optional-dependencies].dev);"
+            echo "if it is missing from the image, rebuild it rather than accepting the skip."
+            grep -Ein "pyiceberg is not available" data/pytest-output.txt || true
+            exit 1
+          fi
+          echo "OK: pyiceberg was present; the cross-engine round trip executed."
       - name: Coverage summary (inside container)
         if: always()
         run: |

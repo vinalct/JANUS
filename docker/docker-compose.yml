@@ -19,5 +19,6 @@ services:
       - ${JANUS_PROJECT_ROOT:-..}/conf:/workspace/conf:ro,z
       - ${JANUS_PROJECT_ROOT:-..}/data:/workspace/data:z
       - ${JANUS_PROJECT_ROOT:-..}/pyproject.toml:/workspace/pyproject.toml:ro,z
+      - ${JANUS_PROJECT_ROOT:-..}/requirements.txt:/workspace/requirements.txt:ro,z
     working_dir: /workspace
     command: ["sh", "-lc", "trap 'exit 0' TERM INT; while :; do sleep 3600; done"]
