@@ -9,8 +9,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from conftest import build_concurrent_plan
 
+from conftest import build_concurrent_plan
 from janus.strategies.api.pagination import (
     OffsetPaginator,
     PageNumberPaginator,

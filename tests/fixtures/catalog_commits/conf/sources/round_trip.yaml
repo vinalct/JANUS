@@ -1,0 +1,64 @@
+# The source the engine-neutrality round trip writes through the normal writer path.
+# Its bronze namespace is deliberately the profile's own `default_namespace`, so the test
+# can prove the one translation `pyiceberg` has no property for: what Spark resolves
+# implicitly, a `pyiceberg` identifier must spell out.
+source_id: catalog_commits_round_trip
+name: Cross-engine round-trip fixture
+owner: janus
+enabled: true
+source_type: api
+strategy: api
+strategy_variant: page_number_api
+federation_level: federal
+domain: test
+public_access: true
+
+access:
+  base_url: https://example.invalid
+  path: /records
+  method: GET
+  format: json
+  timeout_seconds: 30
+  auth:
+    type: none
+  pagination:
+    type: page_number
+    page_param: page
+    size_param: page_size
+    page_size: 10
+  rate_limit:
+    requests_per_minute: 10
+    concurrency: 1
+
+extraction:
+  mode: full_refresh
+  retry:
+    max_attempts: 3
+    backoff_strategy: fixed
+    backoff_seconds: 1
+
+schema:
+  mode: infer
+
+spark:
+  input_format: json
+  write_mode: overwrite
+  repartition: 1
+
+outputs:
+  raw:
+    path: data/raw/test/catalog_commits_round_trip
+    format: json
+  bronze:
+    path: data/bronze/test/catalog_commits_round_trip
+    format: iceberg
+    namespace: bronze
+    table_name: pyiceberg_round_trip
+  metadata:
+    path: data/metadata/test/catalog_commits_round_trip
+    format: json
+
+quality:
+  required_fields:
+    - id
+  allow_schema_evolution: true

@@ -25,9 +25,9 @@ from janus.quality import QualityGate
 from janus.readers import SparkDatasetReader
 from janus.registry import load_registry
 from janus.strategies.api import ApiResponse, ApiStrategy
-from janus.utils.environment import ICEBERG_CATALOG_IMPL, ICEBERG_SESSION_EXTENSIONS
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SparkDatasetWriter
+from tests.support.spark_sessions import build_iceberg_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures" / "ibge"
@@ -35,14 +35,6 @@ PIB_SOURCE_ID = "ibge_pib_brasil"
 PIB_CONFIG_FILE = "ibge/sidra.yaml"
 AGRO_SOURCE_ID = "ibge_agro_abacaxi_pronaf"
 AGRO_CONFIG_FILE = "ibge/sidra.yaml"
-ICEBERG_RUNTIME_JAR = (
-    PROJECT_ROOT
-    / "data"
-    / "metadata"
-    / "ivy"
-    / "jars"
-    / "org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
-)
 
 
 @dataclass(slots=True)
@@ -73,26 +65,10 @@ class FixtureTransport:
 
 @pytest.fixture(scope="module")
 def spark(tmp_path_factory):
-    pyspark_sql = pytest.importorskip("pyspark.sql")
-    if not ICEBERG_RUNTIME_JAR.exists():
-        pytest.skip("Iceberg runtime jar is not available in the local Ivy cache")
-    warehouse_root = tmp_path_factory.mktemp("janus-ibge-iceberg")
-    session = (
-        pyspark_sql.SparkSession.builder.appName("janus-ibge-integration")
-        .master("local[1]")
-        .config("spark.jars", str(ICEBERG_RUNTIME_JAR))
-        .config("spark.sql.extensions", ICEBERG_SESSION_EXTENSIONS)
-        .config("spark.sql.defaultCatalog", "janus")
-        .config("spark.sql.catalog.janus", ICEBERG_CATALOG_IMPL)
-        .config("spark.sql.catalog.janus.type", "hadoop")
-        .config("spark.sql.catalog.janus.warehouse", str(warehouse_root / "iceberg"))
-        .config("spark.sql.catalog.janus.default-namespace", "bronze")
-        .config("spark.sql.warehouse.dir", str(warehouse_root / "spark-warehouse"))
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.ui.enabled", "false")
-        .getOrCreate()
+    session = build_iceberg_session(
+        "janus-ibge-integration",
+        tmp_path_factory.mktemp("janus-ibge-iceberg"),
     )
-    session.sparkContext.setLogLevel("WARN")
     yield session
     session.stop()
 
