@@ -3,12 +3,14 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 ENV_PATTERN = re.compile(r"\$\{(?P<name>[A-Z0-9_]+)(?::-(?P<default>[^}]*))?\}")
+LOCATION_URI_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
 ICEBERG_SESSION_EXTENSIONS = (
     "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
 )
@@ -26,10 +28,35 @@ JDBC_SCHEMA_VERSION_OPTION = ("jdbc.schema-version", "V1")
 JDBC_URI_PREFIX = "jdbc:"
 JDBC_AUTHORITY_PREFIX = "//"
 ICEBERG_CATALOG_DB_PATH_KEY = "iceberg_catalog_db"
+ICEBERG_WAREHOUSE_PATH_KEY = "iceberg_warehouse_dir"
+OBJECT_STORE_KEY = "object_store"
+FILE_IO_IMPL_KEY = "io_impl"
+OBJECT_STORE_PACKAGE_KEY = "io_package"
+FILE_IO_IMPL_OPTION = "io-impl"
+S3_FILE_IO_IMPL = "org.apache.iceberg.aws.s3.S3FileIO"
+SUPPORTED_FILE_IO_IMPLS = {"S3FileIO": S3_FILE_IO_IMPL}
+
+OBJECT_STORE_ENDPOINT_KEY = "endpoint"
+OBJECT_STORE_PATH_STYLE_KEY = "path_style_access"
+OBJECT_STORE_REGION_KEY = "region"
+
+OBJECT_STORE_OPTIONS = (
+    (OBJECT_STORE_ENDPOINT_KEY, "s3.endpoint"),
+    (OBJECT_STORE_PATH_STYLE_KEY, "s3.path-style-access"),
+    (OBJECT_STORE_REGION_KEY, "client.region"),
+)
+
+OBJECT_STORE_FLAG_KEYS = frozenset({OBJECT_STORE_PATH_STYLE_KEY})
+TRUE_TEXT = frozenset({"true", "t", "yes", "y", "on", "1"})
+FALSE_TEXT = frozenset({"false", "f", "no", "n", "off", "0"})
+
+SUPPORTED_OBJECT_STORE_KEYS = frozenset(
+    {FILE_IO_IMPL_KEY, OBJECT_STORE_PACKAGE_KEY, *(key for key, _ in OBJECT_STORE_OPTIONS)}
+)
 RUNTIME_SCRATCH_DIR_ENV = "JANUS_RUNTIME_SCRATCH_DIR"
 DEFAULT_RUNTIME_SCRATCH_DIR = "/tmp/janus/runtime"
 FALLBACK_RUNTIME_PATH_KEYS = frozenset(
-    {"warehouse_dir", "ivy_dir", "iceberg_warehouse_dir"}
+    {"warehouse_dir", "ivy_dir", ICEBERG_WAREHOUSE_PATH_KEY}
 )
 RUNTIME_FILE_PATH_KEYS = frozenset({ICEBERG_CATALOG_DB_PATH_KEY})
 _RUNTIME_PATH_CONFIG_LOCATIONS = {
@@ -39,8 +66,10 @@ _RUNTIME_PATH_CONFIG_LOCATIONS = {
     "metadata_dir": ("storage", "metadata_dir"),
     "warehouse_dir": ("spark", "warehouse_dir"),
     "ivy_dir": ("spark", "ivy_dir"),
-    "iceberg_warehouse_dir": ("spark", "iceberg", "warehouse_dir"),
+    ICEBERG_WAREHOUSE_PATH_KEY: ("spark", "iceberg", "warehouse_dir"),
 }
+
+RuntimeLocation = Path | str
 
 
 def expand_env_vars(value: Any) -> Any:
@@ -75,11 +104,39 @@ def resolve_project_path(project_root: Path, value: str) -> Path:
     return path if path.is_absolute() else project_root / path
 
 
-def materialize_runtime_paths(config: dict[str, Any], project_root: Path) -> dict[str, Path]:
+def is_location_uri(value: Any) -> bool:
+    """Whether a configured value names a store rather than a directory on this filesystem.
+
+    Any scheme, by design: `s3://`, `s3a://` and whatever comes next are the same case —
+    a location this process configures an engine to reach, and never one it creates,
+    probes or resolves against the project root.
+    """
+
+    return isinstance(value, str) and LOCATION_URI_PATTERN.match(value) is not None
+
+
+def resolve_runtime_location(project_root: Path, value: str) -> RuntimeLocation:
+    """A location URI verbatim; anything else resolved project-relative, exactly as before."""
+
+    return value if is_location_uri(value) else resolve_project_path(project_root, value)
+
+
+def materialize_runtime_paths(
+    config: dict[str, Any], project_root: Path
+) -> dict[str, RuntimeLocation]:
+    """Every runtime location the profile declares, resolved once.
+
+    Only the Iceberg warehouse may be a URI: it is the one location an engine reaches
+    through its own storage layer. The raw, bronze and metadata zones, the Spark warehouse
+    and the Ivy cache are directories this process writes to directly, so they keep their
+    existing project-relative semantics — putting those on object storage is a different
+    change (it touches raw artifact writing, sidecars and resume-state rediscovery).
+    """
+
     storage = config.get("storage", {})
     spark = config.get("spark", {})
 
-    paths = {
+    paths: dict[str, RuntimeLocation] = {
         "root_dir": resolve_project_path(project_root, storage["root_dir"]),
         "raw_dir": resolve_project_path(project_root, storage["raw_dir"]),
         "bronze_dir": resolve_project_path(project_root, storage["bronze_dir"]),
@@ -92,7 +149,7 @@ def materialize_runtime_paths(config: dict[str, Any], project_root: Path) -> dic
 
     iceberg = spark.get("iceberg", {})
     if isinstance(iceberg, dict) and "warehouse_dir" in iceberg:
-        paths["iceberg_warehouse_dir"] = resolve_project_path(
+        paths[ICEBERG_WAREHOUSE_PATH_KEY] = resolve_runtime_location(
             project_root, iceberg["warehouse_dir"]
         )
 
@@ -105,9 +162,13 @@ def materialize_runtime_paths(config: dict[str, Any], project_root: Path) -> dic
     return paths
 
 
-def prepare_runtime(config: dict[str, Any], project_root: Path) -> dict[str, Path]:
+def prepare_runtime(
+    config: dict[str, Any], project_root: Path
+) -> dict[str, RuntimeLocation]:
     paths = materialize_runtime_paths(config, project_root)
     for key, path in tuple(paths.items()):
+        if not isinstance(path, Path):
+            continue
         try:
             _ensure_writable_directory(_directory_to_materialize(key, path))
         except PermissionError:
@@ -128,7 +189,7 @@ def merge_csv_values(existing: str | None, value: str) -> str:
 
 
 def build_spark_options(
-    config: dict[str, Any], resolved_paths: dict[str, Path]
+    config: dict[str, Any], resolved_paths: Mapping[str, RuntimeLocation]
 ) -> dict[str, str]:
     spark_config = config.get("spark", {})
     options: dict[str, str] = {
@@ -147,7 +208,9 @@ def build_spark_options(
     return options
 
 
-def build_spark_session(config: dict[str, Any], resolved_paths: dict[str, Path]):
+def build_spark_session(
+    config: dict[str, Any], resolved_paths: Mapping[str, RuntimeLocation]
+):
     from pyspark.sql import SparkSession
 
     spark_config = config.get("spark", {})
@@ -164,7 +227,9 @@ def build_spark_session(config: dict[str, Any], resolved_paths: dict[str, Path])
 
 
 def _apply_iceberg_catalog_options(
-    options: dict[str, str], iceberg: dict[str, Any], resolved_paths: dict[str, Path]
+    options: dict[str, str],
+    iceberg: dict[str, Any],
+    resolved_paths: Mapping[str, RuntimeLocation],
 ) -> None:
     """Emit the Iceberg catalog block for the catalog type the profile declares.
 
@@ -192,7 +257,10 @@ def _apply_iceberg_catalog_options(
     for suffix, value in _catalog_type_options(catalog_type, iceberg, resolved_paths):
         options.setdefault(f"{catalog_prefix}.{suffix}", value)
 
-    iceberg_warehouse_dir = resolved_paths.get("iceberg_warehouse_dir")
+    for suffix, value in _object_store_options(iceberg):
+        options.setdefault(f"{catalog_prefix}.{suffix}", value)
+
+    iceberg_warehouse_dir = resolved_paths.get(ICEBERG_WAREHOUSE_PATH_KEY)
     if iceberg_warehouse_dir is None:
         raise KeyError("Resolved Iceberg warehouse path is missing")
 
@@ -232,7 +300,9 @@ def resolve_catalog_type(iceberg: dict[str, Any]) -> str:
 
 
 def _catalog_type_options(
-    catalog_type: str, iceberg: dict[str, Any], resolved_paths: dict[str, Path]
+    catalog_type: str,
+    iceberg: dict[str, Any],
+    resolved_paths: Mapping[str, RuntimeLocation],
 ) -> list[tuple[str, str]]:
     emitted = [("type", catalog_type)]
     if catalog_type in CATALOG_TYPES_REQUIRING_URI:
@@ -264,7 +334,7 @@ def catalog_database_path(iceberg: dict[str, Any]) -> str | None:
 
 
 def resolve_catalog_uri(
-    iceberg: dict[str, Any], resolved_paths: dict[str, Path]
+    iceberg: dict[str, Any], resolved_paths: Mapping[str, RuntimeLocation]
 ) -> str:
     """The catalog URI as an engine must receive it, with a file-backed path made absolute.
 
@@ -307,10 +377,133 @@ def _split_file_backed_jdbc_uri(uri: str) -> tuple[str, str, str] | None:
 
 
 def _catalog_jar_packages(catalog_type: str, iceberg: dict[str, Any]) -> list[str]:
-    if catalog_type != JDBC_CATALOG_TYPE:
+    """Maven coordinates this catalog needs beyond the Iceberg runtime itself.
+
+    The JDBC driver opens the catalog database; the object-store package carries the FileIO
+    implementation and the SDK it calls. Both are declared by the profile because which one
+    is needed is a property of the environment, not of this code.
+    """
+
+    candidates = []
+    if catalog_type == JDBC_CATALOG_TYPE:
+        candidates.append(non_empty_text(iceberg.get("driver_package")))
+
+    object_store = object_store_block(iceberg)
+    if object_store is not None:
+        candidates.append(non_empty_text(object_store.get(OBJECT_STORE_PACKAGE_KEY)))
+
+    return [package for package in candidates if package is not None]
+
+
+def object_store_block(iceberg: dict[str, Any]) -> dict[str, Any] | None:
+    """The profile's validated `object_store` block, or `None` when it declares none.
+
+    Absent is the local case and must stay free of object-store configuration entirely:
+    a warehouse on a local filesystem needs no FileIO override, and emitting one would
+    change the options every existing environment gets.
+
+    Public, and validating, because `utils/catalog_properties.py` translates the same block
+    into a second engine's vocabulary: one reader means a profile either configures both
+    engines or is rejected by both, with the same message.
+    """
+
+    object_store = iceberg.get(OBJECT_STORE_KEY)
+    if not isinstance(object_store, dict) or not object_store:
+        return None
+
+    _reject_unsupported_object_store_keys(object_store)
+    resolve_file_io_impl(object_store)
+    for key in OBJECT_STORE_FLAG_KEYS:
+        object_store_flag(object_store, key)
+    return object_store
+
+
+def object_store_flag(object_store: dict[str, Any], key: str) -> bool | None:
+    """A boolean object-store setting, parsed strictly, or `None` when it is unset."""
+
+    value = non_empty_text(object_store.get(key))
+    if value is None:
+        return None
+    if value.lower() in TRUE_TEXT:
+        return True
+    if value.lower() in FALSE_TEXT:
+        return False
+
+    accepted = ", ".join(sorted(TRUE_TEXT | FALSE_TEXT))
+    raise ValueError(
+        f"Environment config has a non-boolean spark.iceberg.{OBJECT_STORE_KEY}.{key}: "
+        f"{value!r}; accepted values: {accepted}"
+    )
+
+
+def object_store_value(object_store: dict[str, Any], key: str) -> str | None:
+    """One setting as both engines receive it: booleans canonicalised, the rest verbatim."""
+
+    if key in OBJECT_STORE_FLAG_KEYS:
+        flag = object_store_flag(object_store, key)
+        return None if flag is None else str(flag).lower()
+    return non_empty_text(object_store.get(key))
+
+
+def _object_store_options(iceberg: dict[str, Any]) -> list[tuple[str, str]]:
+    """The FileIO block for a warehouse on object storage, keyed by Iceberg's own names."""
+
+    object_store = object_store_block(iceberg)
+    if object_store is None:
         return []
-    driver_package = non_empty_text(iceberg.get("driver_package"))
-    return [driver_package] if driver_package is not None else []
+
+    emitted = [(FILE_IO_IMPL_OPTION, resolve_file_io_impl(object_store))]
+    for key, suffix in OBJECT_STORE_OPTIONS:
+        value = object_store_value(object_store, key)
+        if value is not None:
+            emitted.append((suffix, value))
+    return emitted
+
+
+def resolve_file_io_impl(object_store: dict[str, Any]) -> str:
+    """The FileIO class the declared `io_impl` names, or a named error.
+
+    The profile names a *short* implementation (`S3FileIO`) and this table holds the class,
+    for the same reason `catalog_type` is a token: a fully-qualified class in YAML would let
+    a profile put any class on the classpath into the session, and adding the next object
+    store would still be a code change. One entry per store JANUS has verified.
+    """
+
+    supported = ", ".join(sorted(SUPPORTED_FILE_IO_IMPLS))
+    name = non_empty_text(object_store.get(FILE_IO_IMPL_KEY))
+    if name is None:
+        raise ValueError(
+            f"Environment config must set spark.iceberg.{OBJECT_STORE_KEY}."
+            f"{FILE_IO_IMPL_KEY} when the {OBJECT_STORE_KEY} block is present; supported "
+            f"values: {supported}"
+        )
+
+    impl = SUPPORTED_FILE_IO_IMPLS.get(name)
+    if impl is None:
+        raise ValueError(
+            f"Environment config has an unsupported spark.iceberg.{OBJECT_STORE_KEY}."
+            f"{FILE_IO_IMPL_KEY}: {name!r}; supported values: {supported}"
+        )
+    return impl
+
+
+def _reject_unsupported_object_store_keys(object_store: dict[str, Any]) -> None:
+    """Fail closed on a key the block does not define, naming the key but never its value.
+
+    The key a profile would reach for first is a credential, and a credential in a tracked
+    YAML file is the failure this refuses to make convenient: object-store credentials
+    travel in AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, which the FileIO reads for itself.
+    """
+
+    unsupported = sorted(set(object_store) - SUPPORTED_OBJECT_STORE_KEYS)
+    if unsupported:
+        supported = ", ".join(sorted(SUPPORTED_OBJECT_STORE_KEYS))
+        raise ValueError(
+            f"Environment config has unsupported spark.iceberg.{OBJECT_STORE_KEY} key(s): "
+            f"{', '.join(unsupported)}; supported keys: {supported}. Object-store "
+            "credentials are read from the standard AWS_ACCESS_KEY_ID and "
+            "AWS_SECRET_ACCESS_KEY environment variables, never from a profile"
+        )
 
 
 def _jdbc_credential_options(iceberg: dict[str, Any]) -> list[tuple[str, str]]:

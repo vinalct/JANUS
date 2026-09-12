@@ -13,9 +13,14 @@ import pytest
 
 from janus.utils.environment import (
     ICEBERG_CATALOG_DB_PATH_KEY,
+    ICEBERG_WAREHOUSE_PATH_KEY,
     JDBC_CATALOG_TYPE,
+    OBJECT_STORE_KEY,
+    OBJECT_STORE_PACKAGE_KEY,
+    RuntimeLocation,
     build_spark_options,
     load_environment_config,
+    materialize_runtime_paths,
     required_catalog_value,
     resolve_catalog_type,
 )
@@ -26,6 +31,9 @@ IVY_JARS_DIR = PROJECT_ROOT / "data" / "metadata" / "ivy" / "jars"
 #: The profile whose catalog every Spark suite runs on — the one `make run-local` uses.
 PROFILE_NAME = "local"
 JANUS_ENV_PREFIX = "JANUS_"
+
+CLUSTER_PROFILE_NAME = "cluster"
+CLUSTER_SUITE_ENV = "JANUS_CLUSTER_SUITE"
 
 #: The catalog name the profile ships. Suites that need a second catalog pass their own.
 DEFAULT_CATALOG_NAME = "janus"
@@ -47,11 +55,12 @@ JDBC_SQLITE_PREFIX = "jdbc:sqlite:"
 PYICEBERG_UNAVAILABLE = "pyiceberg is not available"
 
 
-def checked_in_iceberg_block() -> dict[str, Any]:
+def checked_in_iceberg_block(profile: str = PROFILE_NAME) -> dict[str, Any]:
     """The profile's `spark.iceberg` block as a fresh clone gets it.
 
     `JANUS_*` overrides are scrubbed on purpose: a developer who exports one to poke at a
-    warehouse must not thereby re-point the whole Spark suite at another catalog.
+    warehouse must not thereby re-point the whole Spark suite at another catalog. The
+    cluster target is the one deliberate exception — see :func:`cluster_catalog_target`.
     """
 
     scrubbed = {
@@ -60,7 +69,7 @@ def checked_in_iceberg_block() -> dict[str, Any]:
         if not name.startswith(JANUS_ENV_PREFIX)
     }
     with mock.patch.dict(os.environ, scrubbed, clear=True):
-        config = load_environment_config(PROFILE_NAME, PROJECT_ROOT)
+        config = load_environment_config(profile, PROJECT_ROOT)
     return dict(config["spark"]["iceberg"])
 
 
@@ -75,12 +84,16 @@ def pinned_jars(iceberg: dict[str, Any] | None = None) -> list[Path]:
     """Every jar the profile's catalog needs on the classpath."""
 
     block = checked_in_iceberg_block() if iceberg is None else iceberg
-    jars = []
-    for key in CATALOG_PACKAGE_KEYS:
-        package = block.get(key)
-        if isinstance(package, str) and package.strip():
-            jars.append(vendored_jar(package.strip()))
-    return jars
+    object_store = block.get(OBJECT_STORE_KEY)
+    packages = [block.get(key) for key in CATALOG_PACKAGE_KEYS]
+    if isinstance(object_store, dict):
+        packages.append(object_store.get(OBJECT_STORE_PACKAGE_KEY))
+
+    return [
+        vendored_jar(package.strip())
+        for package in packages
+        if isinstance(package, str) and package.strip()
+    ]
 
 
 @dataclass(frozen=True)
@@ -89,17 +102,18 @@ class CatalogTarget:
 
     id: str
     iceberg: dict[str, Any]
-    resolved_paths: dict[str, Path]
+    resolved_paths: dict[str, RuntimeLocation]
 
     @property
-    def warehouse_dir(self) -> Path:
-        return self.resolved_paths["iceberg_warehouse_dir"]
+    def warehouse_dir(self) -> RuntimeLocation:
+        return self.resolved_paths[ICEBERG_WAREHOUSE_PATH_KEY]
 
     @property
     def catalog_db(self) -> Path | None:
         """The catalog's database file, or `None` when the catalog is server-backed."""
 
-        return self.resolved_paths.get(ICEBERG_CATALOG_DB_PATH_KEY)
+        database = self.resolved_paths.get(ICEBERG_CATALOG_DB_PATH_KEY)
+        return database if isinstance(database, Path) else None
 
     def environment_config(
         self, catalog_name: str = DEFAULT_CATALOG_NAME
@@ -128,11 +142,14 @@ class CatalogTarget:
     def prepare(self) -> None:
         """Create what an engine opens but never creates.
 
-        SQLite opens a database file; it does not make the directory path to it. The
-        warehouse is created for the same reason — an engine writes *into* it.
+        SQLite opens a database file; it does not make the directory path to it. A local
+        warehouse is created for the same reason — an engine writes *into* it. A warehouse
+        on object storage is neither: the bucket is the stack's to provide (`make
+        up-cluster` creates it), and nothing here may try to `mkdir` a URI.
         """
 
-        self.warehouse_dir.mkdir(parents=True, exist_ok=True)
+        if isinstance(warehouse := self.warehouse_dir, Path):
+            warehouse.mkdir(parents=True, exist_ok=True)
         if (database := self.catalog_db) is not None:
             database.parent.mkdir(parents=True, exist_ok=True)
 
@@ -149,18 +166,66 @@ def sqlite_catalog_target(root: Path) -> CatalogTarget:
 
 
 
+def cluster_catalog_target(root: Path) -> CatalogTarget:
+    """The `cluster` profile's own catalog: Postgres, with the warehouse on object storage."""
+
+    if not os.getenv(CLUSTER_SUITE_ENV):
+        pytest.skip(
+            f"the {CLUSTER_PROFILE_NAME} stack is not running: start it with "
+            f"`make up-cluster` and run the suite with `make test-cluster`, which exports "
+            f"{CLUSTER_SUITE_ENV}"
+        )
+
+    config = load_environment_config(CLUSTER_PROFILE_NAME, PROJECT_ROOT)
+    iceberg = dict(config["spark"]["iceberg"])
+    for jar in pinned_jars(iceberg):
+        if not jar.exists():
+            pytest.skip(
+                f"{jar.name} is not available in the local Ivy cache; `make up-cluster` "
+                "seeds every jar the cluster profile pins"
+            )
+
+    resolved_paths = materialize_runtime_paths(config, PROJECT_ROOT)
+    # The Spark warehouse is scratch either way; keeping it under the suite's own root
+    # leaves nothing behind in the repository.
+    resolved_paths["warehouse_dir"] = root / "spark-warehouse"
+    return CatalogTarget(
+        id=CLUSTER_PROFILE_NAME, iceberg=iceberg, resolved_paths=resolved_paths
+    )
+
+
 CATALOG_TARGET_FACTORIES: tuple[Callable[[Path], CatalogTarget], ...] = (
     sqlite_catalog_target,
+    cluster_catalog_target,
 )
 
 
-def catalog_target_ids() -> list[str]:
-    """Test ids for `CATALOG_TARGET_FACTORIES`, so a failure names the catalog it was on."""
+CLUSTER_TARGET_FACTORIES = frozenset({cluster_catalog_target})
+
+
+def catalog_target_id(factory: Callable[[Path], CatalogTarget]) -> str:
+    """The test id for one factory, so a failure names the catalog it was on."""
+
+    return factory.__name__.removesuffix("_catalog_target")
+
+
+def catalog_target_params() -> list[Any]:
+    """`CATALOG_TARGET_FACTORIES` as fixture params, each already carrying its id and marks."""
 
     return [
-        factory.__name__.removesuffix("_catalog_target")
+        pytest.param(
+            factory,
+            id=catalog_target_id(factory),
+            marks=[pytest.mark.cluster] if factory in CLUSTER_TARGET_FACTORIES else [],
+        )
         for factory in CATALOG_TARGET_FACTORIES
     ]
+
+
+def cluster_suite_requested() -> bool:
+    """Whether this run was asked to reach the cluster stack at all."""
+
+    return bool(os.getenv(CLUSTER_SUITE_ENV))
 
 
 def _file_backed_target(

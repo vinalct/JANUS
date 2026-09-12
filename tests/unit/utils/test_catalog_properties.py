@@ -399,6 +399,113 @@ def test_no_credential_appears_in_any_exception_text(tmp_path, label, block):
     assert SECRET_PASSWORD not in message
 
 
+# ── the object store the warehouse lives in ──────────────────────────────────
+
+OBJECT_STORE_BLOCK = {
+    "io_impl": "S3FileIO",
+    "io_package": "org.apache.iceberg:iceberg-aws-bundle:1.10.1",
+    "endpoint": "http://minio:9000",
+    "path_style_access": "true",
+    "region": "us-east-1",
+}
+
+
+def _object_store_properties(tmp_path, **overrides):
+    """Derived properties for a jdbc profile whose warehouse is on object storage."""
+
+    block = {**OBJECT_STORE_BLOCK, **overrides}
+    config = _environment_config(
+        **{
+            **CATALOG_PROFILES["jdbc_postgres"],
+            "warehouse_dir": "s3://janus-bronze/warehouse",
+            "object_store": {
+                key: value for key, value in block.items() if value is not None
+            },
+        }
+    )
+    return derive_pyiceberg_catalog_properties(
+        config, materialize_runtime_paths(config, tmp_path)
+    )
+
+
+def test_the_second_engine_is_told_where_the_object_store_is(tmp_path):
+    """The gap a live cluster run found: without these, pyarrow talks to AWS itself."""
+
+    properties = _object_store_properties(tmp_path)
+
+    assert properties["s3.endpoint"] == "http://minio:9000"
+    assert properties["s3.region"] == "us-east-1"
+
+
+def test_path_style_addressing_is_spelled_the_other_way_round(tmp_path):
+    """Spark says path-style; `pyiceberg` says virtual-addressing. They are inverses."""
+
+    assert (
+        _object_store_properties(tmp_path, path_style_access="true")[
+            "s3.force-virtual-addressing"
+        ]
+        == "false"
+    )
+    assert (
+        _object_store_properties(tmp_path, path_style_access="false")[
+            "s3.force-virtual-addressing"
+        ]
+        == "true"
+    )
+
+
+def test_both_engines_read_one_block(tmp_path):
+    """Every object-store value either reaches both engines or reaches neither."""
+
+    block = {**OBJECT_STORE_BLOCK}
+    config = _environment_config(
+        **{
+            **CATALOG_PROFILES["jdbc_postgres"],
+            "warehouse_dir": "s3://janus-bronze/warehouse",
+            "object_store": block,
+        }
+    )
+    paths = materialize_runtime_paths(config, tmp_path)
+
+    options = build_spark_options(config, paths)
+    properties = derive_pyiceberg_catalog_properties(config, paths)
+    prefix = "spark.sql.catalog.janus"
+
+    assert properties["s3.endpoint"] == options[f"{prefix}.s3.endpoint"]
+    assert properties["s3.region"] == options[f"{prefix}.client.region"]
+    assert properties["warehouse"] == options[f"{prefix}.warehouse"]
+    # The inverted one, stated as the round trip depends on it.
+    assert properties["s3.force-virtual-addressing"] == "false"
+    assert options[f"{prefix}.s3.path-style-access"] == "true"
+
+
+def test_no_object_store_credential_is_ever_derived(tmp_path):
+    """pyarrow falls back to the AWS environment chain; JANUS hands it nothing."""
+
+    properties = _object_store_properties(tmp_path)
+
+    assert not [key for key in properties if "access-key" in key or "secret" in key]
+
+
+def test_a_profile_without_an_object_store_derives_no_file_io_settings(tmp_path):
+    """The local profile must be untouched by any of this."""
+
+    config = _environment_config(**CATALOG_PROFILES["jdbc_sqlite"])
+    properties = derive_pyiceberg_catalog_properties(
+        config, materialize_runtime_paths(config, tmp_path)
+    )
+
+    assert set(properties) == {"type", "uri", "warehouse"}
+
+
+def test_a_block_the_spark_emitter_rejects_is_rejected_here_too(tmp_path):
+    """One reader, so a profile cannot configure one engine and quietly skip the other."""
+
+    for override in ({"io_impl": "GlacierFileIO"}, {"path_style_access": "ture"}):
+        with pytest.raises(ValueError):
+            _object_store_properties(tmp_path, **override)
+
+
 # ── the warehouse location ───────────────────────────────────────────────────
 
 

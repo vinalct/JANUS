@@ -23,6 +23,9 @@ driver options     ``?journal_mode=…`` — PRAGMAs the       carried through; 
 Postgres URI       ``jdbc:postgresql://host/db``           ``postgresql+psycopg2://host/db``
 credentials        ``jdbc.user`` / ``jdbc.password``       userinfo inside the URI authority
 warehouse          local path or ``s3://…``                same location, local paths ``file://``
+object-store IO    ``io-impl`` + ``s3.*`` catalog props    ``s3.endpoint`` / ``s3.region`` and
+                                                           ``s3.force-virtual-addressing``, the
+                                                           inverse of ``s3.path-style-access``
 default namespace  ``default-namespace`` conf              no property — identifiers qualify it
 REST               ``type = rest``, ``uri``                ``type = rest``, ``uri`` (the easy one)
 Hadoop             ``type = hadoop``                       unrepresentable — raises
@@ -37,8 +40,7 @@ userinfo in the URI is the only representation that exists. A URI with no author
 
 from __future__ import annotations
 
-import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -46,16 +48,23 @@ from urllib.parse import quote
 from janus.utils.environment import (
     CATALOG_TYPE_KEY,
     HADOOP_CATALOG_TYPE,
+    ICEBERG_WAREHOUSE_PATH_KEY,
     JDBC_AUTHORITY_PREFIX,
     JDBC_CATALOG_TYPE,
     JDBC_URI_PREFIX,
+    OBJECT_STORE_ENDPOINT_KEY,
+    OBJECT_STORE_PATH_STYLE_KEY,
+    OBJECT_STORE_REGION_KEY,
     REST_CATALOG_TYPE,
+    RuntimeLocation,
+    is_location_uri,
     non_empty_text,
+    object_store_block,
+    object_store_flag,
+    object_store_value,
     resolve_catalog_type,
     resolve_catalog_uri,
 )
-
-ICEBERG_WAREHOUSE_PATH_KEY = "iceberg_warehouse_dir"
 
 # `pyiceberg`'s own vocabulary (pyiceberg.catalog.TYPE / URI / WAREHOUSE_LOCATION).
 PYICEBERG_TYPE_KEY = "type"
@@ -66,13 +75,23 @@ PYICEBERG_WAREHOUSE_KEY = "warehouse"
 PYICEBERG_SQL_CATALOG_TYPE = "sql"
 PYICEBERG_REST_CATALOG_TYPE = "rest"
 
+# `pyiceberg`'s S3 FileIO vocabulary (pyiceberg.io.S3_ENDPOINT / S3_REGION /
+# S3_FORCE_VIRTUAL_ADDRESSING), read from the published 0.12.0 distribution.
+PYICEBERG_S3_ENDPOINT_KEY = "s3.endpoint"
+PYICEBERG_S3_REGION_KEY = "s3.region"
+PYICEBERG_S3_FORCE_VIRTUAL_ADDRESSING_KEY = "s3.force-virtual-addressing"
+
+# Profile key → the `pyiceberg` property carrying it verbatim.
+PYICEBERG_OBJECT_STORE_KEYS = (
+    (OBJECT_STORE_ENDPOINT_KEY, PYICEBERG_S3_ENDPOINT_KEY),
+    (OBJECT_STORE_REGION_KEY, PYICEBERG_S3_REGION_KEY),
+)
+
 # JDBC subprotocol → the driver-qualified SQLAlchemy scheme `SqlCatalog` can open.
 SQLALCHEMY_SCHEMES = {
     "sqlite": "sqlite",
     "postgresql": "postgresql+psycopg2",
 }
-
-_URI_SCHEME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
 
 
 class CatalogPropertyError(ValueError):
@@ -84,7 +103,7 @@ class HadoopCatalogUnrepresentableError(CatalogPropertyError):
 
 
 def derive_pyiceberg_catalog_properties(
-    config: dict[str, Any], resolved_paths: dict[str, Path]
+    config: dict[str, Any], resolved_paths: Mapping[str, RuntimeLocation]
 ) -> dict[str, str]:
     """Translate one environment profile into `pyiceberg.catalog.load_catalog` properties.
 
@@ -115,6 +134,7 @@ def derive_pyiceberg_catalog_properties(
 
     properties = builder(iceberg, resolved_paths)
     properties[PYICEBERG_WAREHOUSE_KEY] = _warehouse_location(resolved_paths)
+    properties.update(_object_store_properties(iceberg))
     return properties
 
 
@@ -148,7 +168,7 @@ def derive_pyiceberg_default_namespace(config: dict[str, Any]) -> str | None:
 
 
 def _jdbc_properties(
-    iceberg: dict[str, Any], resolved_paths: dict[str, Path]
+    iceberg: dict[str, Any], resolved_paths: Mapping[str, RuntimeLocation]
 ) -> dict[str, str]:
     """Spark's JDBC catalog is `pyiceberg`'s `SqlCatalog`, over a SQLAlchemy URI."""
 
@@ -161,7 +181,7 @@ def _jdbc_properties(
 
 
 def _rest_properties(
-    iceberg: dict[str, Any], resolved_paths: dict[str, Path]
+    iceberg: dict[str, Any], resolved_paths: Mapping[str, RuntimeLocation]
 ) -> dict[str, str]:
     """The easy case: both engines take `type` and `uri` verbatim."""
 
@@ -172,11 +192,41 @@ def _rest_properties(
 
 
 _PROPERTY_BUILDERS: dict[
-    str, Callable[[dict[str, Any], dict[str, Path]], dict[str, str]]
+    str, Callable[[dict[str, Any], Mapping[str, RuntimeLocation]], dict[str, str]]
 ] = {
     JDBC_CATALOG_TYPE: _jdbc_properties,
     REST_CATALOG_TYPE: _rest_properties,
 }
+
+
+def _object_store_properties(iceberg: dict[str, Any]) -> dict[str, str]:
+    """The FileIO settings `pyiceberg` needs to reach the bucket Spark writes to.
+
+    `pyiceberg` picks its filesystem from the warehouse scheme, but it cannot guess *where*
+    an S3-compatible store lives. With no endpoint it talks to AWS itself — which is an
+    ACCESS_DENIED against a bucket that exists somewhere else entirely — and with no region
+    it first asks AWS to resolve the bucket's region, before it has an endpoint to ask.
+    Both values come from the block the Spark emitter already reads.
+
+    Credentials are deliberately absent here, exactly as they are Spark-side: with no
+    credential property, `pyiceberg` falls back to the standard AWS chain, which reads
+    AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
+    """
+
+    object_store = object_store_block(iceberg)
+    if object_store is None:
+        return {}
+
+    properties = {}
+    for key, property_name in PYICEBERG_OBJECT_STORE_KEYS:
+        value = object_store_value(object_store, key)
+        if value is not None:
+            properties[property_name] = value
+
+    path_style = object_store_flag(object_store, OBJECT_STORE_PATH_STYLE_KEY)
+    if path_style is not None:
+        properties[PYICEBERG_S3_FORCE_VIRTUAL_ADDRESSING_KEY] = str(not path_style).lower()
+    return properties
 
 
 def _iceberg_block(config: dict[str, Any]) -> dict[str, Any]:
@@ -256,7 +306,7 @@ def _userinfo(user: str | None, password: str | None) -> str:
     return f"{encoded}@"
 
 
-def _warehouse_location(resolved_paths: dict[str, Path]) -> str:
+def _warehouse_location(resolved_paths: Mapping[str, RuntimeLocation]) -> str:
     """The warehouse as a location URI.
 
     `pyiceberg` picks its FileIO from the location's scheme, so a bare local path — which is what
@@ -270,7 +320,7 @@ def _warehouse_location(resolved_paths: dict[str, Path]) -> str:
         raise CatalogPropertyError("Resolved Iceberg warehouse path is missing")
 
     location = str(warehouse)
-    if _URI_SCHEME_PATTERN.match(location):
+    if is_location_uri(location):
         return location
 
     path = Path(location)

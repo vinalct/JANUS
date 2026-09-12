@@ -53,6 +53,8 @@ jobs:
       # proven visible in-container — never resolved from Maven at test time.
       SQLITE_JAR: org.xerial_sqlite-jdbc-3.53.2.1.jar
       SQLITE_JAR_SHA256: f55e405ed96d5ffe629e05b7b51b059e1c7d64527c0cc90a972fbac06730ccc1
+      POSTGRES_JAR: org.postgresql_postgresql-42.7.13.jar
+      POSTGRES_JAR_SHA256: 6e0e4cc2d8cae902084f8a2b18728b073a6fd9d1f87c9d8bff8f298c18185b93
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -71,20 +73,21 @@ jobs:
           mkdir -p data/metadata/ivy/jars data/metadata/iceberg-catalog
           cp "deps/${IVY_JAR}" "data/metadata/ivy/jars/${IVY_JAR}"
           cp "deps/${SQLITE_JAR}" "data/metadata/ivy/jars/${SQLITE_JAR}"
+          cp "deps/${POSTGRES_JAR}" "data/metadata/ivy/jars/${POSTGRES_JAR}"
       - name: Verify seeded jars are present and valid
         run: |
           set -euo pipefail
-          for entry in "${IVY_JAR}:${IVY_JAR_SHA256}" "${SQLITE_JAR}:${SQLITE_JAR_SHA256}"; do
+          for entry in "${IVY_JAR}:${IVY_JAR_SHA256}" "${SQLITE_JAR}:${SQLITE_JAR_SHA256}" "${POSTGRES_JAR}:${POSTGRES_JAR_SHA256}"; do
             jar="data/metadata/ivy/jars/${entry%:*}"
             test -s "$jar"
             echo "${entry##*:}  ${jar}" | sha256sum -c -   
             unzip -tq "$jar" >/dev/null                    
           done
-      - name: Prove both jars are visible in-container at test time (no Maven fetch)
+      - name: Prove every seeded jar is visible in-container at test time (no Maven fetch)
         run: |
           set -euo pipefail
           docker compose -f docker/docker-compose.yml run --rm -T janus \
-            sh -lc "ls -1 data/metadata/ivy/jars/${IVY_JAR} data/metadata/ivy/jars/${SQLITE_JAR}"
+            sh -lc "ls -1 data/metadata/ivy/jars/${IVY_JAR} data/metadata/ivy/jars/${SQLITE_JAR} data/metadata/ivy/jars/${POSTGRES_JAR}"
       - name: Full test suite + coverage incl. integration (inside container)
         run: |
           set -o pipefail

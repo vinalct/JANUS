@@ -42,12 +42,6 @@ ALLOWED_SITES: dict[str, str] = {
         "reproducible for the AC-4 baseline. Its header says it is not the supported local "
         "environment; local.yaml is."
     ),
-    "conf/environments/cluster.yaml": (
-        "The cluster profile still defaults to the old catalog."
-    ),
-    "conf/environments/cluster.env.example": (
-        "The documented default for the cluster profile above, and the same temporary"
-    ),
     "tests/integration/catalog_migration/test_bronze_identity_across_catalogs.py": (
         "The AC-4 differential, and the one test that may build a session on the old "
         "catalog: the old catalog is the baseline half of the comparison, so removing it "
@@ -183,8 +177,10 @@ def test_no_allowlisted_site_has_gone_stale():
     """An entry must describe a file that still exists and still names the token.
 
     Without this the allowlist becomes fiction: an entry granted to a file that has since
-    been rewritten would keep documenting a decision nobody is making any more — and the
-    two cluster-profile entries would outlive the rewrite that is meant to retire them.
+    been rewritten would keep documenting a decision nobody is making any more. The two
+    cluster-profile entries this table used to carry are the worked example: moved
+    that profile onto the safe catalog, and the entries came out with the same commit
+    because this test would otherwise have failed.
     """
 
     found = _mentions_by_site()

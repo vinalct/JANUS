@@ -20,8 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "mypy==2.2.0",
-  # the second engine that proves the catalog is engine-neutral. Dev-only.
-  "pyiceberg[pyarrow,sql-sqlite]==0.12.0",
+  "pyiceberg[pyarrow,sql-postgres,sql-sqlite]==0.12.0",
   "pytest==9.0.2",
   "pytest-cov==7.0.0",
   "ruff==0.11.6",
@@ -40,6 +39,9 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+  "cluster: requires the cluster stack (MinIO + Postgres)",
+]
 
 [tool.ruff]
 target-version = "py313"

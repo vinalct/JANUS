@@ -7,9 +7,8 @@ from pathlib import Path
 import pytest
 
 from tests.support.spark_sessions import (
-    CATALOG_TARGET_FACTORIES,
     CatalogTarget,
-    catalog_target_ids,
+    catalog_target_params,
     require_iceberg_runtime,
     start_session,
 )
@@ -25,7 +24,7 @@ SUITE_SESSION_CONFIG = {
 }
 
 
-@pytest.fixture(scope="module", params=CATALOG_TARGET_FACTORIES, ids=catalog_target_ids())
+@pytest.fixture(scope="module", params=catalog_target_params())
 def catalog_target(request, tmp_path_factory) -> CatalogTarget:
     """The catalog both writers share, built from the profile by the shared helper."""
 

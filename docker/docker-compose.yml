@@ -1,24 +1,118 @@
+# `make up` starts one container: the `janus` service below. Everything under the `cluster`
+# compose profile — MinIO, Postgres and a second JANUS container pointed at them — starts
+# only for `make up-cluster`, so the default developer experience stays a single container.
+x-janus-service: &janus-service
+  image: ${JANUS_IMAGE:-janus:local}
+  user: "${JANUS_CONTAINER_USER:-1000:1000}"
+  stdin_open: true
+  tty: true
+  volumes:
+    - ${JANUS_PROJECT_ROOT:-..}/src:/workspace/src:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/tests:/workspace/tests:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/conf:/workspace/conf:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/data:/workspace/data:z
+    - ${JANUS_PROJECT_ROOT:-..}/pyproject.toml:/workspace/pyproject.toml:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/requirements.txt:/workspace/requirements.txt:ro,z
+  working_dir: /workspace
+  command: ["sh", "-lc", "trap 'exit 0' TERM INT; while :; do sleep 3600; done"]
+
+x-janus-environment: &janus-environment
+  PYTHONPATH: /workspace/src
+  JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+  JANUS_CA_BUNDLE: /workspace/conf/certs/rnpicpedugr46ovtlsca2025.pem
+
 services:
   janus:
-    image: ${JANUS_IMAGE:-janus:local}
+    <<: *janus-service
     build:
       context: ..
       dockerfile: docker/Dockerfile
     env_file:
       - ../conf/environments/local.env.example
     environment:
-      PYTHONPATH: /workspace/src
-      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-      JANUS_CA_BUNDLE: /workspace/conf/certs/rnpicpedugr46ovtlsca2025.pem
-    user: "${JANUS_CONTAINER_USER:-1000:1000}"
-    stdin_open: true
-    tty: true
+      <<: *janus-environment
+
+  # ── the `cluster` profile's stack ──────────────────────────────────────────
+  # Pinned images, named volumes, and no tracked credential: the two services below read
+  # their login from the host environment, which `make up-cluster` fills from the untracked
+  # conf/environments/cluster.env it generates.
+  minio:
+    profiles: ["cluster"]
+    image: ${JANUS_MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z}
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${JANUS_CLUSTER_S3_ACCESS_KEY:-janus}
+      MINIO_ROOT_PASSWORD: ${JANUS_CLUSTER_S3_SECRET_KEY:-}
+    ports:
+      - "${JANUS_CLUSTER_MINIO_PORT:-9000}:9000"
+      - "${JANUS_CLUSTER_MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
-      - ${JANUS_PROJECT_ROOT:-..}/src:/workspace/src:ro,z
-      - ${JANUS_PROJECT_ROOT:-..}/tests:/workspace/tests:ro,z
-      - ${JANUS_PROJECT_ROOT:-..}/conf:/workspace/conf:ro,z
-      - ${JANUS_PROJECT_ROOT:-..}/data:/workspace/data:z
-      - ${JANUS_PROJECT_ROOT:-..}/pyproject.toml:/workspace/pyproject.toml:ro,z
-      - ${JANUS_PROJECT_ROOT:-..}/requirements.txt:/workspace/requirements.txt:ro,z
-    working_dir: /workspace
-    command: ["sh", "-lc", "trap 'exit 0' TERM INT; while :; do sleep 3600; done"]
+      - janus-minio-data:/data
+
+  # Creates the warehouse bucket, then exits. The bucket name is read out of the warehouse
+  # URI the profile already declares, so there is no second place to keep it in step.
+  minio-init:
+    profiles: ["cluster"]
+    image: ${JANUS_MC_IMAGE:-quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z}
+    depends_on:
+      - minio
+    environment:
+      JANUS_ICEBERG_WAREHOUSE_DIR: ${JANUS_ICEBERG_WAREHOUSE_DIR:-s3://janus-bronze/warehouse}
+      MINIO_ROOT_USER: ${JANUS_CLUSTER_S3_ACCESS_KEY:-janus}
+      MINIO_ROOT_PASSWORD: ${JANUS_CLUSTER_S3_SECRET_KEY:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        bucket="$${JANUS_ICEBERG_WAREHOUSE_DIR#*://}"
+        bucket="$${bucket%%/*}"
+        attempt=0
+        until mc alias set janus http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+          attempt=$$((attempt + 1))
+          if [ "$$attempt" -ge 60 ]; then
+            echo "minio did not become reachable at http://minio:9000" >&2
+            exit 1
+          fi
+          sleep 2
+        done
+        mc mb --ignore-existing "janus/$$bucket"
+        echo "bucket ready: $$bucket"
+    restart: "no"
+
+  postgres:
+    profiles: ["cluster"]
+    image: ${JANUS_POSTGRES_IMAGE:-docker.io/library/postgres:17.11-trixie}
+    environment:
+      POSTGRES_USER: ${JANUS_CLUSTER_POSTGRES_USER:-janus}
+      POSTGRES_PASSWORD: ${JANUS_CLUSTER_POSTGRES_PASSWORD:-}
+      POSTGRES_DB: ${JANUS_CLUSTER_POSTGRES_DB:-iceberg}
+    ports:
+      - "${JANUS_CLUSTER_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - janus-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # The same image and the same mounts as `janus`; only the environment differs, which is
+  # the claim this profile exists to make.
+  janus-cluster:
+    <<: *janus-service
+    profiles: ["cluster"]
+    env_file:
+      - ../conf/environments/cluster.env.example
+    environment:
+      <<: *janus-environment
+      JANUS_ICEBERG_CATALOG_USER: ${JANUS_CLUSTER_POSTGRES_USER:-janus}
+      JANUS_ICEBERG_CATALOG_PASSWORD: ${JANUS_CLUSTER_POSTGRES_PASSWORD:-}
+      AWS_ACCESS_KEY_ID: ${JANUS_CLUSTER_S3_ACCESS_KEY:-janus}
+      AWS_SECRET_ACCESS_KEY: ${JANUS_CLUSTER_S3_SECRET_KEY:-}
+    depends_on:
+      - minio
+      - postgres
+
+volumes:
+  janus-minio-data:
+  janus-postgres-data:
