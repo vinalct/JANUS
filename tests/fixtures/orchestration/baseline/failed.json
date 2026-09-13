@@ -1,0 +1,217 @@
+{
+  "compute_double_tables": {},
+  "events": [
+    "request"
+  ],
+  "evidence": "offline boundary capture; HTTP and compute doubles; no Spark or Iceberg commit",
+  "persisted": {
+    "data/metadata/C/dead_letters/current.json": {
+      "entries": [
+        {
+          "error_message": "scripted extraction failure",
+          "error_type": "RuntimeError",
+          "item_key": "__none__",
+          "item_type": "request_input",
+          "metadata": {
+            "request_input_count": "1",
+            "request_input_index": "1",
+            "request_url": "https://fixtures.invalid/C"
+          },
+          "recorded_at": "2026-09-13T12:00:05+00:00"
+        }
+      ],
+      "run_id": "order14-failed",
+      "source_id": "C",
+      "strategy_family": "api",
+      "strategy_variant": "page_number_api",
+      "updated_at": "2026-09-13T12:00:05+00:00"
+    },
+    "data/metadata/C/lineage/order14-failed.json": {
+      "artifacts": [],
+      "checkpoint_strategy": "none",
+      "config_version": "fac82b47d9d56670943cef0055fa358681e2c7e770c27599cbef0d7874fefea3",
+      "configured_outputs": [
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/raw/C",
+          "zone": "raw"
+        },
+        {
+          "format": "iceberg",
+          "path": "<PROJECT>/data/bronze/C",
+          "zone": "bronze"
+        },
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/metadata/C",
+          "zone": "metadata"
+        }
+      ],
+      "emitted_at": "2026-09-13T12:00:05+00:00",
+      "environment": "local",
+      "error_type": "RuntimeError",
+      "extraction_metadata": {},
+      "extraction_mode": "full_refresh",
+      "failure_reason": "scripted extraction failure",
+      "materialized_outputs": [],
+      "metadata": {},
+      "plan_notes": [
+        "strategy_family:api",
+        "strategy_variant:page_number_api",
+        "dispatch:api.page_number_api"
+      ],
+      "run_attributes": {
+        "source_id": "C",
+        "source_type": "api",
+        "strategy": "api",
+        "strategy_variant": "page_number_api",
+        "trigger": "baseline"
+      },
+      "run_id": "order14-failed",
+      "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+      "source_id": "C",
+      "source_name": "Synthetic C",
+      "status": "failed",
+      "strategy_family": "api",
+      "strategy_variant": "page_number_api"
+    },
+    "data/metadata/C/runs/order14-failed.json": {
+      "checkpoint_strategy": "none",
+      "configured_outputs": [
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/raw/C",
+          "zone": "raw"
+        },
+        {
+          "format": "iceberg",
+          "path": "<PROJECT>/data/bronze/C",
+          "zone": "bronze"
+        },
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/metadata/C",
+          "zone": "metadata"
+        }
+      ],
+      "duration_seconds": 5.0,
+      "ended_at": "2026-09-13T12:00:05+00:00",
+      "environment": "local",
+      "error_type": "RuntimeError",
+      "extraction_mode": "full_refresh",
+      "failure_reason": "scripted extraction failure",
+      "materialized_outputs": [],
+      "metadata": {},
+      "plan_notes": [
+        "strategy_family:api",
+        "strategy_variant:page_number_api",
+        "dispatch:api.page_number_api"
+      ],
+      "run_attributes": {
+        "source_id": "C",
+        "source_type": "api",
+        "strategy": "api",
+        "strategy_variant": "page_number_api",
+        "trigger": "baseline"
+      },
+      "run_id": "order14-failed",
+      "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+      "source_id": "C",
+      "source_name": "Synthetic C",
+      "started_at": "2026-09-13T12:00:00+00:00",
+      "status": "failed",
+      "strategy_family": "api",
+      "strategy_variant": "page_number_api"
+    }
+  },
+  "requests": [
+    "https://fixtures.invalid/C?page=1&size=10"
+  ],
+  "summary": {
+    "executed_run": {
+      "error_type": "RuntimeError",
+      "failure_reason": "scripted extraction failure",
+      "materialized_outputs": [],
+      "metadata_outputs": {
+        "checkpoint_history_path": null,
+        "checkpoint_state_path": null,
+        "lineage_path": "<PROJECT>/data/metadata/C/lineage/order14-failed.json",
+        "run_metadata_path": "<PROJECT>/data/metadata/C/runs/order14-failed.json",
+        "validation_report_path": null
+      },
+      "status": "failed",
+      "strategy_metadata": {}
+    },
+    "planned_run": {
+      "execution": {
+        "checkpoint_field": null,
+        "checkpoint_strategy": "none",
+        "mode": "full_refresh"
+      },
+      "outputs": {
+        "bronze": {
+          "format": "iceberg",
+          "path": "data/bronze/C"
+        },
+        "metadata": {
+          "format": "json",
+          "path": "data/metadata/C"
+        },
+        "raw": {
+          "format": "json",
+          "path": "data/raw/C"
+        }
+      },
+      "plan_notes": [
+        "strategy_family:api",
+        "strategy_variant:page_number_api",
+        "dispatch:api.page_number_api"
+      ],
+      "pre_run_metadata": {
+        "bronze_output_path": "data/bronze/C",
+        "checkpoint_strategy": "none",
+        "dispatch_path": "api.page_number_api",
+        "environment": "local",
+        "extraction_mode": "full_refresh",
+        "metadata_output_path": "data/metadata/C",
+        "project_root": "<PROJECT>",
+        "raw_output_path": "data/raw/C",
+        "run_id": "order14-failed",
+        "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+        "source_id": "C",
+        "source_name": "Synthetic C",
+        "started_at": "2026-09-13T12:00:00+00:00",
+        "strategy_family": "api",
+        "strategy_variant": "page_number_api"
+      },
+      "run": {
+        "attributes": {
+          "source_id": "C",
+          "source_type": "api",
+          "strategy": "api",
+          "strategy_variant": "page_number_api",
+          "trigger": "baseline"
+        },
+        "environment": "local",
+        "run_id": "order14-failed",
+        "started_at": "2026-09-13T12:00:00+00:00"
+      },
+      "source": {
+        "config_path": "<PROJECT>/conf/sources/sources.yaml",
+        "hook_id": null,
+        "name": "Synthetic C",
+        "source_id": "C",
+        "tags": [
+          "reference"
+        ]
+      },
+      "strategy": {
+        "dispatch_path": "api.page_number_api",
+        "family": "api",
+        "hook_implementation": null,
+        "implementation": "ApiStrategy",
+        "variant": "page_number_api"
+      }
+    }
+  }
+}
