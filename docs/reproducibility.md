@@ -219,6 +219,47 @@ For reproducible cluster work:
 - keep storage roots stable across reruns;
 - do not move cluster-specific secrets or absolute paths into checked-in source configs.
 
+## Choosing the catalog: JDBC or REST
+
+Both profiles configure an **atomic** Iceberg catalog — that is the point of the storage layer,
+and it is not the thing you choose between. What you choose is who opens the connection to the
+metadata store.
+
+| | `cluster` (default) | `cluster-rest` |
+|---|---|---|
+| `catalog_type` | `jdbc` | `rest` |
+| Who talks to the metadata store | JANUS, over JDBC | a catalog service, over HTTP |
+| Services the stack runs | MinIO + Postgres | MinIO + Postgres + Nessie |
+| Client classpath | Iceberg runtime + Postgres driver + AWS bundle | Iceberg runtime + AWS bundle |
+| `warehouse` means | the location `s3://janus-bronze/warehouse` | the identifier `janus`, resolved by the catalog |
+| Credentials | a database login (`spark.iceberg.credentials`) | the REST spec's `token` / `credential` / `oauth2_server_uri` / `scope`, from the environment |
+| Start it with | `make up-cluster` | `make up-cluster-rest` |
+| Run against it with | `make run-cluster` | `make run-cluster-rest` |
+| Re-run the catalog suites | `make test-cluster` | `make test-cluster-rest` |
+
+Both read the **same** `conf/environments/cluster.yaml`. There is no second profile: every key
+in that file is an environment expansion, and `conf/environments/cluster-rest.env.example`
+overrides four of them. Bronze identifiers, schema, partitioning and the S3FileIO write path
+are identical either way — the catalog coordinates commits, it does not decide what the data
+looks like.
+
+**Choose JDBC** — the default — when JANUS is the thing writing the tables. It needs no extra
+service, it is atomic on any SQL database, and both Spark and `pyiceberg` speak it natively.
+Locally the same code runs against a SQLite file, so a laptop exercises production commit
+semantics with nothing running.
+
+**Choose REST** when the catalog is somebody else's: a managed service (Glue, Snowflake Open
+Catalog, R2), or a self-hosted one that several engines and teams already point at. The
+argument is not atomicity — JDBC is atomic too — it is that credentials, storage layout and
+access control stop being every client's business. Pointing JANUS at a managed catalog is then
+`JANUS_ICEBERG_CATALOG_TYPE`, `JANUS_ICEBERG_CATALOG_URI`, and whichever of the auth variables
+that service wants, all exported rather than written into a tracked file.
+
+The self-hosted REST service in the compose stack is Nessie, chosen because it reaches a
+working Iceberg REST catalog from a pinned image and environment variables alone, and stores
+its state in the Postgres the `cluster` stack already runs. It runs unauthenticated: it is a
+proof that the protocol swap is configuration, not a deployment blueprint.
+
 ## What the current CLI does and does not do
 
 Be explicit about the current project state.

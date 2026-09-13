@@ -17,6 +17,7 @@ from janus.utils.environment import (
     JDBC_CATALOG_TYPE,
     OBJECT_STORE_KEY,
     OBJECT_STORE_PACKAGE_KEY,
+    REST_CATALOG_TYPE,
     RuntimeLocation,
     build_spark_options,
     load_environment_config,
@@ -34,6 +35,12 @@ JANUS_ENV_PREFIX = "JANUS_"
 
 CLUSTER_PROFILE_NAME = "cluster"
 CLUSTER_SUITE_ENV = "JANUS_CLUSTER_SUITE"
+CLUSTER_REST_SUITE_ENV = "JANUS_CLUSTER_REST_SUITE"
+
+CLUSTER_SUITE_TARGETS = {
+    CLUSTER_SUITE_ENV: "test-cluster",
+    CLUSTER_REST_SUITE_ENV: "test-cluster-rest",
+}
 
 #: The catalog name the profile ships. Suites that need a second catalog pass their own.
 DEFAULT_CATALOG_NAME = "janus"
@@ -167,22 +174,50 @@ def sqlite_catalog_target(root: Path) -> CatalogTarget:
 
 
 def cluster_catalog_target(root: Path) -> CatalogTarget:
-    """The `cluster` profile's own catalog: Postgres, with the warehouse on object storage."""
+    """The `cluster` profile as `make up-cluster` configures it: a Postgres JDBC catalog."""
 
-    if not os.getenv(CLUSTER_SUITE_ENV):
+    return _cluster_catalog_target(
+        root, suite_env=CLUSTER_SUITE_ENV, expected_catalog_type=JDBC_CATALOG_TYPE
+    )
+
+
+def cluster_rest_catalog_target(root: Path) -> CatalogTarget:
+    """The same profile as `make up-cluster-rest` configures it: an Iceberg REST catalog."""
+
+    return _cluster_catalog_target(
+        root, suite_env=CLUSTER_REST_SUITE_ENV, expected_catalog_type=REST_CATALOG_TYPE
+    )
+
+
+def _cluster_catalog_target(
+    root: Path, *, suite_env: str, expected_catalog_type: str
+) -> CatalogTarget:
+    """One of the cluster stacks, read out of the profile its container's environment shapes."""
+
+    target = CLUSTER_SUITE_TARGETS[suite_env]
+    if not os.getenv(suite_env):
         pytest.skip(
-            f"the {CLUSTER_PROFILE_NAME} stack is not running: start it with "
-            f"`make up-cluster` and run the suite with `make test-cluster`, which exports "
-            f"{CLUSTER_SUITE_ENV}"
+            f"the {expected_catalog_type} cluster stack is not running: start it with "
+            f"`make up-{target.removeprefix('test-')}` and run the suite with "
+            f"`make {target}`, which exports {suite_env}"
         )
 
     config = load_environment_config(CLUSTER_PROFILE_NAME, PROJECT_ROOT)
     iceberg = dict(config["spark"]["iceberg"])
+
+    declared = resolve_catalog_type(iceberg)
+    if declared != expected_catalog_type:
+        pytest.skip(
+            f"{suite_env} is set, but the environment configures a {declared!r} catalog "
+            f"rather than the {expected_catalog_type!r} one this target stands for — "
+            f"`make {target}` starts the matching stack and exports the overlay it needs"
+        )
+
     for jar in pinned_jars(iceberg):
         if not jar.exists():
             pytest.skip(
-                f"{jar.name} is not available in the local Ivy cache; `make up-cluster` "
-                "seeds every jar the cluster profile pins"
+                f"{jar.name} is not available in the local Ivy cache; "
+                f"`make up-{target.removeprefix('test-')}` seeds every jar the profile pins"
             )
 
     resolved_paths = materialize_runtime_paths(config, PROJECT_ROOT)
@@ -190,17 +225,22 @@ def cluster_catalog_target(root: Path) -> CatalogTarget:
     # leaves nothing behind in the repository.
     resolved_paths["warehouse_dir"] = root / "spark-warehouse"
     return CatalogTarget(
-        id=CLUSTER_PROFILE_NAME, iceberg=iceberg, resolved_paths=resolved_paths
+        id=f"{CLUSTER_PROFILE_NAME}-{expected_catalog_type}",
+        iceberg=iceberg,
+        resolved_paths=resolved_paths,
     )
 
 
 CATALOG_TARGET_FACTORIES: tuple[Callable[[Path], CatalogTarget], ...] = (
     sqlite_catalog_target,
     cluster_catalog_target,
+    cluster_rest_catalog_target,
 )
 
 
-CLUSTER_TARGET_FACTORIES = frozenset({cluster_catalog_target})
+CLUSTER_TARGET_FACTORIES = frozenset(
+    {cluster_catalog_target, cluster_rest_catalog_target}
+)
 
 
 def catalog_target_id(factory: Callable[[Path], CatalogTarget]) -> str:
@@ -223,9 +263,9 @@ def catalog_target_params() -> list[Any]:
 
 
 def cluster_suite_requested() -> bool:
-    """Whether this run was asked to reach the cluster stack at all."""
+    """Whether this run was asked to reach either cluster stack at all."""
 
-    return bool(os.getenv(CLUSTER_SUITE_ENV))
+    return any(os.getenv(suite_env) for suite_env in CLUSTER_SUITE_TARGETS)
 
 
 def _file_backed_target(

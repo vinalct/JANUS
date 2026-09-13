@@ -130,7 +130,9 @@ Notes:
 
 - Token-backed sources need their env vars available at runtime.
 - `--include-disabled` is required for the checked-in live sources because they are disabled by default for safer development.
-- The `local` and `cluster` profiles live in `conf/environments/`.
+- The `local` and `cluster` profiles live in `conf/environments/`; `cluster` serves both
+  the JDBC and the REST catalog variants, selected by an env overlay
+  ([choosing a catalog](docs/reproducibility.md#choosing-the-catalog-jdbc-or-rest)).
 - Host-local execution is also possible if you match the pinned toolchain; see [reproducibility](docs/reproducibility.md).
 
 ## Documentation Map

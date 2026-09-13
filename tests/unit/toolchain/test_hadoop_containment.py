@@ -25,11 +25,17 @@ IGNORED_DIRECTORY_NAMES = frozenset({"__pycache__"})
 #: The sites allowed to name the token, each with the reason it is allowed to.
 #: Paths are relative to the project root.
 ALLOWED_SITES: dict[str, str] = {
-    "src/janus/utils/environment.py": (
+    "src/janus/utils/catalog_options.py": (
         "The seam's own vocabulary: HADOOP_CATALOG_TYPE and its place in "
-        "SUPPORTED_CATALOG_TYPES. The profile layer must still be able to name the type it "
+        "SUPPORTED_CATALOG_TYPES. The catalog layer must still be able to name the type it "
         "emits options for, because local-hadoop.yaml and the AC-4 differential both select "
         "it. This is the one definition; every other site below reads it from here."
+    ),
+    "src/janus/utils/environment.py": (
+        "Re-exports the name above so `from janus.utils.environment import "
+        "HADOOP_CATALOG_TYPE` keeps working across the catalog_options split. A re-export "
+        "list, not a second definition — the profile layer neither declares the type nor "
+        "branches on it."
     ),
     "src/janus/utils/catalog_properties.py": (
         "HadoopCatalogUnrepresentableError and the message it raises. pyiceberg implements "
@@ -87,6 +93,7 @@ SESSION_BUILDER_MARKER = "SparkSession.builder"
 #: Sites that are readable wherever the suite runs, container included. The sweep asserts it
 #: found each of them, so a wrong root or a broken walk cannot pass by matching nothing.
 ALWAYS_VISIBLE_SITES = (
+    "src/janus/utils/catalog_options.py",
     "src/janus/utils/environment.py",
     "conf/environments/local-hadoop.yaml",
     "tests/unit/toolchain/test_hadoop_containment.py",

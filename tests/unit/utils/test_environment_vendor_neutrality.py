@@ -11,7 +11,7 @@ import janus.utils as utils_package
 
 # Every module the rule binds, and the ones the coverage check insists on finding.
 SWEPT_PACKAGE = "janus/utils"
-REQUIRED_MODULES = ("environment.py", "catalog_properties.py")
+REQUIRED_MODULES = ("catalog_options.py", "environment.py", "catalog_properties.py")
 
 # Names that would betray a provider-specific branch in a swept module.
 VENDOR_TOKENS = (

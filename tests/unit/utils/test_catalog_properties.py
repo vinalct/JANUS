@@ -35,6 +35,8 @@ CATALOG_PREFIX = "spark.sql.catalog.janus"
 SQLITE_DATABASE = "data/metadata/janus_catalog.db"
 POSTGRES_JDBC_URI = "jdbc:postgresql://catalog-db:5432/janus"
 REST_URI = "http://catalog:8181"
+
+REST_WAREHOUSE = "janus"
 SECRET_USER = "janus catalog user"
 SECRET_PASSWORD = "p@ss:w/rd?"
 
@@ -47,7 +49,11 @@ CATALOG_PROFILES: dict[str, dict[str, Any]] = {
         "uri": POSTGRES_JDBC_URI,
         "credentials": {"user": SECRET_USER, "password": SECRET_PASSWORD},
     },
-    "rest": {"catalog_type": "rest", "uri": REST_URI},
+    "rest": {
+        "catalog_type": "rest",
+        "uri": REST_URI,
+        "warehouse_dir": REST_WAREHOUSE,
+    },
 }
 
 
@@ -231,14 +237,19 @@ def test_credentials_on_a_file_backed_catalog_fail_closed(tmp_path):
 
 
 def test_a_rest_profile_passes_its_uri_through(tmp_path):
-    """Near-identical dialects: only the warehouse needs a scheme."""
+    """Identical dialects: nothing here is translated, not even the warehouse.
+
+    A location would have to gain a `file://` scheme for `pyiceberg` to pick a FileIO from
+    it. A REST warehouse is not a location — it is the identifier the catalog resolves — so
+    rewriting it would point the second engine at a warehouse the server has never heard of.
+    """
 
     properties = _derive(tmp_path, **CATALOG_PROFILES["rest"])
 
     assert properties == {
         "type": PYICEBERG_REST_CATALOG_TYPE,
         "uri": REST_URI,
-        "warehouse": (tmp_path / "data/bronze/iceberg").as_uri(),
+        "warehouse": REST_WAREHOUSE,
     }
 
 
@@ -247,8 +258,7 @@ def test_a_rest_profile_emits_no_credentials(tmp_path):
 
     properties = _derive(
         tmp_path,
-        catalog_type="rest",
-        uri=REST_URI,
+        **CATALOG_PROFILES["rest"],
         credentials={"user": SECRET_USER, "password": SECRET_PASSWORD},
     )
 

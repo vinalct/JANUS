@@ -8,6 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from janus.utils.environment import REST_CATALOG_TYPE, resolve_catalog_type
+from tests.support.spark_sessions import CatalogTarget
+
 NAMESPACE = "bronze_catalog_commits"
 SCHEMA = "id BIGINT, writer STRING"
 
@@ -44,7 +47,7 @@ def seeded_table(shared_catalog_session, request):
     session.sql(f"DROP TABLE IF EXISTS {table}")
 
 
-def test_two_racing_appends_both_land(shared_catalog_session, seeded_table):
+def test_two_racing_appends_both_land(shared_catalog_session, seeded_table, catalog_target):
     """The AC-5 claim itself: row count is the sum, and no row went missing."""
 
     session, table = shared_catalog_session, seeded_table
@@ -54,7 +57,7 @@ def test_two_racing_appends_both_land(shared_catalog_session, seeded_table):
 
     assert _ids(session, table) == _expected_ids()
     assert session.table(table).count() == len(_expected_ids())
-    assert len(_snapshots(session, table)) == len(before) + 2
+    _assert_race_is_visible_in_history(catalog_target, session, table, before)
 
 
 def test_neither_racing_commit_raised(shared_catalog_session, seeded_table):
@@ -64,13 +67,17 @@ def test_neither_racing_commit_raised(shared_catalog_session, seeded_table):
 
 
 def test_the_losing_commit_is_rebased_onto_the_winner_never_over_it(
-    shared_catalog_session, seeded_table
+    shared_catalog_session, seeded_table, catalog_target
 ):
-    """The snapshot log must stay a single chain."""
+    """The snapshot log must stay a single chain — where that log is observable at all."""
 
     session, table = shared_catalog_session, seeded_table
 
     race_appends(session, table)
+
+    if not _preserves_snapshot_history(catalog_target):
+        assert _ids(session, table) == _expected_ids()
+        return
 
     snapshots = _snapshots(session, table)
     assert _chain_length(snapshots) == len(snapshots), (
@@ -80,7 +87,7 @@ def test_the_losing_commit_is_rebased_onto_the_winner_never_over_it(
 
 
 def test_a_stale_read_cannot_silently_overwrite_the_commit_that_beat_it(
-    shared_catalog_session, seeded_table
+    shared_catalog_session, seeded_table, catalog_target
 ):
     """The lost-update variant: both writers read the table *first*, then both commit."""
 
@@ -93,7 +100,8 @@ def test_a_stale_read_cannot_silently_overwrite_the_commit_that_beat_it(
         f"{observed} — the barrier is not between the read and the commit"
     )
     assert _ids(session, table) == _expected_ids()
-    assert _chain_length(_snapshots(session, table)) == len(_snapshots(session, table))
+    if _preserves_snapshot_history(catalog_target):
+        assert _chain_length(_snapshots(session, table)) == len(_snapshots(session, table))
 
 
 def race_appends(session, table: str, *, read_before_commit: bool = False) -> list[int | None]:
@@ -112,6 +120,29 @@ def race_appends(session, table: str, *, read_before_commit: bool = False) -> li
     with ThreadPoolExecutor(max_workers=len(row_sets)) as pool:
         futures = [pool.submit(append, rows) for rows in row_sets]
         return [future.result(timeout=RESULT_TIMEOUT_SECONDS) for future in futures]
+
+
+def _preserves_snapshot_history(catalog_target: CatalogTarget) -> bool:
+    """Whether this catalog keeps Iceberg's native multi-snapshot chain across commits."""
+
+    return resolve_catalog_type(catalog_target.iceberg) != REST_CATALOG_TYPE
+
+
+def _assert_race_is_visible_in_history(
+    catalog_target: CatalogTarget,
+    session,
+    table: str,
+    before: list[tuple[int, int | None]],
+) -> None:
+    """AC-5's snapshot-lineage proof, in whatever form the catalog can actually expose."""
+
+    after = _snapshots(session, table)
+    if _preserves_snapshot_history(catalog_target):
+        assert len(after) == len(before) + 2
+    else:
+        assert after != before, (
+            "the ref never moved at all — neither racing commit reached the catalog"
+        )
 
 
 def _expected_ids() -> set[int]:

@@ -21,6 +21,8 @@ IVY_JAR_DEST_DIR := data/metadata/ivy/jars
 CLUSTER_PROFILE := cluster
 CLUSTER_ENV_FILE := conf/environments/cluster.env
 CLUSTER_SERVICE := janus-cluster
+CLUSTER_REST_PROFILE := cluster-rest
+CLUSTER_REST_SERVICE := janus-cluster-rest
 AWS_BUNDLE_VERSION := 1.10.1
 AWS_BUNDLE_JAR_NAME := org.apache.iceberg_iceberg-aws-bundle-$(AWS_BUNDLE_VERSION).jar
 AWS_BUNDLE_URL := https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/$(AWS_BUNDLE_VERSION)/iceberg-aws-bundle-$(AWS_BUNDLE_VERSION).jar
@@ -49,7 +51,7 @@ define RUN_COMPOSE
 	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test ci run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster shell-cluster run-cluster test-cluster
+.PHONY: bootstrap check-compose up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test ci run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
 
 seed-ivy:
 	@mkdir -p "$(IVY_JAR_DEST_DIR)" "$(ICEBERG_CATALOG_DIR)"; \
@@ -204,7 +206,8 @@ seed-cluster-jars:
 		echo "$(AWS_BUNDLE_JAR_NAME) failed verification; removing it." >&2; rm -f "$$jar"; exit 1; \
 	}
 
-up-cluster down-cluster status-cluster shell-cluster run-cluster test-cluster: \
+up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster \
+up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest: \
 	COMPOSE_PRELUDE = set -a; [ -f ./$(CLUSTER_ENV_FILE) ] && . ./$(CLUSTER_ENV_FILE); set +a
 
 up-cluster: check-compose seed-ivy seed-cluster-jars cluster-secrets
@@ -218,7 +221,10 @@ down-cluster: check-compose
 	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) down)
 
 status-cluster: check-compose
-	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) ps)
+	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) ps -a)
+
+logs-cluster: check-compose
+	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) logs --no-color postgres minio minio-init)
 
 shell-cluster: up-cluster
 	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) exec $(CLUSTER_SERVICE) sh)
@@ -233,6 +239,27 @@ run-cluster: up-cluster
 # would actually use).
 test-cluster: up-cluster
 	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) exec -T -e JANUS_CLUSTER_SUITE=1 $(CLUSTER_SERVICE) python -m pytest -ra tests/integration/catalog_commits)
+
+up-cluster-rest: check-compose seed-ivy seed-cluster-jars cluster-secrets
+	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) up -d || { printf '\n=== the stack did not come up; the catalog service log follows ===\n' >&2; $$compose_cmd $$compose_files --profile $(CLUSTER_REST_PROFILE) logs --no-color nessie >&2; $$compose_cmd $$compose_files --profile $(CLUSTER_REST_PROFILE) ps -a >&2; exit 1; })
+
+down-cluster-rest: check-compose
+	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) down)
+
+status-cluster-rest: check-compose
+	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) ps -a)
+
+logs-cluster-rest: check-compose
+	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) logs --no-color nessie postgres minio minio-init)
+
+shell-cluster-rest: up-cluster-rest
+	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) exec $(CLUSTER_REST_SERVICE) sh)
+
+run-cluster-rest: up-cluster-rest
+	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) exec -T $(CLUSTER_REST_SERVICE) python -m janus.main --environment $(CLUSTER_PROFILE) --with-spark $(RUN_ARGS))
+
+test-cluster-rest: up-cluster-rest
+	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) exec -T -e JANUS_CLUSTER_REST_SUITE=1 $(CLUSTER_REST_SERVICE) python -m pytest -ra tests/integration/catalog_commits)
 
 docker-build: bootstrap
 

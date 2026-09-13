@@ -20,7 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "mypy==2.2.0",
-  "pyiceberg[pyarrow,sql-postgres,sql-sqlite]==0.12.0",
+  "pyiceberg[pyarrow,sql-postgres,sql-sqlite,s3fs]==0.12.0",
   "pytest==9.0.2",
   "pytest-cov==7.0.0",
   "ruff==0.11.6",
@@ -63,6 +63,7 @@ max-args = 8
 
 [tool.ruff.lint.per-file-ignores]
 "src/janus/models/source_config.py" = ["F401"]
+"src/janus/utils/environment.py" = ["F401"]
 
 "src/janus/strategies/files/core.py" = ["E402"]
 

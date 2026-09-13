@@ -23,11 +23,14 @@ driver options     ``?journal_mode=…`` — PRAGMAs the       carried through; 
 Postgres URI       ``jdbc:postgresql://host/db``           ``postgresql+psycopg2://host/db``
 credentials        ``jdbc.user`` / ``jdbc.password``       userinfo inside the URI authority
 warehouse          local path or ``s3://…``                same location, local paths ``file://``
+                   (REST: an identifier, verbatim)         (REST: the same identifier)
 object-store IO    ``io-impl`` + ``s3.*`` catalog props    ``s3.endpoint`` / ``s3.region`` and
                                                            ``s3.force-virtual-addressing``, the
                                                            inverse of ``s3.path-style-access``
 default namespace  ``default-namespace`` conf              no property — identifiers qualify it
 REST               ``type = rest``, ``uri``                ``type = rest``, ``uri`` (the easy one)
+REST auth          ``token`` / ``credential`` /            the same four names — the spec's,
+                   ``oauth2-server-uri`` / ``scope``       not either client's
 Hadoop             ``type = hadoop``                       unrepresentable — raises
 =================  ======================================  =======================================
 
@@ -46,7 +49,9 @@ from typing import Any
 from urllib.parse import quote
 
 from janus.utils.environment import (
+    CATALOG_AUTH_OPTIONS,
     CATALOG_TYPE_KEY,
+    CATALOG_TYPES_WITH_CATALOG_MANAGED_WAREHOUSE,
     HADOOP_CATALOG_TYPE,
     ICEBERG_WAREHOUSE_PATH_KEY,
     JDBC_AUTHORITY_PREFIX,
@@ -57,6 +62,7 @@ from janus.utils.environment import (
     OBJECT_STORE_REGION_KEY,
     REST_CATALOG_TYPE,
     RuntimeLocation,
+    catalog_auth_block,
     is_location_uri,
     non_empty_text,
     object_store_block,
@@ -133,7 +139,7 @@ def derive_pyiceberg_catalog_properties(
         )
 
     properties = builder(iceberg, resolved_paths)
-    properties[PYICEBERG_WAREHOUSE_KEY] = _warehouse_location(resolved_paths)
+    properties[PYICEBERG_WAREHOUSE_KEY] = _warehouse_property(catalog_type, resolved_paths)
     properties.update(_object_store_properties(iceberg))
     return properties
 
@@ -183,11 +189,33 @@ def _jdbc_properties(
 def _rest_properties(
     iceberg: dict[str, Any], resolved_paths: Mapping[str, RuntimeLocation]
 ) -> dict[str, str]:
-    """The easy case: both engines take `type` and `uri` verbatim."""
+    """The easy case: both engines take `type`, `uri` and the auth block verbatim."""
 
     return {
         PYICEBERG_TYPE_KEY: PYICEBERG_REST_CATALOG_TYPE,
         PYICEBERG_URI_KEY: resolve_catalog_uri(iceberg, resolved_paths),
+        **_rest_auth_properties(iceberg),
+    }
+
+
+def _rest_auth_properties(iceberg: dict[str, Any]) -> dict[str, str]:
+    """The row of the table where nothing has to be translated.
+
+    Authentication is part of the REST spec rather than of either client, so Spark's
+    `RESTCatalog` and `pyiceberg`'s `RestCatalog` read the same property names — which is
+    why both emitters walk the same `CATALOG_AUTH_OPTIONS` mapping. A value only reaches
+    either of them when the profile's expansion produced one; an unset variable is not a
+    blank token.
+    """
+
+    auth = catalog_auth_block(iceberg)
+    if auth is None:
+        return {}
+
+    return {
+        property_name: value
+        for key, property_name in CATALOG_AUTH_OPTIONS
+        if (value := non_empty_text(auth.get(key))) is not None
     }
 
 
@@ -306,7 +334,21 @@ def _userinfo(user: str | None, password: str | None) -> str:
     return f"{encoded}@"
 
 
-def _warehouse_location(resolved_paths: Mapping[str, RuntimeLocation]) -> str:
+def _warehouse_property(
+    catalog_type: str, resolved_paths: Mapping[str, RuntimeLocation]
+) -> str:
+    """What `warehouse` means to the catalog this profile declares."""
+
+    warehouse = resolved_paths.get(ICEBERG_WAREHOUSE_PATH_KEY)
+    if warehouse is None:
+        raise CatalogPropertyError("Resolved Iceberg warehouse path is missing")
+
+    if catalog_type in CATALOG_TYPES_WITH_CATALOG_MANAGED_WAREHOUSE:
+        return str(warehouse)
+    return _warehouse_location(warehouse)
+
+
+def _warehouse_location(warehouse: RuntimeLocation) -> str:
     """The warehouse as a location URI.
 
     `pyiceberg` picks its FileIO from the location's scheme, so a bare local path — which is what
@@ -314,10 +356,6 @@ def _warehouse_location(resolved_paths: Mapping[str, RuntimeLocation]) -> str:
     scheme is a location in its own right and passes through untouched, which is how an
     object-store warehouse stays a config-only change.
     """
-
-    warehouse = resolved_paths.get(ICEBERG_WAREHOUSE_PATH_KEY)
-    if warehouse is None:
-        raise CatalogPropertyError("Resolved Iceberg warehouse path is missing")
 
     location = str(warehouse)
     if is_location_uri(location):

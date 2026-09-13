@@ -24,6 +24,11 @@ spark:
     credentials:
       user: ${JANUS_ICEBERG_CATALOG_USER:-}
       password: ${JANUS_ICEBERG_CATALOG_PASSWORD:-}
+    auth:
+      token: ${JANUS_ICEBERG_CATALOG_TOKEN:-}
+      credential: ${JANUS_ICEBERG_CATALOG_CREDENTIAL:-}
+      oauth2_server_uri: ${JANUS_ICEBERG_CATALOG_OAUTH2_SERVER_URI:-}
+      scope: ${JANUS_ICEBERG_CATALOG_SCOPE:-}
     object_store:
       io_impl: S3FileIO
       io_package: ${JANUS_ICEBERG_OBJECT_STORE_PACKAGE:-org.apache.iceberg:iceberg-aws-bundle:1.10.1}
