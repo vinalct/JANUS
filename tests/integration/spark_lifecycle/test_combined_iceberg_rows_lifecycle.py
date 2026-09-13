@@ -30,21 +30,12 @@ from janus.models import RunContext, SourceConfig
 from janus.planner import PlannedRun
 from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.strategies.api import ApiResponse, ApiStrategy
-from janus.utils.environment import ICEBERG_CATALOG_IMPL, ICEBERG_SESSION_EXTENSIONS
 from janus.utils.storage import StorageLayout
+from tests.support.spark_sessions import build_iceberg_session, require_iceberg_runtime
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_ID = "lazy_spark_combined_source"
 UPSTREAM_NAMESPACE = "bronze_test"
 UPSTREAM_TABLE = "upstream_ids"
-ICEBERG_RUNTIME_JAR = (
-    PROJECT_ROOT
-    / "data"
-    / "metadata"
-    / "ivy"
-    / "jars"
-    / "org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
-)
 ENVIRONMENT_CONFIG = {
     "storage": {
         "root_dir": "data",
@@ -125,29 +116,11 @@ class LifecycleRecordingProvider(SparkSessionProvider):
 def session_factory(tmp_path):
     """Build a fresh Iceberg-enabled local session per call, over one warehouse."""
 
-    pyspark_sql = pytest.importorskip("pyspark.sql")
-    if not ICEBERG_RUNTIME_JAR.exists():
-        pytest.skip("Iceberg runtime jar is not available in the local Ivy cache")
+    require_iceberg_runtime()
     warehouse_root = tmp_path / "warehouse"
 
     def build():
-        session = (
-            pyspark_sql.SparkSession.builder.appName("janus-combined-lifecycle-integration")
-            .master("local[1]")
-            .config("spark.jars", str(ICEBERG_RUNTIME_JAR))
-            .config("spark.sql.extensions", ICEBERG_SESSION_EXTENSIONS)
-            .config("spark.sql.defaultCatalog", "janus")
-            .config("spark.sql.catalog.janus", ICEBERG_CATALOG_IMPL)
-            .config("spark.sql.catalog.janus.type", "hadoop")
-            .config("spark.sql.catalog.janus.warehouse", str(warehouse_root / "iceberg"))
-            .config("spark.sql.catalog.janus.default-namespace", "bronze")
-            .config("spark.sql.warehouse.dir", str(warehouse_root / "spark-warehouse"))
-            .config("spark.sql.session.timeZone", "UTC")
-            .config("spark.ui.enabled", "false")
-            .getOrCreate()
-        )
-        session.sparkContext.setLogLevel("WARN")
-        return session
+        return build_iceberg_session("janus-combined-lifecycle-integration", warehouse_root)
 
     return build
 

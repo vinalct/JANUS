@@ -1,0 +1,3 @@
+registry:
+  sources_dir: conf/sources
+  file_pattern: "*.yaml"

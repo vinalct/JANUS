@@ -27,10 +27,9 @@ from janus.planner import PlannedRun
 from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.scripts import ingest_raw_to_bronze
 from janus.strategies.api import ApiResponse, ApiStrategy
-from janus.utils.environment import ICEBERG_CATALOG_IMPL, ICEBERG_SESSION_EXTENSIONS
 from janus.utils.storage import StorageLayout, bronze_table_identifier
+from tests.support.spark_sessions import build_iceberg_session, require_iceberg_runtime
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_ID = "incremental_upsert_fixture"
 BRONZE_NAMESPACE = "bronze_test"
 BRONZE_TABLE_NAME = "incremental_upsert_fixture"
@@ -40,14 +39,6 @@ BRONZE_TABLE = bronze_table_identifier(
     fallback_name=SOURCE_ID,
     namespace=BRONZE_NAMESPACE,
     table_name=BRONZE_TABLE_NAME,
-)
-ICEBERG_RUNTIME_JAR = (
-    PROJECT_ROOT
-    / "data"
-    / "metadata"
-    / "ivy"
-    / "jars"
-    / "org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
 )
 ENVIRONMENT_CONFIG = {
     "storage": {
@@ -111,29 +102,11 @@ class FixtureTransport:
 def session_factory(tmp_path):
     """Build a fresh Iceberg-enabled local session per call, over one warehouse."""
 
-    pyspark_sql = pytest.importorskip("pyspark.sql")
-    if not ICEBERG_RUNTIME_JAR.exists():
-        pytest.skip("Iceberg runtime jar is not available in the local Ivy cache")
+    require_iceberg_runtime()
     warehouse_root = tmp_path / "warehouse"
 
     def build():
-        session = (
-            pyspark_sql.SparkSession.builder.appName("janus-incremental-upsert-integration")
-            .master("local[1]")
-            .config("spark.jars", str(ICEBERG_RUNTIME_JAR))
-            .config("spark.sql.extensions", ICEBERG_SESSION_EXTENSIONS)
-            .config("spark.sql.defaultCatalog", "janus")
-            .config("spark.sql.catalog.janus", ICEBERG_CATALOG_IMPL)
-            .config("spark.sql.catalog.janus.type", "hadoop")
-            .config("spark.sql.catalog.janus.warehouse", str(warehouse_root / "iceberg"))
-            .config("spark.sql.catalog.janus.default-namespace", "bronze")
-            .config("spark.sql.warehouse.dir", str(warehouse_root / "spark-warehouse"))
-            .config("spark.sql.session.timeZone", "UTC")
-            .config("spark.ui.enabled", "false")
-            .getOrCreate()
-        )
-        session.sparkContext.setLogLevel("WARN")
-        return session
+        return build_iceberg_session("janus-incremental-upsert-integration", warehouse_root)
 
     return build
 

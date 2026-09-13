@@ -1,23 +1,76 @@
+"""Environment profiles: loading them, materializing their paths, building a Spark session."""
+
 from __future__ import annotations
 
 import os
 import re
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-ENV_PATTERN = re.compile(r"\$\{(?P<name>[A-Z0-9_]+)(?::-(?P<default>[^}]*))?\}")
-ICEBERG_SESSION_EXTENSIONS = (
-    "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+from janus.utils.catalog_options import (
+    CATALOG_AUTH_KEY,
+    CATALOG_AUTH_OPTIONS,
+    CATALOG_TYPE_KEY,
+    CATALOG_TYPES_REQUIRING_URI,
+    CATALOG_TYPES_WITH_AUTH,
+    CATALOG_TYPES_WITH_CATALOG_MANAGED_WAREHOUSE,
+    FILE_IO_IMPL_KEY,
+    FILE_IO_IMPL_OPTION,
+    HADOOP_CATALOG_TYPE,
+    ICEBERG_CATALOG_DB_PATH_KEY,
+    ICEBERG_CATALOG_IMPL,
+    ICEBERG_SESSION_EXTENSIONS,
+    ICEBERG_WAREHOUSE_PATH_KEY,
+    JDBC_AUTHORITY_PREFIX,
+    JDBC_CATALOG_TYPE,
+    JDBC_CREDENTIAL_OPTIONS,
+    JDBC_SCHEMA_VERSION_OPTION,
+    JDBC_URI_PREFIX,
+    LOCATION_URI_PATTERN,
+    OBJECT_STORE_ENDPOINT_KEY,
+    OBJECT_STORE_FLAG_KEYS,
+    OBJECT_STORE_KEY,
+    OBJECT_STORE_OPTIONS,
+    OBJECT_STORE_PACKAGE_KEY,
+    OBJECT_STORE_PATH_STYLE_KEY,
+    OBJECT_STORE_REGION_KEY,
+    REST_CATALOG_TYPE,
+    S3_FILE_IO_IMPL,
+    SUPPORTED_CATALOG_AUTH_KEYS,
+    SUPPORTED_CATALOG_TYPES,
+    SUPPORTED_FILE_IO_IMPLS,
+    SUPPORTED_OBJECT_STORE_KEYS,
+    WAREHOUSE_DIR_KEY,
+    RuntimeLocation,
+    apply_iceberg_catalog_options,
+    catalog_auth_block,
+    catalog_database_path,
+    catalog_managed_warehouse,
+    declared_catalog_type,
+    is_location_uri,
+    merge_csv_values,
+    non_empty_text,
+    object_store_block,
+    object_store_flag,
+    object_store_value,
+    required_catalog_value,
+    resolve_catalog_type,
+    resolve_catalog_uri,
+    resolve_file_io_impl,
+    warehouse_is_catalog_managed,
 )
-ICEBERG_CATALOG_IMPL = "org.apache.iceberg.spark.SparkCatalog"
+
+ENV_PATTERN = re.compile(r"\$\{(?P<name>[A-Z0-9_]+)(?::-(?P<default>[^}]*))?\}")
 RUNTIME_SCRATCH_DIR_ENV = "JANUS_RUNTIME_SCRATCH_DIR"
 DEFAULT_RUNTIME_SCRATCH_DIR = "/tmp/janus/runtime"
 FALLBACK_RUNTIME_PATH_KEYS = frozenset(
-    {"warehouse_dir", "ivy_dir", "iceberg_warehouse_dir"}
+    {"warehouse_dir", "ivy_dir", ICEBERG_WAREHOUSE_PATH_KEY}
 )
+RUNTIME_FILE_PATH_KEYS = frozenset({ICEBERG_CATALOG_DB_PATH_KEY})
 _RUNTIME_PATH_CONFIG_LOCATIONS = {
     "root_dir": ("storage", "root_dir"),
     "raw_dir": ("storage", "raw_dir"),
@@ -25,7 +78,7 @@ _RUNTIME_PATH_CONFIG_LOCATIONS = {
     "metadata_dir": ("storage", "metadata_dir"),
     "warehouse_dir": ("spark", "warehouse_dir"),
     "ivy_dir": ("spark", "ivy_dir"),
-    "iceberg_warehouse_dir": ("spark", "iceberg", "warehouse_dir"),
+    ICEBERG_WAREHOUSE_PATH_KEY: ("spark", "iceberg", "warehouse_dir"),
 }
 
 
@@ -61,11 +114,30 @@ def resolve_project_path(project_root: Path, value: str) -> Path:
     return path if path.is_absolute() else project_root / path
 
 
-def materialize_runtime_paths(config: dict[str, Any], project_root: Path) -> dict[str, Path]:
+def resolve_runtime_location(project_root: Path, value: str) -> RuntimeLocation:
+    """A location URI verbatim; anything else resolved project-relative, exactly as before."""
+
+    return value if is_location_uri(value) else resolve_project_path(project_root, value)
+
+
+def materialize_runtime_paths(
+    config: dict[str, Any], project_root: Path
+) -> dict[str, RuntimeLocation]:
+    """Every runtime location the profile declares, resolved once.
+
+    Only the Iceberg warehouse may be something other than a directory: it is the one
+    location an engine reaches through its own storage layer, and — under a catalog that
+    manages its own storage — the one the *catalog server* resolves rather than this
+    process. The raw, bronze and metadata zones, the Spark warehouse and the Ivy cache are
+    directories this process writes to directly, so they keep their existing
+    project-relative semantics — putting those on object storage is a different change
+    (it touches raw artifact writing, sidecars and resume-state rediscovery).
+    """
+
     storage = config.get("storage", {})
     spark = config.get("spark", {})
 
-    paths = {
+    paths: dict[str, RuntimeLocation] = {
         "root_dir": resolve_project_path(project_root, storage["root_dir"]),
         "raw_dir": resolve_project_path(project_root, storage["raw_dir"]),
         "bronze_dir": resolve_project_path(project_root, storage["bronze_dir"]),
@@ -77,19 +149,31 @@ def materialize_runtime_paths(config: dict[str, Any], project_root: Path) -> dic
         paths["ivy_dir"] = resolve_project_path(project_root, spark["ivy_dir"])
 
     iceberg = spark.get("iceberg", {})
-    if isinstance(iceberg, dict) and "warehouse_dir" in iceberg:
-        paths["iceberg_warehouse_dir"] = resolve_project_path(
-            project_root, iceberg["warehouse_dir"]
+    if isinstance(iceberg, dict) and WAREHOUSE_DIR_KEY in iceberg:
+        paths[ICEBERG_WAREHOUSE_PATH_KEY] = (
+            catalog_managed_warehouse(iceberg)
+            if warehouse_is_catalog_managed(iceberg)
+            else resolve_runtime_location(project_root, iceberg[WAREHOUSE_DIR_KEY])
+        )
+
+    database_path = catalog_database_path(iceberg) if isinstance(iceberg, dict) else None
+    if database_path is not None:
+        paths[ICEBERG_CATALOG_DB_PATH_KEY] = resolve_project_path(
+            project_root, database_path
         )
 
     return paths
 
 
-def prepare_runtime(config: dict[str, Any], project_root: Path) -> dict[str, Path]:
+def prepare_runtime(
+    config: dict[str, Any], project_root: Path
+) -> dict[str, RuntimeLocation]:
     paths = materialize_runtime_paths(config, project_root)
     for key, path in tuple(paths.items()):
+        if not isinstance(path, Path):
+            continue
         try:
-            _ensure_writable_directory(path)
+            _ensure_writable_directory(_directory_to_materialize(key, path))
         except PermissionError:
             if key not in FALLBACK_RUNTIME_PATH_KEYS:
                 raise
@@ -100,15 +184,8 @@ def prepare_runtime(config: dict[str, Any], project_root: Path) -> dict[str, Pat
     return paths
 
 
-def merge_csv_values(existing: str | None, value: str) -> str:
-    items = [item.strip() for item in (existing or "").split(",") if item.strip()]
-    if value not in items:
-        items.append(value)
-    return ",".join(items)
-
-
 def build_spark_options(
-    config: dict[str, Any], resolved_paths: dict[str, Path]
+    config: dict[str, Any], resolved_paths: Mapping[str, RuntimeLocation]
 ) -> dict[str, str]:
     spark_config = config.get("spark", {})
     options: dict[str, str] = {
@@ -122,39 +199,14 @@ def build_spark_options(
 
     iceberg = spark_config.get("iceberg")
     if isinstance(iceberg, dict) and iceberg:
-        catalog_name = iceberg["catalog_name"]
-        runtime_package = iceberg["runtime_package"]
-
-        options["spark.jars.packages"] = merge_csv_values(
-            options.get("spark.jars.packages"), runtime_package
-        )
-        options["spark.sql.extensions"] = merge_csv_values(
-            options.get("spark.sql.extensions"), ICEBERG_SESSION_EXTENSIONS
-        )
-        options.setdefault("spark.sql.defaultCatalog", catalog_name)
-        options.setdefault(f"spark.sql.catalog.{catalog_name}", ICEBERG_CATALOG_IMPL)
-        options.setdefault(f"spark.sql.catalog.{catalog_name}.type", "hadoop")
-
-        iceberg_warehouse_dir = resolved_paths.get("iceberg_warehouse_dir")
-        if iceberg_warehouse_dir is None:
-            raise KeyError("Resolved Iceberg warehouse path is missing")
-
-        options.setdefault(
-            f"spark.sql.catalog.{catalog_name}.warehouse",
-            str(iceberg_warehouse_dir),
-        )
-
-        default_namespace = iceberg.get("default_namespace")
-        if default_namespace:
-            options.setdefault(
-                f"spark.sql.catalog.{catalog_name}.default-namespace",
-                str(default_namespace),
-            )
+        apply_iceberg_catalog_options(options, iceberg, resolved_paths)
 
     return options
 
 
-def build_spark_session(config: dict[str, Any], resolved_paths: dict[str, Path]):
+def build_spark_session(
+    config: dict[str, Any], resolved_paths: Mapping[str, RuntimeLocation]
+):
     from pyspark.sql import SparkSession
 
     spark_config = config.get("spark", {})
@@ -168,6 +220,12 @@ def build_spark_session(config: dict[str, Any], resolved_paths: dict[str, Path])
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel(config.get("runtime", {}).get("log_level", "WARN"))
     return spark
+
+
+def _directory_to_materialize(key: str, path: Path) -> Path:
+    """The directory `prepare_runtime` must create for a resolved path."""
+
+    return path.parent if key in RUNTIME_FILE_PATH_KEYS else path
 
 
 def _ensure_writable_directory(path: Path) -> None:

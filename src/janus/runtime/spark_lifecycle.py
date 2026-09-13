@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from janus.models.source_config import RequestInputsConfig
-from janus.utils.environment import build_spark_session
+from janus.utils.environment import RuntimeLocation, build_spark_session
 from janus.utils.logging import StructuredLogger
 
 if TYPE_CHECKING:
@@ -24,7 +23,7 @@ class SparkSessionProvider:
     def __init__(
         self,
         config: Mapping[str, Any],
-        resolved_paths: Mapping[str, Path],
+        resolved_paths: Mapping[str, RuntimeLocation],
         logger: StructuredLogger | None = None,
         *,
         session_factory: Callable[[], SparkSession] | None = None,

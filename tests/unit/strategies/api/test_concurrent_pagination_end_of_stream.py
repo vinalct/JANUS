@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+
 from conftest import (
     PageScript,
     RecordingProgressStore,
@@ -18,7 +19,6 @@ from conftest import (
     build_concurrent_plan,
     build_concurrent_strategy,
 )
-
 from janus.strategies.api.core import (
     CONCURRENCY_ONLY_METADATA_KEYS,
     ApiHook,

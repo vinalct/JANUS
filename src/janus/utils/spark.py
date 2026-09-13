@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Self
 
 from janus.utils.environment import (
+    RuntimeLocation,
     build_spark_options,
     build_spark_session,
     load_environment_config,
@@ -20,7 +21,7 @@ class SparkRuntime:
     environment: str
     project_root: Path
     config: dict[str, Any]
-    resolved_paths: dict[str, Path]
+    resolved_paths: dict[str, RuntimeLocation]
     storage_layout: StorageLayout
 
     def __post_init__(self) -> None:

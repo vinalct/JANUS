@@ -13,6 +13,11 @@ from janus.utils.environment import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ICEBERG_RUNTIME_PACKAGE = "org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1"
+SQLITE_DRIVER_PACKAGE = "org.xerial:sqlite-jdbc:3.53.2.1"
+SQLITE_CATALOG_DATABASE = "data/metadata/iceberg-catalog/catalog.sqlite"
+
+SQLITE_DRIVER_OPTIONS = "journal_mode=WAL&busy_timeout=30000"
+LOCAL_CATALOG_URI = f"jdbc:sqlite:{SQLITE_CATALOG_DATABASE}?{SQLITE_DRIVER_OPTIONS}"
 
 
 def test_default_project_root_prefers_current_working_directory(monkeypatch, tmp_path):
@@ -34,6 +39,9 @@ def test_load_local_environment_uses_checked_in_defaults(monkeypatch):
     monkeypatch.delenv("JANUS_SPARK_DRIVER_HOST", raising=False)
     monkeypatch.delenv("JANUS_RAW_DIR", raising=False)
     monkeypatch.delenv("JANUS_ICEBERG_RUNTIME_PACKAGE", raising=False)
+    monkeypatch.delenv("JANUS_ICEBERG_CATALOG_TYPE", raising=False)
+    monkeypatch.delenv("JANUS_ICEBERG_CATALOG_URI", raising=False)
+    monkeypatch.delenv("JANUS_ICEBERG_JDBC_DRIVER_PACKAGE", raising=False)
 
     config = load_environment_config("local", PROJECT_ROOT)
     assert config["name"] == "local"
@@ -42,6 +50,9 @@ def test_load_local_environment_uses_checked_in_defaults(monkeypatch):
     assert config["spark"]["config"]["spark.driver.host"] == "127.0.0.1"
     assert config["spark"]["ivy_dir"] == "data/metadata/ivy"
     assert config["spark"]["iceberg"]["catalog_name"] == "janus"
+    assert config["spark"]["iceberg"]["catalog_type"] == "jdbc"
+    assert config["spark"]["iceberg"]["uri"] == LOCAL_CATALOG_URI
+    assert config["spark"]["iceberg"]["driver_package"] == SQLITE_DRIVER_PACKAGE
     assert config["spark"]["iceberg"]["runtime_package"] == ICEBERG_RUNTIME_PACKAGE
     assert config["storage"]["raw_dir"] == "data/raw"
 
@@ -99,9 +110,12 @@ def test_build_spark_options_merges_iceberg_runtime_settings(tmp_path):
             "ivy_dir": "data/metadata/ivy",
             "iceberg": {
                 "catalog_name": "janus",
+                "catalog_type": "jdbc",
                 "warehouse_dir": "data/bronze/iceberg",
                 "runtime_package": ICEBERG_RUNTIME_PACKAGE,
                 "default_namespace": "bronze",
+                "uri": LOCAL_CATALOG_URI,
+                "driver_package": SQLITE_DRIVER_PACKAGE,
             },
             "config": {
                 "spark.jars.packages": "com.example:demo:1.0.0",
@@ -125,14 +139,17 @@ def test_build_spark_options_merges_iceberg_runtime_settings(tmp_path):
     assert options["spark.jars.ivy"] == str(paths["ivy_dir"])
     assert options["spark.driver.host"] == "127.0.0.1"
     assert options["spark.jars.packages"] == (
-        f"com.example:demo:1.0.0,{ICEBERG_RUNTIME_PACKAGE}"
+        f"com.example:demo:1.0.0,{ICEBERG_RUNTIME_PACKAGE},{SQLITE_DRIVER_PACKAGE}"
     )
     assert options["spark.sql.extensions"] == (
         f"com.example.CustomSparkExtensions,{ICEBERG_SESSION_EXTENSIONS}"
     )
     assert options["spark.sql.defaultCatalog"] == "janus"
     assert options["spark.sql.catalog.janus"] == ICEBERG_CATALOG_IMPL
-    assert options["spark.sql.catalog.janus.type"] == "hadoop"
+    assert options["spark.sql.catalog.janus.type"] == "jdbc"
+    assert options["spark.sql.catalog.janus.uri"] == (
+        f"jdbc:sqlite:{tmp_path / SQLITE_CATALOG_DATABASE}?{SQLITE_DRIVER_OPTIONS}"
+    )
     assert options["spark.sql.catalog.janus.warehouse"] == str(paths["iceberg_warehouse_dir"])
     assert options["spark.sql.catalog.janus.default-namespace"] == "bronze"
     assert options["spark.sql.shuffle.partitions"] == "2"

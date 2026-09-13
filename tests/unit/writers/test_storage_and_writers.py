@@ -12,23 +12,15 @@ import pytest
 from janus.models import ExecutionPlan, RunContext
 from janus.registry import load_registry
 from janus.strategies.files.download import _read_checksum_sidecar
-from janus.utils.environment import ICEBERG_CATALOG_IMPL, ICEBERG_SESSION_EXTENSIONS
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter, SparkDatasetWriter
 from janus.writers.spark import _rebalance_for_write
+from tests.support.spark_sessions import build_iceberg_session
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-ICEBERG_RUNTIME_JAR = (
-    PROJECT_ROOT
-    / "data"
-    / "metadata"
-    / "ivy"
-    / "jars"
-    / "org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar"
-)
 
 NORMALIZED_COLUMNS = {
     "janus_run_id",
@@ -44,26 +36,10 @@ NORMALIZED_COLUMNS = {
 
 @pytest.fixture(scope="module")
 def spark(tmp_path_factory):
-    pyspark_sql = pytest.importorskip("pyspark.sql")
-    if not ICEBERG_RUNTIME_JAR.exists():
-        pytest.skip("Iceberg runtime jar is not available in the local Ivy cache")
-    warehouse_root = tmp_path_factory.mktemp("janus-writer-iceberg")
-    session = (
-        pyspark_sql.SparkSession.builder.appName("janus-writer-tests")
-        .master("local[1]")
-        .config("spark.jars", str(ICEBERG_RUNTIME_JAR))
-        .config("spark.sql.extensions", ICEBERG_SESSION_EXTENSIONS)
-        .config("spark.sql.defaultCatalog", "janus")
-        .config("spark.sql.catalog.janus", ICEBERG_CATALOG_IMPL)
-        .config("spark.sql.catalog.janus.type", "hadoop")
-        .config("spark.sql.catalog.janus.warehouse", str(warehouse_root / "iceberg"))
-        .config("spark.sql.catalog.janus.default-namespace", "bronze")
-        .config("spark.sql.warehouse.dir", str(warehouse_root / "spark-warehouse"))
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.ui.enabled", "false")
-        .getOrCreate()
+    session = build_iceberg_session(
+        "janus-writer-tests",
+        tmp_path_factory.mktemp("janus-writer-iceberg"),
     )
-    session.sparkContext.setLogLevel("WARN")
     yield session
     session.stop()
 
