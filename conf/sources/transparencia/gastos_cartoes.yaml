@@ -80,6 +80,8 @@ sources:
         format: iceberg
         namespace: bronze__transparencia
         table_name: gastos_cartoes__cartoes
+        shared_with:
+          - transparencia__gastos_cartoes__cartoes__incremental
       metadata:
         path: data/metadata/transparencia/gastos_cartoes__cartoes
         format: json
@@ -174,6 +176,8 @@ sources:
         format: iceberg
         namespace: bronze__transparencia
         table_name: gastos_cartoes__cartoes
+        shared_with:
+          - transparencia__gastos_cartoes__cartoes__full_refresh
       metadata:
         path: data/metadata/transparencia/gastos_cartoes__cartoes
         format: json

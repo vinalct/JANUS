@@ -41,12 +41,17 @@ MODELS_ALL: tuple[str, ...] = (
     "SchemaConfig",
     "SourceConfig",
     "SourceConfigValidationError",
+    "SourceDependencyEdge",
+    "SourceDependencyGraph",
+    "SourceDependencyNode",
     "SourceReference",
     "SparkConfig",
     "ValidationIssue",
     "ValidationPolicy",
     "WriteResult",
+    "find_dependency_cycles",
     "iter_iceberg_input_references",
+    "render_dependency_cycle",
     "resolve_bronze_write_intent",
 )
 

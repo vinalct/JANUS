@@ -205,10 +205,20 @@ class SparkConfig:
 
 @dataclass(frozen=True, slots=True)
 class OutputTarget:
+    """One configured output zone, plus the Iceberg identity a bronze target carries."""
+
     path: str
     format: str
     namespace: str | None = None
     table_name: str | None = None
+    shared_with: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Reject a co-writer list that names nobody, or names somebody twice."""
+        if any(not peer.strip() for peer in self.shared_with):
+            raise ValueError("shared_with entries must be non-empty source ids")
+        if len(set(self.shared_with)) != len(self.shared_with):
+            raise ValueError("shared_with must not repeat a source id")
 
 
 @dataclass(frozen=True, slots=True)

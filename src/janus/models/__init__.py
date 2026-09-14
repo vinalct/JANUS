@@ -37,7 +37,12 @@ from janus.models.contracts import (
 from janus.models.dependencies import (
     ROOT_REQUEST_INPUT_PATH,
     IcebergInputReference,
+    SourceDependencyEdge,
+    SourceDependencyGraph,
+    SourceDependencyNode,
+    find_dependency_cycles,
     iter_iceberg_input_references,
+    render_dependency_cycle,
 )
 from janus.models.source_config import SourceConfig
 from janus.models.write_intent import (
@@ -79,11 +84,16 @@ __all__ = [
     "SchemaConfig",
     "SourceConfig",
     "SourceConfigValidationError",
+    "SourceDependencyEdge",
+    "SourceDependencyGraph",
+    "SourceDependencyNode",
     "SourceReference",
     "SparkConfig",
     "ValidationIssue",
     "ValidationPolicy",
     "WriteResult",
+    "find_dependency_cycles",
     "iter_iceberg_input_references",
+    "render_dependency_cycle",
     "resolve_bronze_write_intent",
 ]

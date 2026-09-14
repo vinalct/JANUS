@@ -250,7 +250,7 @@ def test_a_declared_leaf_still_loads_through_the_registry(tmp_path):
     consumer["access"]["parameter_bindings"] = {
         "codigoOrgao": {"from": "request_input.orgao_codigo"}
     }
-    project_root = _write_grouped_project(tmp_path, [consumer])
+    project_root = _write_grouped_project(tmp_path, [_producer_mapping(ORGAOS_LEAF), consumer])
 
     registry = load_registry(project_root)
     request_inputs = registry.get_source("grouped_consumer").access.request_inputs
@@ -266,6 +266,28 @@ def _load_request_inputs(raw: dict[str, Any]):
     mapping = _base_mapping()
     mapping["access"]["request_inputs"] = raw
     return SourceConfig.from_mapping(mapping, CONFIG_PATH).access.request_inputs
+
+
+def _producer_mapping(leaf: dict[str, Any]) -> dict[str, Any]:
+    """The source that writes the table ``leaf`` reads, under the id the leaf declares.
+
+    The declaration is only half the contract: the registry also checks that the named
+    source really produces that table, so a fixture proving a leaf loads needs its
+    producer in the same project.
+    """
+    source_id = leaf["upstream_source_id"]
+    mapping = _base_mapping(source_id=source_id, name=source_id)
+    mapping["outputs"] = {
+        "raw": {"path": f"data/raw/example/{source_id}", "format": "json"},
+        "bronze": {
+            "path": f"data/bronze/example/{source_id}",
+            "format": "iceberg",
+            "namespace": leaf["namespace"],
+            "table_name": leaf["table_name"],
+        },
+        "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
+    }
+    return mapping
 
 
 def _write_grouped_project(tmp_path: Path, documents: list[dict[str, Any]]) -> Path:

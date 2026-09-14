@@ -487,8 +487,9 @@ storage a full-refresh source occupies grows with each run.
 
 - Each source defines `outputs.raw`, `outputs.bronze`, and `outputs.metadata`.
 - Each output target must define `path` and `format`.
-- Only `outputs.bronze` may define `namespace` and `table_name`.
-- `namespace` and `table_name` are only valid when `outputs.bronze.format` is `iceberg`.
+- Only `outputs.bronze` may define `namespace`, `table_name` and `shared_with`.
+- `namespace`, `table_name` and `shared_with` are only valid when `outputs.bronze.format` is `iceberg`.
+- Two sources may write the same bronze table only if each names the other in `outputs.bronze.shared_with`. The declaration must be mutual and complete: every co-writer names all the others and only those, and a source that declares a co-writer it does not actually share a table with is rejected.
 
 ### `quality`
 
@@ -583,6 +584,23 @@ Each source must define:
 - a metadata path for run records, checkpoints, lineage, and validations.
 
 If `outputs.bronze.format` is `iceberg`, the source may also define `outputs.bronze.namespace` and `outputs.bronze.table_name` when the default path-derived Iceberg identifier is not the desired bronze table name.
+
+A dataset that is served by more than one pipeline — typically a full-refresh rebuild alongside an incremental delta job — keeps one bronze table, and each of those sources declares the others:
+
+```yaml
+outputs:
+  bronze:
+    path: data/bronze/transparencia/gastos_cartoes__cartoes
+    format: iceberg
+    namespace: bronze__transparencia
+    table_name: gastos_cartoes__cartoes
+    shared_with:
+      - transparencia__gastos_cartoes__cartoes__incremental
+```
+
+The registry rejects an *undeclared* collision — two sources whose paths, defaults or identifier sanitization land on one table without saying so — because that is indistinguishable from a mistake. It accepts a declared one. A consumer reading a shared table still names one producer in its `iceberg_rows.upstream_source_id`, and waits only for that pipeline.
+
+Co-writers share a table, not a schedule: a full refresh with `spark.write_mode: overwrite` replaces the whole table, so make sure its window covers everything the dataset is meant to hold, or it will drop rows another pipeline appended.
 
 Checkpoint choices should match the family:
 
