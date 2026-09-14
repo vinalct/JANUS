@@ -49,7 +49,7 @@
         }
       ],
       "checkpoint_strategy": "none",
-      "config_version": "be8581998a01d27050c2ddfe57c11efd147464e3ed68ce283eaeadc7208dce83",
+      "config_version": "2a197b366a38c8ed873b42f29585e0fee5c7c7765275b7010e5a1a5824dc48fb",
       "configured_outputs": [
         {
           "format": "json",

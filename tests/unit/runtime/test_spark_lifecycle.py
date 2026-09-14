@@ -140,6 +140,7 @@ def test_wrapping_keeps_the_session_available_after_a_scoped_release():
     provider = SparkSessionProvider.wrapping(session)
     request_inputs = IcebergRowsRequestInputsConfig(
         type="iceberg_rows",
+        upstream_source_id="empresas",
         namespace="bronze",
         table_name="empresas",
         columns={"cnpj": "cnpj_basico"},
@@ -197,6 +198,7 @@ def test_scoped_request_input_session_stops_the_session_it_opened():
     provider = SparkSessionProvider(ENVIRONMENT_CONFIG, {}, session_factory=factory)
     request_inputs = IcebergRowsRequestInputsConfig(
         type="iceberg_rows",
+        upstream_source_id="empresas",
         namespace="bronze",
         table_name="empresas",
         columns={"cnpj": "cnpj_basico"},
@@ -213,6 +215,7 @@ def test_scoped_request_input_session_stops_the_session_when_the_lookup_raises()
     provider = SparkSessionProvider(ENVIRONMENT_CONFIG, {}, session_factory=factory)
     request_inputs = IcebergRowsRequestInputsConfig(
         type="iceberg_rows",
+        upstream_source_id="empresas",
         namespace="bronze",
         table_name="empresas",
         columns={"cnpj": "cnpj_basico"},
@@ -231,6 +234,7 @@ def test_scoped_request_input_session_passes_an_external_session_through_untouch
     session = StubSession()
     request_inputs = IcebergRowsRequestInputsConfig(
         type="iceberg_rows",
+        upstream_source_id="empresas",
         namespace="bronze",
         table_name="empresas",
         columns={"cnpj": "cnpj_basico"},

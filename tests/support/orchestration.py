@@ -120,6 +120,12 @@ def source_payload(spec: SourceSpec) -> dict[str, Any]:
 
 
 def source_documents(case: GraphCase, *, declare_upstreams: bool = True) -> list[dict[str, Any]]:
+    """Build one document per source, declaring the producer of every Iceberg leaf.
+
+    ``declare_upstreams=False`` is the named pre-migration shape: it omits the
+    declaration the config contract now requires, so a registry built from it must be
+    rejected. It exists for that negative case, never to make a fixture load.
+    """
     sources = {spec.source_id: source_payload(spec) for spec in case.sources}
     for spec in case.sources:
         leaves = []
@@ -132,10 +138,10 @@ def source_documents(case: GraphCase, *, declare_upstreams: bool = True) -> list
             leaves.append(
                 {
                     "type": "iceberg_rows",
+                    **({"upstream_source_id": upstream} if declare_upstreams else {}),
                     "namespace": namespace,
                     "table_name": table,
                     "columns": {f"{upstream.lower()}_id": "id"},
-                    **({"upstream_source_id": upstream} if declare_upstreams else {}),
                 }
             )
         if leaves:

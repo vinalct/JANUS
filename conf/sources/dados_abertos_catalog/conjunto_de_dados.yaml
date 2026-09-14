@@ -110,6 +110,7 @@ sources:
         Accept: application/json
       request_inputs:
         type: iceberg_rows
+        upstream_source_id: dados_abertos_catalog__conjunto_dados__full_refresh
         namespace: bronze__dados_abertos_catalog
         table_name: conjuntos_dados
         columns:

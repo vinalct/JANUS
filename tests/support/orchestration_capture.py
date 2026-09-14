@@ -155,7 +155,7 @@ def capture_case(root: Path, case: str) -> dict[str, Any]:
     upstreams = ("A",) if case.endswith("consumer") else ()
     spec = SourceSpec("B" if upstreams else "C", upstreams, family=family)
     graph = GraphCase((SourceSpec("A"), spec)) if upstreams else GraphCase((spec,))
-    documents = source_documents(graph, declare_upstreams=False)
+    documents = source_documents(graph)
     if case == "empty":
         documents[0]["source_hook"] = "order14.empty"
     write_project(root, documents)

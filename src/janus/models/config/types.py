@@ -93,10 +93,29 @@ class DateWindowRequestInputsConfig(RequestInputsConfig):
 
 @dataclass(frozen=True, slots=True)
 class IcebergRowsRequestInputsConfig(RequestInputsConfig):
+    """One upstream bronze table read, and the source declared to produce it.
+
+    ``upstream_source_id`` names the producer; ``namespace``/``table_name`` stay the
+    data dependency. The declaration never substitutes for the table reference — a
+    consumer that names a producer and reads a table that producer does not write is
+    an inconsistency for registry validation to reject, not one to paper over here.
+    """
+
+    upstream_source_id: str
     namespace: str
     table_name: str
     columns: dict[str, str]
     distinct: bool = False
+
+    def __post_init__(self) -> None:
+        """Reject a producer declaration that identifies nobody.
+
+        The parser already collects this as an issue; the invariant is here so a
+        directly constructed config — a test fixture, a future caller — cannot hold an
+        edge the dependency graph would have to guess at.
+        """
+        if not isinstance(self.upstream_source_id, str) or not self.upstream_source_id.strip():
+            raise ValueError("iceberg_rows upstream_source_id must be a non-empty string")
 
     @property
     def requires_spark(self) -> bool:

@@ -575,6 +575,7 @@ def test_catalog_strategy_scopes_the_session_to_the_request_input_lookup(
         pagination_type="none",
         request_inputs={
             "type": "iceberg_rows",
+            "upstream_source_id": "orgaos",
             "namespace": "bronze_test",
             "table_name": "orgaos",
             "columns": {"org_id": "id"},
@@ -968,6 +969,7 @@ def test_catalog_strategy_iceberg_rows_request_inputs_iterates_over_inputs(tmp_p
         path="/catalog/{entity_id}",
         request_inputs={
             "type": "iceberg_rows",
+            "upstream_source_id": "entities",
             "namespace": "bronze__test",
             "table_name": "entities",
             "columns": {"entity_id": "id"},
@@ -1021,6 +1023,7 @@ def test_catalog_strategy_request_inputs_query_param_binding(tmp_path):
         path="/catalog",
         request_inputs={
             "type": "iceberg_rows",
+            "upstream_source_id": "orgs",
             "namespace": "bronze__test",
             "table_name": "orgs",
             "columns": {"org_id": "id"},
@@ -1073,6 +1076,7 @@ def test_catalog_strategy_dead_letters_failed_request_input_without_partial_enti
         path="/catalog/{entity_id}",
         request_inputs={
             "type": "iceberg_rows",
+            "upstream_source_id": "entities",
             "namespace": "bronze_test",
             "table_name": "entities",
             "columns": {"entity_id": "id"},
@@ -1155,6 +1159,7 @@ def test_catalog_strategy_continues_after_multiple_dead_letters_within_budget(tm
         path="/catalog/{entity_id}",
         request_inputs={
             "type": "iceberg_rows",
+            "upstream_source_id": "entities",
             "namespace": "bronze_test",
             "table_name": "entities",
             "columns": {"entity_id": "id"},
@@ -1281,6 +1286,7 @@ def test_catalog_source_config_rejects_request_inputs_for_file_source(tmp_path):
                     },
                     "request_inputs": {
                         "type": "iceberg_rows",
+                        "upstream_source_id": "t",
                         "namespace": "ns",
                         "table_name": "t",
                         "columns": {"x": "y"},

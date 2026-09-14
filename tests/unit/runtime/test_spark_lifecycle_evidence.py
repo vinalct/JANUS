@@ -41,6 +41,7 @@ DATE_WINDOW_INPUTS = DateWindowRequestInputsConfig(
 )
 ICEBERG_ROWS_INPUTS = IcebergRowsRequestInputsConfig(
     type="iceberg_rows",
+    upstream_source_id="empresas",
     namespace="bronze",
     table_name="empresas",
     columns={"cnpj": "cnpj_basico"},

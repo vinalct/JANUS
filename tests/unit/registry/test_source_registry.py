@@ -328,6 +328,7 @@ def test_registry_parses_iceberg_rows_request_inputs_and_parameter_bindings(tmp_
         "    type: none\n",
         "  request_inputs:\n"
         "    type: iceberg_rows\n"
+        "    upstream_source_id: emendas_parlamentares__emendas\n"
         "    namespace: bronze_transparencia\n"
         "    table_name: emendas_parlamentares__emendas\n"
         "    columns:\n"
@@ -385,6 +386,7 @@ def test_registry_rejects_duplicate_static_and_bound_request_params(tmp_path):
         "    id: fixed\n"
         "  request_inputs:\n"
         "    type: iceberg_rows\n"
+        "    upstream_source_id: emendas_parlamentares__emendas\n"
         "    namespace: bronze_transparencia\n"
         "    table_name: emendas_parlamentares__emendas\n"
         "    columns:\n"
@@ -633,6 +635,7 @@ def test_registry_rejects_invalid_iceberg_request_inputs(tmp_path):
         load_registry(project_root)
 
     message = str(exc_info.value)
+    assert "access.request_inputs.upstream_source_id: is required" in message
     assert "access.request_inputs.table_name: is required" in message
     assert "access.request_inputs.columns: is required" in message
 
@@ -697,6 +700,7 @@ def test_registry_parses_combined_request_inputs_and_parameter_bindings(tmp_path
         "    type: combined\n"
         "    inputs:\n"
         "      - type: iceberg_rows\n"
+        "        upstream_source_id: orgaos\n"
         "        namespace: bronze_transparencia\n"
         "        table_name: orgaos\n"
         "        columns:\n"
@@ -806,6 +810,7 @@ def test_registry_rejects_combined_parameter_binding_referencing_unknown_field(t
         "    type: combined\n"
         "    inputs:\n"
         "      - type: iceberg_rows\n"
+        "        upstream_source_id: orgaos\n"
         "        namespace: bronze_transparencia\n"
         "        table_name: orgaos\n"
         "        columns:\n"

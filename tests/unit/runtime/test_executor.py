@@ -983,6 +983,7 @@ def test_executor_hands_the_provider_to_extract_without_starting_a_session(tmp_p
             planned_run.plan.source_config.access,
             request_inputs=IcebergRowsRequestInputsConfig(
                 type="iceberg_rows",
+                upstream_source_id="empresas",
                 namespace="bronze",
                 table_name="empresas",
                 columns={"cnpj": "cnpj_basico"},

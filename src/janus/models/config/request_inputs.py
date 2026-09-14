@@ -107,6 +107,8 @@ def _parse_request_input_entry(
         )
 
     if input_type == "iceberg_rows":
+        issues_before_leaf = len(issues)
+        upstream_source_id = _require_string(data, "upstream_source_id", issues, prefix)
         namespace = _require_string(data, "namespace", issues, prefix)
         table_name = _require_string(data, "table_name", issues, prefix)
         columns_value = data.get("columns")
@@ -124,11 +126,12 @@ def _parse_request_input_entry(
             )
         distinct = _optional_bool(data, "distinct", issues, prefix, default=False)
 
-        if not namespace or not table_name:
+        if len(issues) != issues_before_leaf:
             return None
 
         return IcebergRowsRequestInputsConfig(
             type=input_type,
+            upstream_source_id=upstream_source_id,
             namespace=namespace,
             table_name=table_name,
             columns=columns,

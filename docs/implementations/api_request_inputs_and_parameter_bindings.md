@@ -61,10 +61,13 @@ This request-input type reads one existing Iceberg table through the active Spar
 
 The supported fields are:
 
+- `upstream_source_id` (required, non-empty producer source ID)
 - `namespace`
 - `table_name`
 - `columns`
 - `distinct`
+
+Every Iceberg leaf, including each member of `combined.inputs`, requires the producer declaration. It identifies who produces the referenced table; it does not change the table read, projection, or binding behavior. Producer existence and table matching belong to registry graph validation.
 
 The scope is intentionally narrow:
 

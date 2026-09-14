@@ -19,6 +19,7 @@ DATE_WINDOW_INPUT = {
 }
 ICEBERG_ROWS_INPUT = {
     "type": "iceberg_rows",
+    "upstream_source_id": "emendas_parlamentares__emendas",
     "namespace": "bronze_transparencia",
     "table_name": "emendas_parlamentares__emendas",
     "columns": {"emenda_id": "id"},

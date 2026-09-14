@@ -29,6 +29,9 @@ from tests.support.spark_sessions import build_iceberg_session, require_iceberg_
 SOURCE_ID = "lazy_spark_iceberg_rows_source"
 UPSTREAM_NAMESPACE = "bronze_test"
 UPSTREAM_TABLE = "upstream_ids"
+# The lookup table is seeded straight into the catalog below: this single-source fixture
+# configures no producer, so the declaration names one without claiming it is registered.
+UPSTREAM_SOURCE_ID = "lazy_spark_upstream_ids_producer"
 ENVIRONMENT_CONFIG = {
     "storage": {
         "root_dir": "data",
@@ -227,6 +230,7 @@ def _source_config_payload() -> dict[str, Any]:
             "auth": {"type": "none"},
             "request_inputs": {
                 "type": "iceberg_rows",
+                "upstream_source_id": UPSTREAM_SOURCE_ID,
                 "namespace": UPSTREAM_NAMESPACE,
                 "table_name": UPSTREAM_TABLE,
                 "columns": {"entity_id": "entity_id"},

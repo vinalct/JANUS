@@ -185,7 +185,7 @@ Supported request-input types:
 
 - `none`
 - `date_window` with `start`, `end`, and `step`
-- `iceberg_rows` with `namespace`, `table_name`, `columns`, and optional `distinct`
+- `iceberg_rows` with required `upstream_source_id`, `namespace`, `table_name`, `columns`, and optional `distinct`
 - `combined` with an `inputs:` list of two or more `date_window` or `iceberg_rows` entries
 
 Supported binding sources:
@@ -251,7 +251,8 @@ access:
     situacao: ATIVO
   request_inputs:
     type: iceberg_rows
-    namespace: bronze_transparencia
+    upstream_source_id: transparencia__orgaos__siape__full_refresh
+    namespace: bronze__transparencia
     table_name: orgaos__siape
     columns:
       orgao_codigo: codOrgaoExercicioSiape
@@ -281,8 +282,9 @@ access:
     type: combined
     inputs:
       - type: iceberg_rows
-        namespace: bronze_transparencia
-        table_name: orgaos
+        upstream_source_id: transparencia__orgaos__siafi__full_refresh
+        namespace: bronze__transparencia
+        table_name: orgaos__siafi
         columns:
           orgao_codigo: codigo
         distinct: true

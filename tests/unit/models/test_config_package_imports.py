@@ -131,6 +131,7 @@ MODELS_ALL: tuple[str, ...] = (
     "ExtractedArtifact",
     "ExtractionConfig",
     "ExtractionResult",
+    "IcebergInputReference",
     "IcebergRowsRequestInputsConfig",
     "OutputTarget",
     "OutputsConfig",
@@ -139,6 +140,7 @@ MODELS_ALL: tuple[str, ...] = (
     "PhaseValidationPolicy",
     "QualityConfig",
     "RETRYABLE_CLIENT_STATUS_CODES",
+    "ROOT_REQUEST_INPUT_PATH",
     "RateLimitConfig",
     "RequestInputsConfig",
     "RetryConfig",
@@ -152,6 +154,7 @@ MODELS_ALL: tuple[str, ...] = (
     "ValidationIssue",
     "ValidationPolicy",
     "WriteResult",
+    "iter_iceberg_input_references",
     "resolve_bronze_write_intent",
 )
 

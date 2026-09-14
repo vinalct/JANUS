@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from janus.models import SourceConfigValidationError
 from janus.registry import load_registry
 from janus.utils.storage import bronze_table_identifier
 from tests.support.orchestration import (
@@ -71,10 +72,7 @@ def test_fixture_documents_declare_every_leaf_and_match_physical_producers(name)
 
 @pytest.mark.parametrize("grouped", (True, False))
 def test_registry_builders_are_isolated_and_support_both_document_shapes(tmp_path, grouped):
-    roots = [
-        build_graph_project(tmp_path, "fan_in", grouped=grouped, declare_upstreams=False)
-        for _ in range(2)
-    ]
+    roots = [build_graph_project(tmp_path, "fan_in", grouped=grouped) for _ in range(2)]
     first, second = (load_registry(root) for root in roots)
     assert roots[0] != roots[1]
     assert [source.source_id for source in first.sources] == ["D", "B", "A"]
@@ -85,3 +83,16 @@ def test_registry_builders_are_isolated_and_support_both_document_shapes(tmp_pat
     first_documents = source_documents(GRAPH_CASES["chain"])
     first_documents[0]["enabled"] = False
     assert source_documents(GRAPH_CASES["chain"])[0]["enabled"] is True
+
+
+@pytest.mark.parametrize("grouped", (True, False))
+def test_the_pre_migration_document_shape_no_longer_loads(tmp_path, grouped):
+    """The declaration is required, so the fixtures' legacy mode is now a rejected shape."""
+    root = build_graph_project(tmp_path, "chain", grouped=grouped, declare_upstreams=False)
+
+    with pytest.raises(SourceConfigValidationError) as exc_info:
+        load_registry(root)
+
+    message = str(exc_info.value)
+    assert "access.request_inputs.upstream_source_id: is required" in message
+    assert ("sources[0]." in message) is grouped
