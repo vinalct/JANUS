@@ -2,65 +2,23 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections.abc import Sequence
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from janus.cli.common import (
+    default_project_root,
+    format_runtime_permission_error,
+    parse_started_at,
+)
+from janus.cli.run_all import main as run_all_main
 from janus.planner import Planner, PlannerError, PlanningRequest
 from janus.registry import SourceNotFoundError
 from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.scripts import ingest_raw_to_bronze
 from janus.utils.environment import build_spark_session, load_environment_config, prepare_runtime
 from janus.utils.logging import build_structured_logger
-
-
-def default_project_root() -> Path:
-    env_project_root = os.getenv("JANUS_PROJECT_ROOT")
-    if env_project_root:
-        return Path(env_project_root)
-
-    cwd = Path.cwd()
-    if (cwd / "conf" / "environments").exists():
-        return cwd
-
-    return Path(__file__).resolve().parents[2]
-
-
-def parse_started_at(value: str) -> datetime:
-    normalized = value.strip()
-    if normalized.endswith("Z"):
-        normalized = f"{normalized[:-1]}+00:00"
-
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "started-at must be a valid ISO-8601 timestamp"
-        ) from exc
-
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise argparse.ArgumentTypeError("started-at must include a timezone offset")
-
-    return parsed
-
-
-def format_runtime_permission_error(exc: PermissionError) -> str:
-    path = exc.filename or "<unknown>"
-    message = (
-        f"JANUS could not prepare the runtime path {path!r}. "
-        "The active environment needs write access to the configured storage "
-        "and Spark cache directories."
-    )
-    if str(path).startswith("/workspace/"):
-        message += (
-            " If you are running inside the local container, recreate it with "
-            "`make down && make up` so the Docker/Podman user mapping is "
-            "applied correctly."
-        )
-    return message
 
 
 def record_spark_session(summary: dict[str, Any], provider: SparkSessionProvider) -> None:
@@ -74,8 +32,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Validate JANUS runtime configuration, plan one source, or execute one "
-            "configured source through the framework runtime."
-        )
+            "configured source through the framework runtime. Use `janus run-all "
+            "[options]` to execute enabled sources once in dependency order."
+        ),
     )
     parser.add_argument(
         "--environment",
@@ -160,7 +119,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
+    resolved_argv = tuple(sys.argv[1:] if argv is None else argv)
+    if resolved_argv and resolved_argv[0] == "run-all":
+        return run_all_main(resolved_argv[1:])
+
+    args = parse_args(resolved_argv)
     project_root = args.project_root.resolve()
 
     try:
