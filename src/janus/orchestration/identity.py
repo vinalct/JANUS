@@ -9,7 +9,6 @@ from hashlib import sha256
 from janus.orchestration.errors import PipelineIdentityError
 from janus.planner import normalize_run_id_segment
 
-
 PIPELINE_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 MAX_PIPELINE_RUN_ID_LENGTH = 96
 MAX_SOURCE_SEGMENT_LENGTH = 48

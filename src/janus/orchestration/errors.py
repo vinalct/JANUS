@@ -38,3 +38,7 @@ class GraphDriftError(BatchPlanningError):
 
 class PipelineIdentityError(BatchPlanningError):
     """Raised when a pipeline or source-attempt identity is unusable."""
+
+
+class DuplicatePipelineRunError(PipelineIdentityError):
+    """Raised before work when a finalized pipeline summary already owns an id."""
