@@ -15,6 +15,7 @@ writer's table identity, and it must run before a planner, an engine or a catalo
 from janus.registry.dependencies import (
     SourceGraphValidationError,
     SourceLocation,
+    bronze_output_table_identifier,
     build_source_dependency_graph,
     producer_table_identifier,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "SourceLocation",
     "SourceNotFoundError",
     "SourceRegistry",
+    "bronze_output_table_identifier",
     "build_source_dependency_graph",
     "load_app_config",
     "load_registry",

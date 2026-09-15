@@ -10,7 +10,7 @@ from typing import Any, Self
 from janus.models import ExecutionPlan, ExtractionResult, RunContext, WriteResult
 from janus.models.config.strategy_registry import STRATEGY_REGISTRY, StrategyRegistry
 from janus.models.source_config import SourceConfig
-from janus.registry import load_registry
+from janus.registry import SourceRegistry, load_registry
 from janus.strategies.base import BaseStrategy, SourceHook
 
 RUN_ID_SEGMENT_PATTERN = re.compile(r"[^a-z0-9]+")
@@ -26,6 +26,10 @@ class StrategyResolutionError(PlannerError):
 
 class HookResolutionError(PlannerError):
     """Raised when a configured source hook cannot be resolved."""
+
+
+class RegistrySnapshotError(PlannerError):
+    """Raised when an injected registry snapshot does not belong to the planned project."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,9 +294,27 @@ class Planner:
     strategy_catalog: StrategyCatalog = field(default_factory=StrategyCatalog.with_defaults)
     hook_catalog: HookCatalog = field(default_factory=HookCatalog.with_defaults)
 
-    def plan(self, request: PlanningRequest) -> PlannedRun:
-        registry = load_registry(request.project_root)
-        source_config = registry.get_source(
+    def plan(
+        self,
+        request: PlanningRequest,
+        *,
+        registry: SourceRegistry | None = None,
+    ) -> PlannedRun:
+        """Plan one source, loading the registry unless a caller already has one.
+
+        ``registry`` is the batch seam and nothing more: a caller planning many sources
+        loads and validates the registry once and hands the same snapshot to every call,
+        so no node is planned against YAML that changed mid-batch. Omitting it keeps the
+        single-source call shape exactly as it was — one request in, one load, one plan.
+        """
+        snapshot = registry if registry is not None else load_registry(request.project_root)
+        if snapshot.project_root != request.project_root:
+            raise RegistrySnapshotError(
+                f"The injected registry was loaded from {snapshot.project_root}, but source "
+                f"{request.source_id!r} is planned against {request.project_root}. A plan must "
+                "resolve against the configs it was validated with."
+            )
+        source_config = snapshot.get_source(
             request.source_id,
             include_disabled=request.include_disabled,
         )
@@ -412,12 +434,18 @@ def _build_run_context(request: PlanningRequest, source_config: SourceConfig) ->
 def _default_run_id(environment: str, source_id: str, started_at: datetime) -> str:
     timestamp = started_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
     return (
-        f"run-{_normalize_run_id_segment(environment)}-"
-        f"{_normalize_run_id_segment(source_id)}-{timestamp}"
+        f"run-{normalize_run_id_segment(environment)}-"
+        f"{normalize_run_id_segment(source_id)}-{timestamp}"
     )
 
 
-def _normalize_run_id_segment(value: str) -> str:
+def normalize_run_id_segment(value: str) -> str:
+    """Normalize one run-id segment to ``[a-z0-9-]``, or ``"source"`` if nothing survives.
+
+    Public because a batch run id is built from the same segments as a single-source one.
+    A second normalization would be a second answer to "what may appear in a run
+    directory name" — and the two answers would drift apart at the first odd source id.
+    """
     normalized = RUN_ID_SEGMENT_PATTERN.sub("-", value.strip().lower()).strip("-")
     return normalized or "source"
 

@@ -5,9 +5,11 @@ from janus.planner.core import (
     Planner,
     PlannerError,
     PlanningRequest,
+    RegistrySnapshotError,
     StrategyBinding,
     StrategyCatalog,
     StrategyResolutionError,
+    normalize_run_id_segment,
 )
 
 __all__ = [
@@ -17,7 +19,9 @@ __all__ = [
     "Planner",
     "PlannerError",
     "PlanningRequest",
+    "RegistrySnapshotError",
     "StrategyBinding",
     "StrategyCatalog",
     "StrategyResolutionError",
+    "normalize_run_id_segment",
 ]

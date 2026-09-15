@@ -175,6 +175,47 @@ class SourceDependencyGraph:
             sorted(edge.consumer_id for edge in self.edges if edge.producer_id == source_id)
         )
 
+    def ancestors(self, source_id: str) -> tuple[str, ...]:
+        """Return every source this one transitively depends on, sorted.
+
+        This is the closure a batch selection needs: selecting a consumer selects the
+        producers it cannot run without, however deep the chain, and answering that from
+        the graph is what keeps a second traversal out of the runner.
+        """
+        self.node(source_id)
+        producers: dict[str, list[str]] = {}
+        for edge in self.edges:
+            producers.setdefault(edge.consumer_id, []).append(edge.producer_id)
+
+        reached: set[str] = set()
+        pending = list(producers.get(source_id, ()))
+        while pending:
+            producer = pending.pop()
+            if producer in reached:
+                continue
+            reached.add(producer)
+            pending.extend(producers.get(producer, ()))
+        return tuple(sorted(reached))
+
+    def subgraph(self, source_ids: Iterable[str]) -> SourceDependencyGraph:
+        """Return the graph induced by ``source_ids``: their nodes, and the edges between them.
+
+        An edge leaving the selection is dropped, not rewritten: a source that nobody in
+        this batch consumes simply has no consumer here. Every id must be a node, so a
+        selection can never quietly name a source the graph has never heard of.
+        """
+        selected = set(source_ids)
+        for source_id in sorted(selected):
+            self.node(source_id)
+        return SourceDependencyGraph(
+            nodes=tuple(node for node in self.nodes if node.source_id in selected),
+            edges=tuple(
+                edge
+                for edge in self.edges
+                if edge.producer_id in selected and edge.consumer_id in selected
+            ),
+        )
+
     def topological_order(self) -> tuple[str, ...]:
         """Return every node in dependency order, breaking ties lexicographically.
 

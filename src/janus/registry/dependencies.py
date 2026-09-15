@@ -17,7 +17,7 @@ from janus.models.dependencies import (
     iter_iceberg_input_references,
     render_dependency_cycle,
 )
-from janus.models.source_config import SourceConfig
+from janus.models.source_config import OutputTarget, SourceConfig
 from janus.utils.storage import bronze_table_identifier
 
 #: The bronze output format an ``iceberg_rows`` dependency can be satisfied by.
@@ -54,20 +54,27 @@ class SourceGraphValidationError(ValueError):
         super().__init__("\n".join(message_lines))
 
 
+def bronze_output_table_identifier(bronze: OutputTarget, *, fallback_name: str) -> str | None:
+    """Return the Iceberg table one bronze target names, or ``None`` if it names none."""
+    if bronze.format.strip().lower() != ICEBERG_OUTPUT_FORMAT:
+        return None
+    return bronze_table_identifier(
+        bronze.path,
+        fallback_name=fallback_name,
+        namespace=bronze.namespace,
+        table_name=bronze.table_name,
+    )
+
+
 def producer_table_identifier(source: SourceConfig) -> str | None:
     """Return the Iceberg table this source produces, or ``None`` if it produces none.
 
     A raw, metadata or Parquet bronze output cannot satisfy an Iceberg dependency, so it
     contributes no producer identity rather than a plausible-looking one.
     """
-    bronze = source.outputs.bronze
-    if bronze.format.strip().lower() != ICEBERG_OUTPUT_FORMAT:
-        return None
-    return bronze_table_identifier(
-        bronze.path,
+    return bronze_output_table_identifier(
+        source.outputs.bronze,
         fallback_name=source.source_id,
-        namespace=bronze.namespace,
-        table_name=bronze.table_name,
     )
 
 
