@@ -24,19 +24,22 @@ SUMMARY_PERSISTENCE_STATUSES = frozenset({"failed", "pending", "succeeded"})
 UPSTREAM_FAILED_REASON_CODE = "upstream_failed"
 
 
-
 class ExecutedRunEvidence(Protocol):
     """The small source-result surface needed to build an attempt record."""
 
-    status: str
-    failure_reason: str | None
-    error_type: str | None
+    @property
+    def status(self) -> str: ...
+
+    @property
+    def failure_reason(self) -> str | None: ...
+
+    @property
+    def error_type(self) -> str | None: ...
 
     @property
     def is_successful(self) -> bool: ...
 
     def to_summary(self) -> dict[str, Any]: ...
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,9 +363,7 @@ class PipelineOutcome:
     config_versions: tuple[tuple[str, str], ...]
     timing: ExecutionTiming
     sources: tuple[SourceOutcome, ...]
-    summary_persistence: SummaryPersistence = field(
-        default_factory=SummaryPersistence
-    )
+    summary_persistence: SummaryPersistence = field(default_factory=SummaryPersistence)
     schema_version: int = PIPELINE_SUMMARY_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -454,9 +455,7 @@ class PipelineOutcome:
                     else None
                 ),
                 "ended_at": (
-                    self.timing.ended_at.isoformat()
-                    if self.timing.ended_at is not None
-                    else None
+                    self.timing.ended_at.isoformat() if self.timing.ended_at is not None else None
                 ),
             },
             "selection": {
@@ -566,7 +565,6 @@ def _executed_run_identity(executed_run: Any) -> tuple[str, str, int]:
             "source_id, run_id and attempt are required when source identity cannot be "
             "derived from the executed result"
         ) from exc
-
 
 
 def _canonical_ids(values: Sequence[str]) -> tuple[str, ...]:

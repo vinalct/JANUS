@@ -36,6 +36,7 @@ class SparkSessionProvider:
         self._owns_session = True
         self._session_info: dict[str, Any] | None = None
         self._was_started = False
+        self._cleanup_failures: list[Exception] = []
 
     @classmethod
     def wrapping(
@@ -110,6 +111,7 @@ class SparkSessionProvider:
             session.stop()
         except Exception as exc:
             # Never let a teardown failure mask the run's real outcome.
+            self._cleanup_failures.append(exc)
             self._log_exception(
                 "spark_session_stop_failed",
                 failure_reason=str(exc),
@@ -117,6 +119,13 @@ class SparkSessionProvider:
             )
             return
         self._log("spark_session_stopped")
+
+    def take_cleanup_failures(self) -> tuple[Exception, ...]:
+        """Return and clear teardown failures retained for the owning runtime."""
+
+        failures = tuple(self._cleanup_failures)
+        self._cleanup_failures.clear()
+        return failures
 
     def _build_session(self) -> SparkSession:
         return build_spark_session(self._config, self._resolved_paths)
