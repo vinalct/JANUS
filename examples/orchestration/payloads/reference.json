@@ -1,0 +1,10 @@
+[
+  {
+    "reference_id": "north",
+    "label": "North region"
+  },
+  {
+    "reference_id": "south",
+    "label": "South region"
+  }
+]
