@@ -168,6 +168,56 @@ class BatchExecutionPreflightError(ValueError):
     """The supplied plan and registry snapshot do not describe the same batch."""
 
 
+def execute_source_attempt(
+    planned_source: PlannedSource,
+    environment_config: Mapping[str, Any],
+    resolved_paths: Mapping[str, RuntimeLocation],
+    *,
+    source_execution: SourceExecution | None = None,
+    clock: PipelineClock | None = None,
+) -> SourceAttempt:
+    """Execute and translate one planned source through the shared runtime seam.
+
+    Batch runners and external orchestration adapters use this function so cleanup
+    handling, returned failures, raised exceptions, timing, and retained evidence have
+    one interpretation. Scheduling and retry decisions remain the caller's concern.
+    """
+    execution = source_execution or SourceExecutionService()
+    execution_clock = clock or PipelineClock()
+    started = execution_clock.start()
+    try:
+        executed_run = execution.execute(
+            planned_source.require_planned_run(),
+            environment_config,
+            resolved_paths,
+        )
+    except Exception as exc:
+        return _attempt_from_exception(
+            planned_source,
+            execution_clock.finish(started),
+            exc,
+        )
+
+    timing = execution_clock.finish(started)
+    try:
+        return SourceAttempt.from_executed_run(
+            executed_run,
+            timing=timing,
+            source_id=planned_source.source_id,
+            run_id=planned_source.run_id,
+            attempt=planned_source.attempt,
+        )
+    except Exception as exc:
+        return SourceAttempt(
+            source_id=planned_source.source_id,
+            run_id=planned_source.run_id,
+            attempt=planned_source.attempt,
+            status="failed",
+            timing=timing,
+            failure=FailureDetails.from_exception(exc, phase="result_translation"),
+        )
+
+
 @dataclass(slots=True)
 class BatchExecutor:
     """Execute a validated batch once, sequentially and in its existing DAG order."""
@@ -245,38 +295,13 @@ class BatchExecutor:
         resolved_paths: Mapping[str, RuntimeLocation],
     ) -> SourceAttempt:
         """Measure and translate exactly one call through the shared source service."""
-        started = self.clock.start()
-        try:
-            executed_run = self.source_execution.execute(
-                planned_source.require_planned_run(),
-                environment_config,
-                resolved_paths,
-            )
-        except Exception as exc:
-            return _attempt_from_exception(
-                planned_source,
-                self.clock.finish(started),
-                exc,
-            )
-
-        timing = self.clock.finish(started)
-        try:
-            return SourceAttempt.from_executed_run(
-                executed_run,
-                timing=timing,
-                source_id=planned_source.source_id,
-                run_id=planned_source.run_id,
-                attempt=planned_source.attempt,
-            )
-        except Exception as exc:
-            return SourceAttempt(
-                source_id=planned_source.source_id,
-                run_id=planned_source.run_id,
-                attempt=planned_source.attempt,
-                status="failed",
-                timing=timing,
-                failure=FailureDetails.from_exception(exc, phase="result_translation"),
-            )
+        return execute_source_attempt(
+            planned_source,
+            environment_config,
+            resolved_paths,
+            source_execution=self.source_execution,
+            clock=self.clock,
+        )
 
 
 def _preflight(plan: BatchPlan, registry: SourceRegistry) -> None:

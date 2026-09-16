@@ -18,6 +18,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dagster = [
+  "dagster==1.13.22",
+]
 dev = [
   "mypy==2.2.0",
   "pyiceberg[pyarrow,sql-postgres,sql-sqlite,s3fs]==0.12.0",
@@ -126,5 +129,5 @@ warn_redundant_casts = true
 no_implicit_optional = true
 
 [[tool.mypy.overrides]]
-module = ["pyspark.*", "yaml.*", "certifi.*"]
+module = ["dagster.*", "pyspark.*", "yaml.*", "certifi.*"]
 ignore_missing_imports = true

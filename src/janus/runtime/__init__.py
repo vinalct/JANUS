@@ -6,6 +6,7 @@ from janus.runtime.batch import (
     SourceCleanupError,
     SourceExecutionAndCleanupError,
     SourceExecutionService,
+    execute_source_attempt,
 )
 from janus.runtime.executor import ExecutedRun, SourceExecutor
 from janus.runtime.materialize import BronzeMaterializer
@@ -23,4 +24,5 @@ __all__ = [
     "SourceExecutionService",
     "SourceExecutor",
     "SparkSessionProvider",
+    "execute_source_attempt",
 ]
