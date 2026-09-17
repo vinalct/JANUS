@@ -13,6 +13,10 @@ C (independent date-window source)
 Run them from the JANUS repository root. Each new invocation needs a new pipeline ID; the examples use explicit IDs
 so the persisted evidence is easy to find.
 
+For the option reference, the pipeline summary schema, exit codes, and the full troubleshooting
+catalogue behind the diagnoses below, see the
+[batch orchestration guide](../../docs/orchestration.md).
+
 ## What is isolated
 
 The example owns `conf/app.yaml`, its three source definitions, a local fixture service, and

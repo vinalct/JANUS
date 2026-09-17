@@ -176,6 +176,32 @@ If no progress or dead-letter file exists, `--resume` has no effect and the run 
 
 This flag is meaningful for API, catalog, and file sources. API and catalog sources use per-page progress plus dead-letter state; file sources use dead-letter state only.
 
+### 6. Running many sources in dependency order
+
+```bash
+janus run-all --environment local --tag transparencia
+```
+
+`run-all` is a batch entry point over the same planner and executor, not a second runtime.
+Two seams make that literal:
+
+- **One snapshot, one planner.** `Planner.plan(request, *, registry=None)` accepts an
+  already-loaded registry. The batch loads and validates it once and passes the same object
+  to every call, so dispatch resolution, hook resolution, run-context assembly, and dispatch
+  validation still exist in exactly one place, and no node is planned against configuration
+  that changed mid-batch.
+- **One source execution path.** `janus.runtime.batch.SourceExecutionService` delegates each
+  source to the same `SourceExecutor` the single-source CLI uses, with its own lazy compute
+  provider per attempt. The batch layer adds ordering, failure propagation, and aggregation —
+  never extraction, materialization, quality, or metadata behavior.
+
+Correlation travels through existing run-context attributes (`pipeline_run_id`,
+`pipeline_attempt`, `trigger`), so per-run metadata and lineage keep their shape. The optional
+Dagster adapter calls the same `SourceExecutionService`, which is why one op per source
+behaves identically to one CLI batch.
+
+Operator-facing detail is in the [batch orchestration guide](../orchestration.md).
+
 ## What the tests lock down
 
 The planner and runtime tests protect the orchestration boundary rather than pretending to be source-specific business tests.

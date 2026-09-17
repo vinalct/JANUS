@@ -135,10 +135,42 @@ Notes:
   ([choosing a catalog](docs/reproducibility.md#choosing-the-catalog-jdbc-or-rest)).
 - Host-local execution is also possible if you match the pinned toolchain; see [reproducibility](docs/reproducibility.md).
 
+### 7. Run many sources in dependency order
+
+```bash
+make shell
+janus run-all --environment local
+```
+
+`run-all` executes enabled sources once, in validated dependency order. An `iceberg_rows`
+request input declares the source that produces the table it reads, and the registry
+validates that graph at load, so a consumer is never scheduled before its producer. Filters
+select roots only — `--tag` and `--domain` are each repeatable — and the required upstreams
+come along automatically. A failed source skips only its dependents; independent sources
+continue. The aggregate is printed as JSON and persisted under
+`<metadata>/pipelines/<pipeline_run_id>/summary.json`.
+
+The command runs one batch and exits. Scheduling stays outside JANUS core: use cron, or the
+optional Dagster adapter, which renders one task per source over the same graph and delegates
+to the same planner and executor.
+
+```bash
+pip install 'janus[dagster]'
+```
+
+Core JANUS never imports Dagster; only requesting the adapter crosses that boundary.
+
+Full option reference, summary schema, exit codes, retry/backfill ownership, and
+troubleshooting: [batch orchestration guide](docs/orchestration.md). A self-contained,
+runnable A → B plus independent C project — CLI and Dagster, including a deliberate-failure
+variant — lives in [examples/orchestration/](examples/orchestration/README.md).
+
 ## Documentation Map
 
 - [Architecture guide](docs/architecture.md): control flow and extension boundaries.
 - [Strategy patterns](docs/strategy-patterns.md): when to use `api`, `file`, or `catalog`.
 - [Source onboarding](docs/source-onboarding.md): how to add a new source without script sprawl.
+- [Batch orchestration guide](docs/orchestration.md): `run-all`, the source DAG, pipeline summaries, and the Dagster adapter.
+- [Orchestration example](examples/orchestration/README.md): a runnable dependency graph and an operations runbook.
 - [Reproducibility guide](docs/reproducibility.md): environment profiles, container workflow, and cluster-shaped runs.
 - [Implementation notes](docs/implementations/): component-level notes for planner, strategies, Spark I/O, quality, lineage, and source integrations.
