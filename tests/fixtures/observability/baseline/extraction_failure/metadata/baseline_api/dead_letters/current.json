@@ -1,0 +1,21 @@
+{
+  "entries": [
+    {
+      "error_message": "scripted extraction failure",
+      "error_type": "RuntimeError",
+      "item_key": "__none__",
+      "item_type": "request_input",
+      "metadata": {
+        "request_input_count": "1",
+        "request_input_index": "1",
+        "request_url": "https://fixtures.invalid/baseline_api"
+      },
+      "recorded_at": "2026-07-04T12:00:05+00:00"
+    }
+  ],
+  "run_id": "order15-extraction_failure",
+  "source_id": "baseline_api",
+  "strategy_family": "api",
+  "strategy_variant": "page_number_api",
+  "updated_at": "2026-07-04T12:00:05+00:00"
+}

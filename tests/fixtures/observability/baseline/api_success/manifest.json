@@ -1,0 +1,195 @@
+{
+  "captured_files": [
+    "metadata/baseline_api/checkpoints/current.json",
+    "metadata/baseline_api/checkpoints/history/order15-api_success.json",
+    "metadata/baseline_api/lineage/order15-api_success.json",
+    "metadata/baseline_api/runs/order15-api_success.json",
+    "metadata/baseline_api/validations/order15-api_success.json"
+  ],
+  "case": "api_success",
+  "entry_point": "execute",
+  "events": [
+    "request",
+    "session_start",
+    "session_stop"
+  ],
+  "requests": [
+    "https://fixtures.invalid/baseline_api?page=1&size=10"
+  ],
+  "run_id": "order15-api_success",
+  "source_id": "baseline_api",
+  "spark_session_started": true,
+  "status": "succeeded",
+  "strategy_family": "api",
+  "summary": {
+    "executed_run": {
+      "artifact_count": 1,
+      "artifacts": [
+        {
+          "checksum": "a119f76d9693de24d0e06e349c640358213872ab9717f63b17d4612e21e45c05",
+          "format": "json",
+          "path": "<PROJECT>/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-api_success/pages/page-0001.json"
+        }
+      ],
+      "checkpoint_value": "2026-07-02",
+      "extraction_metadata": {
+        "attempt_count": "1",
+        "auth_type": "none",
+        "checkpoint_loaded": "false",
+        "dead_letter_count": "0",
+        "dead_letter_skipped_count": "0",
+        "pagination_concurrency": "1",
+        "pagination_type": "page_number",
+        "raw_path_prefix": "runs/ingestion_date=2026-07-04/run_id=order15-api_success",
+        "records_extracted": "2",
+        "request_count": "1",
+        "request_input_count": "1",
+        "request_input_type": "none",
+        "retry_count": "0"
+      },
+      "materialized_outputs": [
+        {
+          "format": "json",
+          "metadata": {
+            "checksum": "a119f76d9693de24d0e06e349c640358213872ab9717f63b17d4612e21e45c05"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "<PROJECT>/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-api_success/pages/page-0001.json",
+          "records_written": 1,
+          "zone": "raw"
+        },
+        {
+          "format": "iceberg",
+          "metadata": {
+            "writer": "order15-baseline-compute-double"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "bronze.baseline_api",
+          "records_written": 2,
+          "zone": "bronze"
+        }
+      ],
+      "metadata_outputs": {
+        "checkpoint_history_path": "<PROJECT>/data/metadata/baseline_api/checkpoints/history/order15-api_success.json",
+        "checkpoint_state_path": "<PROJECT>/data/metadata/baseline_api/checkpoints/current.json",
+        "lineage_path": "<PROJECT>/data/metadata/baseline_api/lineage/order15-api_success.json",
+        "run_metadata_path": "<PROJECT>/data/metadata/baseline_api/runs/order15-api_success.json",
+        "validation_report_path": "<PROJECT>/data/metadata/baseline_api/validations/order15-api_success.json"
+      },
+      "records_extracted": 2,
+      "status": "succeeded",
+      "strategy_metadata": {
+        "artifact_count": 1,
+        "attempt_count": "1",
+        "auth_type": "none",
+        "checkpoint_loaded": "false",
+        "checkpoint_value": "2026-07-02",
+        "dead_letter_count": "0",
+        "dead_letter_skipped_count": "0",
+        "pagination_concurrency": "1",
+        "pagination_type": "page_number",
+        "raw_path_prefix": "runs/ingestion_date=2026-07-04/run_id=order15-api_success",
+        "records_extracted": "2",
+        "request_count": "1",
+        "request_input_count": "1",
+        "request_input_type": "none",
+        "request_timeout_seconds": 60,
+        "retry_count": "0",
+        "strategy_family": "api",
+        "strategy_variant": "page_number_api",
+        "write_result_count": 2
+      },
+      "validation": {
+        "failed_checks": [],
+        "is_successful": true,
+        "summary": {
+          "failed": 0,
+          "passed": 3,
+          "skipped": 5
+        }
+      }
+    },
+    "planned_run": {
+      "execution": {
+        "checkpoint_field": "updated_at",
+        "checkpoint_strategy": "max_value",
+        "mode": "full_refresh"
+      },
+      "outputs": {
+        "bronze": {
+          "format": "iceberg",
+          "path": "data/bronze/baseline_api"
+        },
+        "metadata": {
+          "format": "json",
+          "path": "data/metadata/baseline_api"
+        },
+        "raw": {
+          "format": "json",
+          "path": "data/raw/baseline_api"
+        }
+      },
+      "plan_notes": [
+        "strategy_family:api",
+        "strategy_variant:page_number_api",
+        "dispatch:api.page_number_api"
+      ],
+      "pre_run_metadata": {
+        "bronze_output_path": "data/bronze/baseline_api",
+        "checkpoint_field": "updated_at",
+        "checkpoint_strategy": "max_value",
+        "dispatch_path": "api.page_number_api",
+        "environment": "local",
+        "extraction_mode": "full_refresh",
+        "metadata_output_path": "data/metadata/baseline_api",
+        "project_root": "<PROJECT>",
+        "raw_output_path": "data/raw/baseline_api",
+        "run_id": "order15-api_success",
+        "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+        "source_id": "baseline_api",
+        "source_name": "Baseline api source",
+        "started_at": "2026-07-04T12:00:00+00:00",
+        "strategy_family": "api",
+        "strategy_variant": "page_number_api"
+      },
+      "run": {
+        "attributes": {
+          "source_id": "baseline_api",
+          "source_type": "api",
+          "strategy": "api",
+          "strategy_variant": "page_number_api",
+          "trigger": "baseline"
+        },
+        "environment": "local",
+        "run_id": "order15-api_success",
+        "started_at": "2026-07-04T12:00:00+00:00"
+      },
+      "source": {
+        "config_path": "<PROJECT>/conf/sources/sources.yaml",
+        "hook_id": null,
+        "name": "Baseline api source",
+        "source_id": "baseline_api",
+        "tags": [
+          "baseline"
+        ]
+      },
+      "strategy": {
+        "dispatch_path": "api.page_number_api",
+        "family": "api",
+        "hook_implementation": null,
+        "implementation": "ApiStrategy",
+        "variant": "page_number_api"
+      }
+    },
+    "spark_session": {
+      "app_name": null,
+      "master": null
+    }
+  }
+}

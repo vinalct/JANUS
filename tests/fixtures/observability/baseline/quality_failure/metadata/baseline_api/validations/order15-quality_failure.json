@@ -1,0 +1,85 @@
+{
+  "checks": [
+    {
+      "details": {
+        "required_fields": "",
+        "unique_fields": "id"
+      },
+      "message": "unique_fields must also appear in required_fields: id",
+      "name": "quality_contract",
+      "outcome": "failed",
+      "phase": "config"
+    },
+    {
+      "details": {
+        "schema_mode": "infer"
+      },
+      "message": "Schema evolution is enabled; unexpected columns will be tolerated.",
+      "name": "schema_contract_mode",
+      "outcome": "passed",
+      "phase": "config"
+    },
+    {
+      "details": {},
+      "message": "No required_fields were configured.",
+      "name": "required_fields",
+      "outcome": "skipped",
+      "phase": "data"
+    },
+    {
+      "details": {},
+      "message": "No dataframe was provided for uniqueness validation.",
+      "name": "unique_fields",
+      "outcome": "skipped",
+      "phase": "data"
+    },
+    {
+      "details": {},
+      "message": "No dataframe was provided for schema validation.",
+      "name": "schema_expectations",
+      "outcome": "skipped",
+      "phase": "data"
+    },
+    {
+      "details": {},
+      "message": "No dataframe was provided for bronze output sanity checks.",
+      "name": "output_columns",
+      "outcome": "skipped",
+      "phase": "output"
+    },
+    {
+      "details": {
+        "checked_outputs": "2"
+      },
+      "message": "All materialized outputs satisfy the configured zone contracts.",
+      "name": "materialized_outputs",
+      "outcome": "passed",
+      "phase": "output"
+    },
+    {
+      "details": {
+        "write_strategy": "replace_table"
+      },
+      "message": "Write strategy 'replace_table' is not an upsert; the whole table was rewritten from the frame the in-flight uniqueness check already covered.",
+      "name": "bronze_key_uniqueness",
+      "outcome": "skipped",
+      "phase": "output"
+    }
+  ],
+  "emitted_at": "2026-07-04T12:00:05+00:00",
+  "environment": "local",
+  "metadata": {
+    "allow_schema_evolution": "True",
+    "schema_expectation_source": ""
+  },
+  "run_id": "order15-quality_failure",
+  "source_id": "baseline_api",
+  "source_name": "Baseline api source",
+  "strategy_family": "api",
+  "strategy_variant": "page_number_api",
+  "summary": {
+    "failed": 1,
+    "passed": 2,
+    "skipped": 5
+  }
+}

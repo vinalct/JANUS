@@ -1,0 +1,97 @@
+{
+  "artifacts": [
+    {
+      "checksum": "a119f76d9693de24d0e06e349c640358213872ab9717f63b17d4612e21e45c05",
+      "format": "json",
+      "path": "<PROJECT>/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-replay/pages/page-0001.json"
+    }
+  ],
+  "checkpoint_field": "updated_at",
+  "checkpoint_strategy": "max_value",
+  "config_version": "5d46fef77a2b9fe273759ca6953f5bd87538b61f7e41b3d1c5bf586a0f81d82a",
+  "configured_outputs": [
+    {
+      "format": "json",
+      "path": "<PROJECT>/data/raw/baseline_api",
+      "zone": "raw"
+    },
+    {
+      "format": "iceberg",
+      "path": "<PROJECT>/data/bronze/baseline_api",
+      "zone": "bronze"
+    },
+    {
+      "format": "json",
+      "path": "<PROJECT>/data/metadata/baseline_api",
+      "zone": "metadata"
+    }
+  ],
+  "emitted_at": "2026-07-04T12:00:05+00:00",
+  "environment": "local",
+  "extraction_metadata": {
+    "raw_artifact_root": "<PROJECT>/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-replay",
+    "raw_to_bronze": "true",
+    "rediscovered_raw_artifact_count": "1"
+  },
+  "extraction_mode": "full_refresh",
+  "materialized_outputs": [
+    {
+      "format": "json",
+      "metadata": {
+        "checksum": "a119f76d9693de24d0e06e349c640358213872ab9717f63b17d4612e21e45c05"
+      },
+      "mode": "overwrite",
+      "partition_by": [
+        "ingestion_date"
+      ],
+      "path": "<PROJECT>/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-replay/pages/page-0001.json",
+      "records_written": 1,
+      "zone": "raw"
+    },
+    {
+      "format": "iceberg",
+      "metadata": {
+        "writer": "order15-baseline-compute-double"
+      },
+      "mode": "overwrite",
+      "partition_by": [
+        "ingestion_date"
+      ],
+      "path": "bronze.baseline_replay",
+      "records_written": 2,
+      "zone": "bronze"
+    }
+  ],
+  "metadata": {
+    "strategy.artifact_count": "1",
+    "strategy.auth_type": "none",
+    "strategy.pagination_type": "page_number",
+    "strategy.raw_artifact_root": "<PROJECT>/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-replay",
+    "strategy.raw_to_bronze": "true",
+    "strategy.records_extracted": "0",
+    "strategy.rediscovered_raw_artifact_count": "1",
+    "strategy.request_timeout_seconds": "60",
+    "strategy.strategy_family": "api",
+    "strategy.strategy_variant": "page_number_api",
+    "strategy.write_result_count": "2"
+  },
+  "plan_notes": [
+    "strategy_family:api",
+    "strategy_variant:page_number_api",
+    "dispatch:api.page_number_api"
+  ],
+  "run_attributes": {
+    "source_id": "baseline_api",
+    "source_type": "api",
+    "strategy": "api",
+    "strategy_variant": "page_number_api",
+    "trigger": "baseline"
+  },
+  "run_id": "order15-replay",
+  "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+  "source_id": "baseline_api",
+  "source_name": "Baseline api source",
+  "status": "succeeded",
+  "strategy_family": "api",
+  "strategy_variant": "page_number_api"
+}
