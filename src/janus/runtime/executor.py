@@ -277,6 +277,7 @@ class SourceExecutor:
                         extraction_result,
                         write_results,
                         strategy_metadata=strategy_metadata,
+                        validation_report=validation_report,
                     )
                     _log_error(
                         logger,
@@ -301,6 +302,7 @@ class SourceExecutor:
                     extraction_result,
                     write_results,
                     strategy_metadata=strategy_metadata,
+                    validation_report=validation_report,
                 )
                 _log_info(
                     logger,
@@ -336,6 +338,7 @@ class SourceExecutor:
                 extraction_result,
                 write_results,
                 strategy_metadata=strategy_metadata,
+                validation_report=validation_report,
             )
             return _build_executed_run(
                 runtime_planned_run,

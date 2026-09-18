@@ -4,13 +4,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from janus.checkpoints.store import CheckpointStore, CheckpointWriteResult
 from janus.lineage.models import LineageRecord, RunMetadata
 from janus.lineage.persistence import MetadataZonePaths, write_json_atomic
 from janus.models import ExecutionPlan, ExtractionResult, WriteResult
 from janus.utils.logging import StructuredLogger
+
+if TYPE_CHECKING:
+    from janus.quality.store import PersistedValidationReport
 
 STRATEGY_METADATA_PREFIX = "strategy."
 
@@ -24,6 +27,7 @@ class PersistedArtifacts:
     lineage_record: LineageRecord | None = None
     lineage_path: Path | None = None
     checkpoint_result: CheckpointWriteResult | None = None
+    validation_report: PersistedValidationReport | None = None
 
 
 @dataclass(slots=True)
@@ -69,7 +73,9 @@ class RunObserver:
         *,
         finished_at: datetime | None = None,
         strategy_metadata: Mapping[str, Any] | None = None,
+        validation_report: PersistedValidationReport | None = None,
     ) -> PersistedArtifacts:
+        """Persist the success artifacts and hand back the run's outcome evidence."""
         prepared_metadata = _prepare_strategy_metadata(strategy_metadata, logger=self.logger)
 
         run_metadata = RunMetadata.succeeded(
@@ -104,6 +110,7 @@ class RunObserver:
             lineage_record=lineage_record,
             lineage_path=lineage_path,
             checkpoint_result=checkpoint_result,
+            validation_report=validation_report,
         )
 
     def record_failure(
@@ -115,7 +122,9 @@ class RunObserver:
         *,
         finished_at: datetime | None = None,
         strategy_metadata: Mapping[str, Any] | None = None,
+        validation_report: PersistedValidationReport | None = None,
     ) -> PersistedArtifacts:
+        """Persist the failure artifacts and hand back the run's outcome evidence."""
         prepared_metadata = _prepare_strategy_metadata(strategy_metadata, logger=self.logger)
 
         run_metadata = RunMetadata.failed(
@@ -144,6 +153,7 @@ class RunObserver:
             run_metadata_path=run_metadata_path,
             lineage_record=lineage_record,
             lineage_path=lineage_path,
+            validation_report=validation_report,
         )
 
 

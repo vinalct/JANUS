@@ -298,6 +298,7 @@ class RawToBronzeLoader:
                         extraction_result,
                         write_results,
                         strategy_metadata=strategy_metadata,
+                        validation_report=validation_report,
                     )
                     _log_error(
                         logger,
@@ -323,6 +324,7 @@ class RawToBronzeLoader:
                     extraction_result,
                     write_results,
                     strategy_metadata=strategy_metadata,
+                    validation_report=validation_report,
                 )
                 _log_info(
                     logger,
@@ -359,6 +361,7 @@ class RawToBronzeLoader:
                 extraction_result,
                 write_results,
                 strategy_metadata=strategy_metadata,
+                validation_report=validation_report,
             )
             return _build_result(
                 runtime_planned_run,
