@@ -1,5 +1,8 @@
 # OpenLineage mapping contract
 
+For transport configuration, event-file locations, runs-table queries, batch/replay semantics,
+and troubleshooting, see [Queryable observability operations](queryable-observability.md).
+
 JANUS maps run lifecycle records to OpenLineage **core specification 2-0-2**. Every event
 sets:
 

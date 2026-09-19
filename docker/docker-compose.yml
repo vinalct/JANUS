@@ -15,6 +15,7 @@ x-janus-service: &janus-service
     - ${JANUS_PROJECT_ROOT:-..}/tests:/workspace/tests:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/examples:/workspace/examples:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/conf:/workspace/conf:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/docs:/workspace/docs:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/data:/workspace/data:z
     - ${JANUS_PROJECT_ROOT:-..}/pyproject.toml:/workspace/pyproject.toml:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/requirements.txt:/workspace/requirements.txt:ro,z
