@@ -23,6 +23,7 @@ dagster = [
   "dagster==1.13.22",
 ]
 dev = [
+  "jsonschema[format]==4.25.1",
   "mypy==2.2.0",
   "pytest==9.0.2",
   "pytest-cov==7.0.0",
