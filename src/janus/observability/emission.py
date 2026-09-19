@@ -1,8 +1,9 @@
 """Guarded lifecycle fan-out for additive, queryable run observability.
 
 The total terminal-emission budget is five seconds by default. A daemon worker bounds the
-entire operation rather than only the catalog append, so projection and future fan-out
-destinations share one deadline. The runs-table sink receives only the remaining budget.
+entire operation rather than only the catalog append, so every fan-out destination shares one
+deadline: each sink receives only what is left of it, and the join is what actually bounds a
+run's exposure whatever a transport was configured to wait for.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Protocol
 
+from janus.lineage.models import LineageRecord, RunMetadata
 from janus.lineage.store import (
     NullRunEventEmitter,
     PersistedArtifacts,
@@ -26,6 +28,16 @@ from janus.observability.iceberg_sink import (
     IcebergAppendOutcome,
     IcebergAppendResult,
     append_run_record,
+)
+from janus.observability.openlineage.sink import (
+    OpenLineageRunSink,
+    build_openlineage_sink,
+    disabled_openlineage_sink,
+)
+from janus.observability.openlineage.transport import (
+    NOT_CONFIGURED_REASON,
+    OpenLineageEmissionOutcome,
+    OpenLineageEmissionResult,
 )
 from janus.observability.records import RunEvidencePaths, RunRecord
 from janus.observability.runs_table import (
@@ -47,6 +59,20 @@ class RunEmissionOutcome(StrEnum):
     FAILED = "failed"
 
 
+_APPEND_OUTCOMES = {
+    IcebergAppendOutcome.EMITTED: RunEmissionOutcome.EMITTED,
+    IcebergAppendOutcome.SKIPPED: RunEmissionOutcome.SKIPPED,
+    IcebergAppendOutcome.FAILED: RunEmissionOutcome.FAILED,
+}
+
+_QUIET_REASONS = frozenset({NOT_CONFIGURED_REASON})
+_OPENLINEAGE_OUTCOMES = {
+    OpenLineageEmissionOutcome.EMITTED: RunEmissionOutcome.EMITTED,
+    OpenLineageEmissionOutcome.SKIPPED: RunEmissionOutcome.SKIPPED,
+    OpenLineageEmissionOutcome.FAILED: RunEmissionOutcome.FAILED,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class RunEmissionResult:
     """One guarded terminal fan-out result suitable for logs and CLI summaries."""
@@ -58,6 +84,7 @@ class RunEmissionResult:
     stage: str | None = None
     exception_type: str | None = None
     duration_seconds: float = 0.0
+    openlineage: OpenLineageEmissionResult | None = None
 
     @property
     def emitted(self) -> bool:
@@ -76,6 +103,8 @@ class RunEmissionResult:
             summary["stage"] = self.stage
         if self.exception_type is not None:
             summary["exception_type"] = self.exception_type
+        if self.openlineage is not None:
+            summary["openlineage"] = self.openlineage.to_summary()
         return summary
 
 
@@ -109,15 +138,25 @@ class GuardedRunEventEmitter:
         default=lambda persisted: _project_run_record(persisted)
     )
     runs_table_sink: _RunRecordAppender = append_run_record
+    openlineage_sink: OpenLineageRunSink = field(default_factory=disabled_openlineage_sink)
     last_result: RunEmissionResult | None = field(default=None, init=False)
+    last_started_result: RunEmissionResult | None = field(default=None, init=False)
 
     def emit_started(self, plan: ExecutionPlan, persisted: PersistedArtifacts) -> None:
-        del persisted
-        _report_started(
-            self.logger,
-            run_id=plan.run_context.run_id,
-            table_identifier=_safe_table_identifier(self.config),
+        """Emit START through the configured transport; the runs table stays terminal-only."""
+        started_at = time.monotonic()
+        table_identifier = _safe_table_identifier(self.config)
+        result = self._bounded(
+            "started",
+            table_identifier,
+            started_at,
+            lambda results: self._run_started_worker(
+                results, persisted, started_at, table_identifier
+            ),
         )
+        completed = replace(result, duration_seconds=_elapsed(started_at))
+        self.last_started_result = completed
+        _report_lifecycle(self.logger, completed, run_id=plan.run_context.run_id)
 
     def emit_succeeded(self, plan: ExecutionPlan, persisted: PersistedArtifacts) -> None:
         del plan
@@ -130,77 +169,96 @@ class GuardedRunEventEmitter:
     def _emit_terminal(self, lifecycle: str, persisted: PersistedArtifacts) -> None:
         started_at = time.monotonic()
         table_identifier = _safe_table_identifier(self.config)
+        result = self._bounded(
+            lifecycle,
+            table_identifier,
+            started_at,
+            lambda results: self._run_terminal_worker(
+                results, lifecycle, persisted, started_at, table_identifier
+            ),
+        )
+        self._finish(result, started_at)
+
+    def _bounded(
+        self,
+        lifecycle: str,
+        table_identifier: str,
+        started_at: float,
+        worker: Callable[[list[RunEmissionResult]], None],
+    ) -> RunEmissionResult:
+        """Run one fan-out inside the total budget, whatever its destinations cost."""
         if not _valid_timeout(self.timeout_seconds):
-            result = _failed(
+            return _failed(
                 lifecycle,
                 table_identifier,
                 stage="budget",
                 exception_type="InvalidEmissionTimeout",
             )
-            self._finish(result, started_at)
-            return
 
         results: list[RunEmissionResult] = []
         fatal_errors: list[BaseException] = []
+
+        def bridge() -> None:
+            # Anything the per-stage guards did not already turn into data crosses the
+            # thread boundary: a KeyboardInterrupt during emission must still interrupt.
+            try:
+                worker(results)
+            except BaseException as exc:
+                fatal_errors.append(exc)
+
         try:
-            worker = threading.Thread(
-                target=self._run_terminal_worker_with_fatal_bridge,
-                args=(
-                    fatal_errors,
-                    results,
-                    lifecycle,
-                    persisted,
-                    started_at,
-                    table_identifier,
-                ),
+            thread = threading.Thread(
+                target=bridge,
                 name="janus-run-event-emission",
                 daemon=True,
             )
-            worker.start()
-            worker.join(self.timeout_seconds)
+            thread.start()
+            thread.join(self.timeout_seconds)
         except Exception as exc:
-            result = _failed(
+            return _failed(
                 lifecycle,
                 table_identifier,
                 stage="worker",
                 exception_type=type(exc).__name__,
             )
-            self._finish(result, started_at)
-            return
 
-        if worker.is_alive():
-            result = _failed(
+        if thread.is_alive():
+            return _failed(
                 lifecycle,
                 table_identifier,
                 stage="budget",
                 exception_type="EmissionTimeoutError",
             )
-        elif fatal_errors:
+        if fatal_errors:
             raise fatal_errors[0]
-        elif results:
-            result = results[0]
-        else:
-            result = _failed(
-                lifecycle,
-                table_identifier,
-                stage="worker",
-                exception_type="WorkerExitedWithoutResult",
-            )
-        self._finish(result, started_at)
+        if results:
+            return results[0]
+        return _failed(
+            lifecycle,
+            table_identifier,
+            stage="worker",
+            exception_type="WorkerExitedWithoutResult",
+        )
 
-    def _run_terminal_worker_with_fatal_bridge(
+    def _run_started_worker(
         self,
-        fatal_errors: list[BaseException],
         results: list[RunEmissionResult],
-        lifecycle: str,
         persisted: PersistedArtifacts,
         started_at: float,
         table_identifier: str,
     ) -> None:
-        try:
-            self._run_terminal_worker(results, lifecycle, persisted, started_at, table_identifier)
-        except BaseException as exc:
-            fatal_errors.append(exc)
+        openlineage = self._emit_openlineage(persisted.run_metadata, started_at)
+        results.append(
+            RunEmissionResult(
+                lifecycle="started",
+                outcome=_OPENLINEAGE_OUTCOMES[openlineage.outcome],
+                table_identifier=table_identifier,
+                reason=openlineage.reason,
+                stage=openlineage.step,
+                exception_type=openlineage.exception_type,
+                openlineage=openlineage,
+            )
+        )
 
     def _run_terminal_worker(
         self,
@@ -223,6 +281,14 @@ class GuardedRunEventEmitter:
             )
             return
 
+        # One projection, both destinations: the event and the row cannot disagree.
+        openlineage = self._emit_openlineage(
+            persisted.run_metadata,
+            started_at,
+            lineage_record=persisted.lineage_record,
+            run_record=record,
+        )
+
         remaining = self.timeout_seconds - (time.monotonic() - started_at)
         if remaining <= 0:
             results.append(
@@ -231,6 +297,7 @@ class GuardedRunEventEmitter:
                     table_identifier,
                     stage="budget",
                     exception_type="EmissionTimeoutError",
+                    openlineage=openlineage,
                 )
             )
             return
@@ -243,7 +310,7 @@ class GuardedRunEventEmitter:
                 logger=self.logger,
                 timeout_seconds=remaining,
             )
-            results.append(_from_sink_result(lifecycle, sink_result))
+            results.append(_from_sink_result(lifecycle, sink_result, openlineage))
         except Exception as exc:
             results.append(
                 _failed(
@@ -251,14 +318,45 @@ class GuardedRunEventEmitter:
                     table_identifier,
                     stage="runs_table",
                     exception_type=type(exc).__name__,
+                    openlineage=openlineage,
                 )
             )
 
+    def _emit_openlineage(
+        self,
+        run_metadata: RunMetadata,
+        started_at: float,
+        *,
+        lineage_record: LineageRecord | None = None,
+        run_record: RunRecord | None = None,
+    ) -> OpenLineageEmissionResult:
+        """Deliver one event with what is left of the budget; a defective sink is data too."""
+        remaining = self.timeout_seconds - (time.monotonic() - started_at)
+        if remaining <= 0:
+            return _openlineage_failure(
+                self.openlineage_sink,
+                step="budget",
+                exception_type="EmissionTimeoutError",
+            )
+        try:
+            return self.openlineage_sink.emit(
+                run_metadata,
+                lineage_record=lineage_record,
+                run_record=run_record,
+                budget_seconds=remaining,
+                logger=self.logger,
+            )
+        except Exception as exc:
+            return _openlineage_failure(
+                self.openlineage_sink,
+                step="openlineage",
+                exception_type=type(exc).__name__,
+            )
+
     def _finish(self, result: RunEmissionResult, started_at: float) -> None:
-        elapsed = round(time.monotonic() - started_at, 6)
-        completed = replace(result, duration_seconds=elapsed)
+        completed = replace(result, duration_seconds=_elapsed(started_at))
         self.last_result = completed
-        _report_terminal(self.logger, completed)
+        _report_lifecycle(self.logger, completed)
 
 
 def build_run_event_emitter(
@@ -269,8 +367,13 @@ def build_run_event_emitter(
     timeout_seconds: float = DEFAULT_EMISSION_TIMEOUT_SECONDS,
     projector: Callable[[PersistedArtifacts], RunRecord] | None = None,
     runs_table_sink: _RunRecordAppender | None = None,
+    openlineage_sink: OpenLineageRunSink | None = None,
 ) -> GuardedRunEventEmitter:
-    """Build one isolated emitter from one execution's resolved environment profile."""
+    """Build one isolated emitter from one execution's resolved environment profile.
+
+    The transport is selected here, once per run, so a profile error is read and logged once
+    rather than re-read on every lifecycle hook.
+    """
     return GuardedRunEventEmitter(
         config=dict(config),
         resolved_paths=dict(resolved_paths),
@@ -278,6 +381,11 @@ def build_run_event_emitter(
         timeout_seconds=timeout_seconds,
         projector=projector if projector is not None else _project_run_record,
         runs_table_sink=(runs_table_sink if runs_table_sink is not None else append_run_record),
+        openlineage_sink=(
+            openlineage_sink
+            if openlineage_sink is not None
+            else build_openlineage_sink(config, resolved_paths, logger=logger)
+        ),
     )
 
 
@@ -331,19 +439,16 @@ def _project_run_record(persisted: PersistedArtifacts) -> RunRecord:
 def _from_sink_result(
     lifecycle: str,
     result: IcebergAppendResult,
+    openlineage: OpenLineageEmissionResult | None = None,
 ) -> RunEmissionResult:
-    outcomes = {
-        IcebergAppendOutcome.EMITTED: RunEmissionOutcome.EMITTED,
-        IcebergAppendOutcome.SKIPPED: RunEmissionOutcome.SKIPPED,
-        IcebergAppendOutcome.FAILED: RunEmissionOutcome.FAILED,
-    }
     return RunEmissionResult(
         lifecycle=lifecycle,
-        outcome=outcomes[result.outcome],
+        outcome=_APPEND_OUTCOMES[result.outcome],
         table_identifier=result.table_identifier,
         reason=result.reason,
         stage=result.step,
         exception_type=result.exception_type,
+        openlineage=openlineage,
     )
 
 
@@ -353,6 +458,7 @@ def _failed(
     *,
     stage: str,
     exception_type: str,
+    openlineage: OpenLineageEmissionResult | None = None,
 ) -> RunEmissionResult:
     return RunEmissionResult(
         lifecycle=lifecycle,
@@ -360,6 +466,22 @@ def _failed(
         table_identifier=table_identifier,
         reason=f"{stage}_failed",
         stage=stage,
+        exception_type=exception_type,
+        openlineage=openlineage,
+    )
+
+
+def _openlineage_failure(
+    sink: OpenLineageRunSink,
+    *,
+    step: str,
+    exception_type: str,
+) -> OpenLineageEmissionResult:
+    return OpenLineageEmissionResult(
+        outcome=OpenLineageEmissionOutcome.FAILED,
+        transport=sink.transport.kind,
+        reason=f"{step}_failed",
+        step=step,
         exception_type=exception_type,
     )
 
@@ -378,27 +500,24 @@ def _valid_timeout(value: float) -> bool:
         return False
 
 
-def _report_started(
-    logger: StructuredLogger | _EmissionLogger | None,
-    *,
-    run_id: str,
-    table_identifier: str,
-) -> None:
-    fields = {
-        "lifecycle": "started",
-        "outcome": "terminal_only",
-        "run_id": run_id,
-        "table_identifier": table_identifier,
-    }
-    _log(logger, "info", "run_event_emission_finished", fields)
+def _elapsed(started_at: float) -> float:
+    return round(time.monotonic() - started_at, 6)
 
 
-def _report_terminal(
+def _report_lifecycle(
     logger: StructuredLogger | _EmissionLogger | None,
     result: RunEmissionResult,
+    *,
+    run_id: str | None = None,
 ) -> None:
-    level = "info" if result.emitted else "warning"
-    _log(logger, level, "run_event_emission_finished", result.to_summary())
+    """One event per lifecycle hook, at info when it landed and warning when it did not."""
+    fields = result.to_summary()
+    if run_id is not None:
+        fields["run_id"] = run_id
+    if result.lifecycle == "started":
+        fields["runs_table"] = "terminal_only"
+    level = "info" if result.emitted or result.reason in _QUIET_REASONS else "warning"
+    _log(logger, level, "run_event_emission_finished", fields)
 
 
 def _log(

@@ -35,3 +35,13 @@ storage:
   raw_dir: ${JANUS_RAW_DIR:-data/raw}
   bronze_dir: ${JANUS_BRONZE_DIR:-data/bronze}
   metadata_dir: ${JANUS_METADATA_DIR:-data/metadata}
+
+observability:
+  openlineage:
+    transport: ${JANUS_OPENLINEAGE_TRANSPORT:-file}
+    path: ${JANUS_OPENLINEAGE_EVENTS_DIR:-lineage/openlineage}
+    url: ${JANUS_OPENLINEAGE_URL:-}
+    endpoint: ${JANUS_OPENLINEAGE_ENDPOINT:-}
+    timeout_seconds: ${JANUS_OPENLINEAGE_TIMEOUT_SECONDS:-}
+    auth:
+      token: ${JANUS_OPENLINEAGE_API_KEY:-}

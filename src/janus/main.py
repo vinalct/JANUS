@@ -13,6 +13,7 @@ from janus.cli.common import (
     parse_started_at,
 )
 from janus.cli.run_all import main as run_all_main
+from janus.observability.openlineage import resolve_openlineage_settings
 from janus.planner import Planner, PlannerError, PlanningRequest
 from janus.registry import SourceNotFoundError
 from janus.runtime import SourceExecutor, SparkSessionProvider
@@ -129,6 +130,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         config = load_environment_config(args.environment, project_root)
         resolved_paths = prepare_runtime(config, project_root)
+        resolve_openlineage_settings(config)
     except (FileNotFoundError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2

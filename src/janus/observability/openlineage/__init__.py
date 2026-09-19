@@ -1,4 +1,4 @@
-"""Engine-free OpenLineage event vocabulary and pure JANUS mapping."""
+"""Engine-free OpenLineage event vocabulary, pure JANUS mapping, and the transports out."""
 
 from janus.observability.openlineage.constants import (
     JANUS_RUN_FACET_SCHEMA_URL,
@@ -14,16 +14,68 @@ from janus.observability.openlineage.facets import (
     OpenLineageDatasetContext,
     build_openlineage_run_event,
 )
+from janus.observability.openlineage.settings import (
+    DEFAULT_EVENTS_DIRECTORY,
+    DEFAULT_HTTP_ENDPOINT,
+    DEFAULT_HTTP_TIMEOUT_SECONDS,
+    MAX_HTTP_TIMEOUT_SECONDS,
+    SUPPORTED_TRANSPORTS,
+    FileTransportSettings,
+    HttpTransportSettings,
+    OpenLineageProfileError,
+    OpenLineageSettings,
+    OpenLineageTransportKind,
+    resolve_openlineage_settings,
+)
+from janus.observability.openlineage.sink import (
+    OpenLineageRunSink,
+    build_openlineage_sink,
+    disabled_openlineage_sink,
+)
+from janus.observability.openlineage.transport import (
+    NOT_CONFIGURED_REASON,
+    PROFILE_ERROR_REASON,
+    DisabledOpenLineageTransport,
+    FileOpenLineageTransport,
+    HttpOpenLineageTransport,
+    OpenLineageEmissionOutcome,
+    OpenLineageEmissionResult,
+    OpenLineageTransport,
+    build_openlineage_transport,
+)
 
 __all__ = [
     "CUSTOM_ONLY_LINEAGE_FIELDS",
+    "DEFAULT_EVENTS_DIRECTORY",
+    "DEFAULT_HTTP_ENDPOINT",
+    "DEFAULT_HTTP_TIMEOUT_SECONDS",
     "DELIBERATELY_DROPPED_LINEAGE_FIELDS",
     "JANUS_RUN_FACET_SCHEMA_URL",
     "LINEAGE_FIELD_MAPPING",
+    "MAX_HTTP_TIMEOUT_SECONDS",
+    "NOT_CONFIGURED_REASON",
     "OPENLINEAGE_PRODUCER",
     "OPENLINEAGE_SCHEMA_URL",
     "OPENLINEAGE_SPEC_VERSION",
+    "PROFILE_ERROR_REASON",
+    "SUPPORTED_TRANSPORTS",
+    "DisabledOpenLineageTransport",
+    "FileOpenLineageTransport",
+    "FileTransportSettings",
+    "HttpOpenLineageTransport",
+    "HttpTransportSettings",
     "OpenLineageDatasetContext",
+    "OpenLineageEmissionOutcome",
+    "OpenLineageEmissionResult",
+    "OpenLineageProfileError",
+    "OpenLineageRunSink",
+    "OpenLineageSettings",
+    "OpenLineageTransport",
+    "OpenLineageTransportKind",
     "build_openlineage_run_event",
+    "build_openlineage_sink",
+    "build_openlineage_transport",
+    "disabled_openlineage_sink",
     "openlineage_run_id",
+    "resolve_openlineage_settings",
 ]
