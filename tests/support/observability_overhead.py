@@ -1,4 +1,4 @@
-"""NFR-3 baseline: what one run costs, and the observer's share of it, before emission."""
+"""NFR-3: measure one run and its observer share before or after guarded emission."""
 
 from __future__ import annotations
 
@@ -9,16 +9,38 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import ClassVar
 
+from janus.observability import (
+    IcebergAppendOutcome,
+    IcebergAppendResult,
+    build_run_event_emitter,
+)
 from tests.support import observability_baseline as baseline
 
 REPEATS = 30
 MEASURED_CASES = ("api_success", "quality_failure", "empty_handoff")
+GUARDED_EMISSION = "--guarded-emission" in sys.argv[1:]
+
+
+def _successful_sink(*args: object, **kwargs: object) -> IcebergAppendResult:
+    del args, kwargs
+    return IcebergAppendResult(
+        IcebergAppendOutcome.EMITTED,
+        "metadata.runs",
+    )
 
 
 class TimedObserver(baseline.FixedObserver):
     """The captured observer, timed in place: it does exactly what it did before."""
 
     calls: ClassVar[list[tuple[str, int]]] = []
+
+    def __init__(self) -> None:
+        if GUARDED_EMISSION:
+            super().__init__(
+                emitter=build_run_event_emitter({}, {}, runs_table_sink=_successful_sink)
+            )
+        else:
+            super().__init__()
 
     def start_run(self, *args, **kwargs):
         started = time.perf_counter_ns()
@@ -87,9 +109,7 @@ def measure(case: str, repeats: int = REPEATS) -> None:
 
 
 def main() -> None:
-    print(
-        f"python {sys.version.split()[0]}  repeats={REPEATS}  timer=time.perf_counter_ns"
-    )
+    print(f"python {sys.version.split()[0]}  repeats={REPEATS}  timer=time.perf_counter_ns")
     for case in MEASURED_CASES:
         measure(case)
 

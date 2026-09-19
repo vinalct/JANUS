@@ -145,6 +145,13 @@ timings.
 Terminal statuses are `succeeded`, `failed`, and `skipped`. Only a successful upstream
 releases a dependent.
 
+Queryable run observability follows attempts, not planned nodes. Every attempted source emits
+its own terminal row with `pipeline_run_id`, `pipeline_attempt`, and `trigger` copied from the
+run attributes. A skipped source never reaches `RunObserver`, so it emits neither a
+`metadata.runs` row nor an OpenLineage event. This is intentional: the pipeline summary is
+the authoritative record for skips. A batch with five planned sources and three attempts
+therefore produces three run rows, not five.
+
 ### Exit codes
 
 | Code | Meaning |

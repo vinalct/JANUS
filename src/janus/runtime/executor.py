@@ -9,6 +9,11 @@ from janus.lineage import RunObserver
 from janus.models import ExecutionPlan, ExtractionResult, WriteResult
 from janus.models.source_config import OutputTarget
 from janus.normalizers import BaseNormalizer
+from janus.observability import (
+    RunEmissionResult,
+    latest_run_emission,
+    wire_run_event_emitter,
+)
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, QualityGate, ValidationReportStore
 from janus.readers import SparkDatasetReader
@@ -43,6 +48,7 @@ class ExecutedRun:
     checkpoint_history_path: Path | None = None
     failure_reason: str | None = None
     error_type: str | None = None
+    run_event_emission: RunEmissionResult | None = None
 
     @property
     def is_successful(self) -> bool:
@@ -80,9 +86,7 @@ class ExecutedRun:
                     else None
                 ),
                 "validation_report_path": (
-                    str(self.validation_report.path)
-                    if self.validation_report is not None
-                    else None
+                    str(self.validation_report.path) if self.validation_report is not None else None
                 ),
             },
         }
@@ -115,6 +119,8 @@ class ExecutedRun:
             summary["failure_reason"] = self.failure_reason
         if self.error_type is not None:
             summary["error_type"] = self.error_type
+        if self.run_event_emission is not None:
+            summary["run_event_emission"] = self.run_event_emission.to_summary()
 
         return summary
 
@@ -124,9 +130,7 @@ class SourceExecutor:
     logger: StructuredLogger | None = None
     reader: SparkDatasetReader = field(default_factory=SparkDatasetReader)
     normalizer: BaseNormalizer = field(default_factory=BaseNormalizer)
-    quality_gate: QualityGate = field(
-        default_factory=lambda: QualityGate(ValidationReportStore())
-    )
+    quality_gate: QualityGate = field(default_factory=lambda: QualityGate(ValidationReportStore()))
     observer: RunObserver = field(default_factory=RunObserver)
     writer_factory: Callable[[StorageLayout], SparkDatasetWriter] = SparkDatasetWriter
     storage_layout_resolver: Callable[[ExecutionPlan, Mapping[str, Any]], StorageLayout] = field(
@@ -143,8 +147,14 @@ class SourceExecutor:
         plan = _plan_with_storage_layout_outputs(planned_run.plan, storage_layout)
         runtime_planned_run = replace(planned_run, plan=plan)
         logger = _bind_execution_logger(self.logger, plan)
-        _attach_strategy_logger(planned_run.strategy, logger)
 
+        observer = _prepare_execution_observer(
+            self.observer,
+            planned_run.strategy,
+            environment_config,
+            spark_provider,
+            logger,
+        )
         extraction_result: ExtractionResult | None = None
         write_results: tuple[WriteResult, ...] = ()
         validation_report: PersistedValidationReport | None = None
@@ -162,7 +172,7 @@ class SourceExecutor:
                     metadata_output_path=plan.metadata_output.path,
                 )
 
-                self.observer.start_run(plan)
+                observer.start_run(plan)
                 _log_info(logger, "run_observation_started")
 
                 _log_info(
@@ -227,9 +237,7 @@ class SourceExecutor:
                     write_results = raw_write_results + bronze_results
                     # Read the committed table for the bronze uniqueness oracle while the
                     # session is still live — this is not a new lifetime.
-                    bronze_dataframe = read_committed_bronze(
-                        spark_provider.get(), bronze_results
-                    )
+                    bronze_dataframe = read_committed_bronze(spark_provider.get(), bronze_results)
                 else:
                     _log_info(logger, "spark_session_skipped")
 
@@ -271,7 +279,7 @@ class SourceExecutor:
 
                 if not validation_report.report.is_successful:
                     failure = RuntimeError(_quality_failure_message(validation_report))
-                    persisted = self.observer.record_failure(
+                    persisted = observer.record_failure(
                         plan,
                         failure,
                         extraction_result,
@@ -293,11 +301,12 @@ class SourceExecutor:
                         write_results=write_results,
                         validation_report=validation_report,
                         strategy_metadata=strategy_metadata,
+                        run_event_emission=latest_run_emission(observer),
                         failure_reason=str(failure),
                         error_type=type(failure).__name__,
                     )
 
-                persisted = self.observer.record_success(
+                persisted = observer.record_success(
                     plan,
                     extraction_result,
                     write_results,
@@ -320,6 +329,7 @@ class SourceExecutor:
                     write_results=write_results,
                     validation_report=validation_report,
                     strategy_metadata=strategy_metadata,
+                    run_event_emission=latest_run_emission(observer),
                 )
             finally:
                 # Idempotent, so the release above is not repeated; this guarantees one
@@ -332,7 +342,7 @@ class SourceExecutor:
                 failure_reason=str(exc),
                 error_type=type(exc).__name__,
             )
-            persisted = self.observer.record_failure(
+            persisted = observer.record_failure(
                 plan,
                 exc,
                 extraction_result,
@@ -348,6 +358,7 @@ class SourceExecutor:
                 write_results=write_results,
                 validation_report=validation_report,
                 strategy_metadata=strategy_metadata,
+                run_event_emission=latest_run_emission(observer),
                 failure_reason=str(exc),
                 error_type=type(exc).__name__,
             )
@@ -358,6 +369,22 @@ def _attach_strategy_logger(strategy: Any, logger: StructuredLogger | None) -> N
         return
     if strategy.logger is None:
         strategy.logger = logger
+
+
+def _prepare_execution_observer(
+    observer: RunObserver,
+    strategy: Any,
+    environment_config: Mapping[str, Any],
+    spark_provider: SparkSessionProvider,
+    logger: StructuredLogger | None,
+) -> RunObserver:
+    _attach_strategy_logger(strategy, logger)
+    return wire_run_event_emitter(
+        observer,
+        environment_config,
+        getattr(spark_provider, "resolved_paths", {}),
+        logger,
+    )
 
 
 def _plan_with_storage_layout_outputs(
@@ -399,6 +426,7 @@ def _build_executed_run(
     write_results: tuple[WriteResult, ...],
     validation_report: PersistedValidationReport | None,
     strategy_metadata: dict[str, Any],
+    run_event_emission: RunEmissionResult | None,
     failure_reason: str | None = None,
     error_type: str | None = None,
 ) -> ExecutedRun:
@@ -416,6 +444,7 @@ def _build_executed_run(
         write_results=write_results,
         validation_report=validation_report,
         strategy_metadata=strategy_metadata,
+        run_event_emission=run_event_emission,
         run_metadata_path=getattr(persisted, "run_metadata_path", None),
         lineage_path=getattr(persisted, "lineage_path", None),
         checkpoint_state_path=checkpoint_state_path,

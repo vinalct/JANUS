@@ -64,6 +64,12 @@ class SparkSessionProvider:
         return dict(self._session_info) if self._session_info is not None else None
 
     @property
+    def resolved_paths(self) -> dict[str, RuntimeLocation]:
+        """Return a copy of runtime locations without acquiring a Spark session."""
+
+        return dict(self._resolved_paths)
+
+    @property
     def was_started(self) -> bool:
         """Return whether this provider has ever started a session of its own."""
 
