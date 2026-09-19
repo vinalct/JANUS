@@ -1,5 +1,11 @@
 """Additive, best-effort run observability: the queryable projection of one run."""
 
+from janus.observability.iceberg_sink import (
+    DEFAULT_APPEND_TIMEOUT_SECONDS,
+    IcebergAppendOutcome,
+    IcebergAppendResult,
+    append_run_record,
+)
 from janus.observability.records import RunEvidencePaths, RunRecord
 from janus.observability.runs_table import (
     DEFAULT_RUNS_TABLE_IDENTIFIER,
@@ -24,6 +30,7 @@ from janus.observability.vocabulary import (
 )
 
 __all__ = [
+    "DEFAULT_APPEND_TIMEOUT_SECONDS",
     "DEFAULT_RUNS_TABLE_IDENTIFIER",
     "MAX_FAILURE_REASON_LENGTH",
     "QUALITY_NOT_RUN",
@@ -33,6 +40,8 @@ __all__ = [
     "RUN_RECORD_SCHEMA_VERSION",
     "RUN_RECORD_STATUSES",
     "SUPPORTED_QUALITY_OUTCOMES",
+    "IcebergAppendOutcome",
+    "IcebergAppendResult",
     "IcebergType",
     "RunEvidencePaths",
     "RunRecord",
@@ -41,6 +50,7 @@ __all__ = [
     "RunsTableDeclaration",
     "RunsTablePartitionField",
     "RunsTableTarget",
+    "append_run_record",
     "resolve_runs_table",
     "resolve_runs_table_identifier",
 ]
