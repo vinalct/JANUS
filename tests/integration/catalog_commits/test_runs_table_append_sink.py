@@ -8,15 +8,29 @@ from queue import Empty
 from typing import Any
 from uuid import uuid4
 
+import pytest
+
 from janus.observability import IcebergAppendOutcome, RunRecord, append_run_record
 from janus.utils.catalog_properties import (
     derive_pyiceberg_catalog_name,
     derive_pyiceberg_catalog_properties,
 )
-from tests.support.spark_sessions import CatalogTarget, require_pyiceberg
+from tests.support.spark_sessions import (
+    CatalogTarget,
+    catalog_acceptance_prerequisites_available,
+    require_pyiceberg,
+)
 
 PROCESS_RESULT_TIMEOUT_SECONDS = 15
 PROCESS_EXIT_TIMEOUT_SECONDS = 20
+
+RUNS_TABLE_SKIP_REASON = (
+    "AC1_REAL_CATALOG_SUITE_UNAVAILABLE: catalog engines or seeded jars are missing"
+)
+pytestmark = pytest.mark.skipif(
+    not catalog_acceptance_prerequisites_available(),
+    reason=RUNS_TABLE_SKIP_REASON,
+)
 
 
 def _record(run_id: str) -> RunRecord:

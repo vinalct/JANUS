@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import pytest
+
 from janus.lineage import RunObserver, compute_config_version
 from janus.observability import (
     IcebergAppendOutcome,
@@ -22,12 +24,23 @@ from janus.strategies.api import ApiStrategy
 from janus.strategies.catalog import CatalogStrategy
 from janus.utils.storage import StorageLayout
 from tests.support import observability_baseline as baseline
-from tests.support.spark_sessions import CatalogTarget
+from tests.support.spark_sessions import (
+    CatalogTarget,
+    catalog_acceptance_prerequisites_available,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 QUERY_DIRECTORY = PROJECT_ROOT / "docs" / "queries" / "observability"
 STARTED_AT = datetime(2026, 7, 4, 12, 0, tzinfo=UTC)
 FINISHED_AT = datetime(2026, 7, 4, 12, 0, 5, tzinfo=UTC)
+
+REAL_CATALOG_SKIP_REASON = (
+    "AC1_REAL_CATALOG_SUITE_UNAVAILABLE: catalog engines or seeded jars are missing"
+)
+AC2_QUERY_SKIP_REASON = (
+    "AC2_SEEDED_QUERY_SUITE_UNAVAILABLE: catalog engines or seeded jars are missing"
+)
+CATALOG_ACCEPTANCE_AVAILABLE = catalog_acceptance_prerequisites_available()
 
 
 class _FixedObserver(RunObserver):
@@ -153,6 +166,10 @@ def _execute_case(
     )
 
 
+@pytest.mark.skipif(
+    not CATALOG_ACCEPTANCE_AVAILABLE,
+    reason=REAL_CATALOG_SKIP_REASON,
+)
 def test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources(
     catalog_target: CatalogTarget,
     shared_catalog_session,
@@ -268,6 +285,10 @@ def _seed_record(
     )
 
 
+@pytest.mark.skipif(
+    not CATALOG_ACCEPTANCE_AVAILABLE,
+    reason=AC2_QUERY_SKIP_REASON,
+)
 def test_published_ac2_queries_execute_verbatim_with_retry_and_window_boundaries(
     catalog_target: CatalogTarget,
     shared_catalog_session,

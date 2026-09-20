@@ -118,10 +118,6 @@ def _dataset_context(
     """Name datasets from the catalog identity the profile declares, doing no I/O."""
     warehouse = resolved_paths.get(ICEBERG_WAREHOUSE_PATH_KEY)
     if warehouse is None:
-        spark = config.get("spark", {})
-        iceberg = spark.get("iceberg", {}) if isinstance(spark, Mapping) else {}
-        warehouse = iceberg.get("warehouse_dir") if isinstance(iceberg, Mapping) else None
-    if warehouse is None:
         raise ValueError("the profile resolves no Iceberg warehouse to name datasets under")
     return OpenLineageDatasetContext(
         catalog_name=derive_pyiceberg_catalog_name(dict(config)),
