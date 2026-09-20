@@ -1,0 +1,435 @@
+{
+  "compute_double_tables": {},
+  "events": [
+    "request"
+  ],
+  "evidence": "offline boundary capture; HTTP and compute doubles; no Spark or Iceberg commit",
+  "persisted": {
+    "data/metadata/C/lineage/order14-empty.json": {
+      "artifacts": [
+        {
+          "checksum": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+          "format": "json",
+          "path": "<PROJECT>/data/raw/C/runs/ingestion_date=2026-09-13/run_id=order14-empty/pages/page-0001.json"
+        }
+      ],
+      "checkpoint_strategy": "none",
+      "config_version": "6020efc6bbc5e17b710b56ecb21a6dc8482337fbe1636e98f7733dbdc5d1ddc9",
+      "configured_outputs": [
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/raw/C",
+          "zone": "raw"
+        },
+        {
+          "format": "iceberg",
+          "path": "<PROJECT>/data/bronze/C",
+          "zone": "bronze"
+        },
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/metadata/C",
+          "zone": "metadata"
+        }
+      ],
+      "emitted_at": "2026-09-13T12:00:05+00:00",
+      "environment": "local",
+      "extraction_metadata": {
+        "attempt_count": "1",
+        "auth_type": "none",
+        "checkpoint_loaded": "false",
+        "dead_letter_count": "0",
+        "dead_letter_skipped_count": "0",
+        "pagination_concurrency": "1",
+        "pagination_type": "page_number",
+        "raw_path_prefix": "runs/ingestion_date=2026-09-13/run_id=order14-empty",
+        "records_extracted": "0",
+        "request_count": "1",
+        "request_input_count": "1",
+        "request_input_type": "none",
+        "retry_count": "0"
+      },
+      "extraction_mode": "full_refresh",
+      "materialized_outputs": [
+        {
+          "format": "json",
+          "metadata": {
+            "checksum": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "<PROJECT>/data/raw/C/runs/ingestion_date=2026-09-13/run_id=order14-empty/pages/page-0001.json",
+          "records_written": 1,
+          "zone": "raw"
+        }
+      ],
+      "metadata": {
+        "strategy.artifact_count": "1",
+        "strategy.attempt_count": "1",
+        "strategy.auth_type": "none",
+        "strategy.checkpoint_loaded": "false",
+        "strategy.dead_letter_count": "0",
+        "strategy.dead_letter_skipped_count": "0",
+        "strategy.pagination_concurrency": "1",
+        "strategy.pagination_type": "page_number",
+        "strategy.raw_path_prefix": "runs/ingestion_date=2026-09-13/run_id=order14-empty",
+        "strategy.records_extracted": "0",
+        "strategy.request_count": "1",
+        "strategy.request_input_count": "1",
+        "strategy.request_input_type": "none",
+        "strategy.request_timeout_seconds": "60",
+        "strategy.retry_count": "0",
+        "strategy.strategy_family": "api",
+        "strategy.strategy_variant": "page_number_api",
+        "strategy.write_result_count": "1"
+      },
+      "plan_notes": [
+        "strategy_family:api",
+        "strategy_variant:page_number_api",
+        "dispatch:api.page_number_api"
+      ],
+      "records_extracted": 0,
+      "run_attributes": {
+        "source_hook": "order14.empty",
+        "source_id": "C",
+        "source_type": "api",
+        "strategy": "api",
+        "strategy_variant": "page_number_api",
+        "trigger": "baseline"
+      },
+      "run_id": "order14-empty",
+      "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+      "source_hook": "order14.empty",
+      "source_id": "C",
+      "source_name": "Synthetic C",
+      "status": "succeeded",
+      "strategy_family": "api",
+      "strategy_variant": "page_number_api"
+    },
+    "data/metadata/C/runs/order14-empty.json": {
+      "checkpoint_strategy": "none",
+      "configured_outputs": [
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/raw/C",
+          "zone": "raw"
+        },
+        {
+          "format": "iceberg",
+          "path": "<PROJECT>/data/bronze/C",
+          "zone": "bronze"
+        },
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/metadata/C",
+          "zone": "metadata"
+        }
+      ],
+      "duration_seconds": 5.0,
+      "ended_at": "2026-09-13T12:00:05+00:00",
+      "environment": "local",
+      "extraction_mode": "full_refresh",
+      "materialized_outputs": [
+        {
+          "format": "json",
+          "metadata": {
+            "checksum": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "<PROJECT>/data/raw/C/runs/ingestion_date=2026-09-13/run_id=order14-empty/pages/page-0001.json",
+          "records_written": 1,
+          "zone": "raw"
+        }
+      ],
+      "metadata": {
+        "strategy.artifact_count": "1",
+        "strategy.attempt_count": "1",
+        "strategy.auth_type": "none",
+        "strategy.checkpoint_loaded": "false",
+        "strategy.dead_letter_count": "0",
+        "strategy.dead_letter_skipped_count": "0",
+        "strategy.pagination_concurrency": "1",
+        "strategy.pagination_type": "page_number",
+        "strategy.raw_path_prefix": "runs/ingestion_date=2026-09-13/run_id=order14-empty",
+        "strategy.records_extracted": "0",
+        "strategy.request_count": "1",
+        "strategy.request_input_count": "1",
+        "strategy.request_input_type": "none",
+        "strategy.request_timeout_seconds": "60",
+        "strategy.retry_count": "0",
+        "strategy.strategy_family": "api",
+        "strategy.strategy_variant": "page_number_api",
+        "strategy.write_result_count": "1"
+      },
+      "plan_notes": [
+        "strategy_family:api",
+        "strategy_variant:page_number_api",
+        "dispatch:api.page_number_api"
+      ],
+      "records_extracted": 0,
+      "run_attributes": {
+        "source_hook": "order14.empty",
+        "source_id": "C",
+        "source_type": "api",
+        "strategy": "api",
+        "strategy_variant": "page_number_api",
+        "trigger": "baseline"
+      },
+      "run_id": "order14-empty",
+      "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+      "source_id": "C",
+      "source_name": "Synthetic C",
+      "started_at": "2026-09-13T12:00:00+00:00",
+      "status": "succeeded",
+      "strategy_family": "api",
+      "strategy_variant": "page_number_api"
+    },
+    "data/metadata/C/validations/order14-empty.json": {
+      "checks": [
+        {
+          "details": {
+            "required_fields": "",
+            "unique_fields": ""
+          },
+          "message": "Quality rules are internally consistent.",
+          "name": "quality_contract",
+          "outcome": "passed",
+          "phase": "config"
+        },
+        {
+          "details": {
+            "schema_mode": "infer"
+          },
+          "message": "Schema evolution is enabled; unexpected columns will be tolerated.",
+          "name": "schema_contract_mode",
+          "outcome": "passed",
+          "phase": "config"
+        },
+        {
+          "details": {},
+          "message": "No required_fields were configured.",
+          "name": "required_fields",
+          "outcome": "skipped",
+          "phase": "data"
+        },
+        {
+          "details": {},
+          "message": "No unique_fields were configured.",
+          "name": "unique_fields",
+          "outcome": "skipped",
+          "phase": "data"
+        },
+        {
+          "details": {},
+          "message": "No dataframe was provided for schema validation.",
+          "name": "schema_expectations",
+          "outcome": "skipped",
+          "phase": "data"
+        },
+        {
+          "details": {},
+          "message": "No dataframe was provided for bronze output sanity checks.",
+          "name": "output_columns",
+          "outcome": "skipped",
+          "phase": "output"
+        },
+        {
+          "details": {
+            "checked_outputs": "1"
+          },
+          "message": "All materialized outputs satisfy the configured zone contracts.",
+          "name": "materialized_outputs",
+          "outcome": "passed",
+          "phase": "output"
+        },
+        {
+          "details": {},
+          "message": "No unique_fields were configured.",
+          "name": "bronze_key_uniqueness",
+          "outcome": "skipped",
+          "phase": "output"
+        }
+      ],
+      "emitted_at": "2026-09-13T12:00:05+00:00",
+      "environment": "local",
+      "metadata": {
+        "allow_schema_evolution": "True",
+        "schema_expectation_source": ""
+      },
+      "run_id": "order14-empty",
+      "source_id": "C",
+      "source_name": "Synthetic C",
+      "strategy_family": "api",
+      "strategy_variant": "page_number_api",
+      "summary": {
+        "failed": 0,
+        "passed": 3,
+        "skipped": 5
+      }
+    }
+  },
+  "requests": [
+    "https://fixtures.invalid/C?page=1&size=10"
+  ],
+  "summary": {
+    "executed_run": {
+      "artifact_count": 1,
+      "artifacts": [
+        {
+          "checksum": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+          "format": "json",
+          "path": "<PROJECT>/data/raw/C/runs/ingestion_date=2026-09-13/run_id=order14-empty/pages/page-0001.json"
+        }
+      ],
+      "checkpoint_value": null,
+      "extraction_metadata": {
+        "attempt_count": "1",
+        "auth_type": "none",
+        "checkpoint_loaded": "false",
+        "dead_letter_count": "0",
+        "dead_letter_skipped_count": "0",
+        "pagination_concurrency": "1",
+        "pagination_type": "page_number",
+        "raw_path_prefix": "runs/ingestion_date=2026-09-13/run_id=order14-empty",
+        "records_extracted": "0",
+        "request_count": "1",
+        "request_input_count": "1",
+        "request_input_type": "none",
+        "retry_count": "0"
+      },
+      "materialized_outputs": [
+        {
+          "format": "json",
+          "metadata": {
+            "checksum": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "<PROJECT>/data/raw/C/runs/ingestion_date=2026-09-13/run_id=order14-empty/pages/page-0001.json",
+          "records_written": 1,
+          "zone": "raw"
+        }
+      ],
+      "metadata_outputs": {
+        "checkpoint_history_path": null,
+        "checkpoint_state_path": null,
+        "lineage_path": "<PROJECT>/data/metadata/C/lineage/order14-empty.json",
+        "run_metadata_path": "<PROJECT>/data/metadata/C/runs/order14-empty.json",
+        "validation_report_path": "<PROJECT>/data/metadata/C/validations/order14-empty.json"
+      },
+      "records_extracted": 0,
+      "status": "succeeded",
+      "strategy_metadata": {
+        "artifact_count": 1,
+        "attempt_count": "1",
+        "auth_type": "none",
+        "checkpoint_loaded": "false",
+        "checkpoint_value": "",
+        "dead_letter_count": "0",
+        "dead_letter_skipped_count": "0",
+        "pagination_concurrency": "1",
+        "pagination_type": "page_number",
+        "raw_path_prefix": "runs/ingestion_date=2026-09-13/run_id=order14-empty",
+        "records_extracted": "0",
+        "request_count": "1",
+        "request_input_count": "1",
+        "request_input_type": "none",
+        "request_timeout_seconds": 60,
+        "retry_count": "0",
+        "strategy_family": "api",
+        "strategy_variant": "page_number_api",
+        "write_result_count": 1
+      },
+      "validation": {
+        "failed_checks": [],
+        "is_successful": true,
+        "summary": {
+          "failed": 0,
+          "passed": 3,
+          "skipped": 5
+        }
+      }
+    },
+    "planned_run": {
+      "execution": {
+        "checkpoint_field": null,
+        "checkpoint_strategy": "none",
+        "mode": "full_refresh"
+      },
+      "outputs": {
+        "bronze": {
+          "format": "iceberg",
+          "path": "data/bronze/C"
+        },
+        "metadata": {
+          "format": "json",
+          "path": "data/metadata/C"
+        },
+        "raw": {
+          "format": "json",
+          "path": "data/raw/C"
+        }
+      },
+      "plan_notes": [
+        "strategy_family:api",
+        "strategy_variant:page_number_api",
+        "dispatch:api.page_number_api"
+      ],
+      "pre_run_metadata": {
+        "bronze_output_path": "data/bronze/C",
+        "checkpoint_strategy": "none",
+        "dispatch_path": "api.page_number_api",
+        "environment": "local",
+        "extraction_mode": "full_refresh",
+        "hook_id": "order14.empty",
+        "hook_implementation": "EmptyHandoffHook",
+        "metadata_output_path": "data/metadata/C",
+        "project_root": "<PROJECT>",
+        "raw_output_path": "data/raw/C",
+        "run_id": "order14-empty",
+        "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+        "source_id": "C",
+        "source_name": "Synthetic C",
+        "started_at": "2026-09-13T12:00:00+00:00",
+        "strategy_family": "api",
+        "strategy_variant": "page_number_api"
+      },
+      "run": {
+        "attributes": {
+          "source_hook": "order14.empty",
+          "source_id": "C",
+          "source_type": "api",
+          "strategy": "api",
+          "strategy_variant": "page_number_api",
+          "trigger": "baseline"
+        },
+        "environment": "local",
+        "run_id": "order14-empty",
+        "started_at": "2026-09-13T12:00:00+00:00"
+      },
+      "source": {
+        "config_path": "<PROJECT>/conf/sources/sources.yaml",
+        "hook_id": "order14.empty",
+        "name": "Synthetic C",
+        "source_id": "C",
+        "tags": [
+          "reference"
+        ]
+      },
+      "strategy": {
+        "dispatch_path": "api.page_number_api",
+        "family": "api",
+        "hook_implementation": "EmptyHandoffHook",
+        "implementation": "ApiStrategy",
+        "variant": "page_number_api"
+      }
+    }
+  }
+}

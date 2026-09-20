@@ -3,6 +3,7 @@ PODMAN_COMPOSE_FILE := docker/docker-compose.podman.yml
 SERVICE := janus
 ENVIRONMENT ?= local
 RUN_ARGS ?=
+PYTHON ?= python
 JANUS_UID := $(shell id -u)
 JANUS_GID := $(shell id -g)
 JANUS_PROJECT_ROOT := $(CURDIR)
@@ -16,6 +17,17 @@ POSTGRES_JAR_VERSION := 42.7.13
 POSTGRES_JAR_NAME := org.postgresql_postgresql-$(POSTGRES_JAR_VERSION).jar
 IVY_JAR_NAMES := $(ICEBERG_JAR_NAME) $(SQLITE_JAR_NAME) $(POSTGRES_JAR_NAME)
 IVY_JAR_DEST_DIR := data/metadata/ivy/jars
+
+DAGSTER_VERSION := 1.13.22
+DAGSTER_TEST_REPORT := data/metadata/test-reports/dagster.xml
+CI_TEST_REPORT := data/metadata/test-reports/ci.xml
+DAGSTER_TESTS := tests/unit/adapters/test_dagster_adapter.py \
+	tests/integration/dagster \
+	tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
+FAST_TEST_ARGS := tests/unit \
+	--ignore=tests/unit/adapters/test_dagster_adapter.py \
+	--deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
+SPARK_ORCHESTRATION_CLASS := tests.integration.orchestration.test_dependency_execution
 
 # ── the cluster profile ─────────────────────────────────────────────────────
 CLUSTER_PROFILE := cluster
@@ -51,7 +63,7 @@ define RUN_COMPOSE
 	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test ci run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
+.PHONY: bootstrap check-compose up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-adapter ci run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
 
 seed-ivy:
 	@mkdir -p "$(IVY_JAR_DEST_DIR)" "$(ICEBERG_CATALOG_DIR)"; \
@@ -152,12 +164,23 @@ typecheck: ensure-up
 test: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m pytest)
 
+# Dependency-free orchestration and repository guardrails, matching CI's host-side fast job.
+test-fast:
+	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS)
+
+test-adapter:
+	@mkdir -p "$(dir $(DAGSTER_TEST_REPORT))"
+	$(PYTHON) -c "import dagster; from importlib.metadata import version; actual = version('dagster'); assert actual == '$(DAGSTER_VERSION)', f'expected dagster $(DAGSTER_VERSION), found {actual}'"
+	$(PYTHON) -m pytest -ra $(DAGSTER_TESTS) --junitxml="$(DAGSTER_TEST_REPORT)"
+	$(PYTHON) -m tests.support.required_test_gate "$(DAGSTER_TEST_REPORT)" --minimum-passed 13
+
 # Reproduce CI locally: same lint + type check + full suite the container CI job runs,
 # in the container so the Spark/Iceberg path is exercised. Keep in lockstep with .github/workflows/ci.yml.
 ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m ruff check src tests)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m pytest -ra --cov=janus --cov-report=term-missing)
+	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage $(SERVICE) python -m pytest -ra -m 'not cluster' --cov=janus --cov-report=term-missing --cov-report=xml:data/coverage.xml --junitxml=$(CI_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
 
 run-local: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main --environment $(ENVIRONMENT) --with-spark)

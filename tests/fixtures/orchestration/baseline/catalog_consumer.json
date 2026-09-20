@@ -1,0 +1,572 @@
+{
+  "compute_double_tables": {
+    "bronze.a": [
+      {
+        "id": "1"
+      }
+    ],
+    "bronze.b": [
+      {
+        "catalog_collection_path": "payload",
+        "catalog_cursor": null,
+        "catalog_offset": null,
+        "catalog_page_number": 1,
+        "catalog_raw_artifact_path": "<PROJECT>/data/raw/B/runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer/pages/page-0001.json",
+        "catalog_received_at": "2026-09-13T12:00:00+00:00",
+        "catalog_record_path": "payload[0]",
+        "catalog_request_index": 1,
+        "catalog_request_url": "https://fixtures.invalid/B?a_id=1&page=1&size=10",
+        "entity_id": "1",
+        "entity_key": "1",
+        "entity_type": "dataset",
+        "parent_entity_id": null,
+        "parent_entity_key": null,
+        "parent_entity_type": null,
+        "payload": "{\"id\": \"1\", \"title\": \"Fixture\"}"
+      }
+    ]
+  },
+  "events": [
+    "session_start",
+    "session_stop",
+    "request",
+    "session_start",
+    "session_stop"
+  ],
+  "evidence": "offline boundary capture; HTTP and compute doubles; no Spark or Iceberg commit",
+  "persisted": {
+    "data/metadata/B/lineage/order14-catalog_consumer.json": {
+      "artifacts": [
+        {
+          "checksum": "75a7ca1ed3e3b363110f2588615d0c04e511ead79307bc4c6573a07106b36626",
+          "format": "json",
+          "path": "<PROJECT>/data/raw/B/runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer/pages/page-0001.json"
+        },
+        {
+          "checksum": "21d2a02360954e5e4d96e26473f62b873c11c66b2f904b76ff815041a7e595e5",
+          "format": "jsonl",
+          "path": "<PROJECT>/data/raw/B/runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer/normalized/datasets.jsonl"
+        }
+      ],
+      "checkpoint_strategy": "none",
+      "config_version": "2a197b366a38c8ed873b42f29585e0fee5c7c7765275b7010e5a1a5824dc48fb",
+      "configured_outputs": [
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/raw/B",
+          "zone": "raw"
+        },
+        {
+          "format": "iceberg",
+          "path": "<PROJECT>/data/bronze/B",
+          "zone": "bronze"
+        },
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/metadata/B",
+          "zone": "metadata"
+        }
+      ],
+      "emitted_at": "2026-09-13T12:00:05+00:00",
+      "environment": "local",
+      "extraction_metadata": {
+        "attempt_count": "1",
+        "checkpoint_loaded": "false",
+        "datasets_extracted": "1",
+        "dead_letter_count": "0",
+        "dead_letter_skipped_count": "0",
+        "entity_types_emitted": "dataset",
+        "groups_extracted": "0",
+        "normalized_artifact_count": "1",
+        "organizations_extracted": "0",
+        "page_record_count": "1",
+        "pagination_type": "page_number",
+        "raw_page_count": "1",
+        "raw_path_prefix": "runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer",
+        "request_count": "1",
+        "resources_extracted": "0",
+        "retry_count": "0"
+      },
+      "extraction_mode": "full_refresh",
+      "materialized_outputs": [
+        {
+          "format": "json",
+          "metadata": {
+            "checksum": "75a7ca1ed3e3b363110f2588615d0c04e511ead79307bc4c6573a07106b36626"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "<PROJECT>/data/raw/B/runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer/pages/page-0001.json",
+          "records_written": 1,
+          "zone": "raw"
+        },
+        {
+          "format": "jsonl",
+          "metadata": {
+            "checksum": "21d2a02360954e5e4d96e26473f62b873c11c66b2f904b76ff815041a7e595e5"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "<PROJECT>/data/raw/B/runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer/normalized/datasets.jsonl",
+          "records_written": 1,
+          "zone": "raw"
+        },
+        {
+          "format": "iceberg",
+          "metadata": {
+            "writer": "order14-compute-double"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "bronze.b",
+          "records_written": 1,
+          "zone": "bronze"
+        }
+      ],
+      "metadata": {
+        "strategy.artifact_count": "2",
+        "strategy.attempt_count": "1",
+        "strategy.checkpoint_loaded": "false",
+        "strategy.datasets_extracted": "1",
+        "strategy.dead_letter_count": "0",
+        "strategy.dead_letter_skipped_count": "0",
+        "strategy.entity_types_emitted": "dataset",
+        "strategy.groups_extracted": "0",
+        "strategy.input_format": "jsonl",
+        "strategy.normalized_artifact_count": "1",
+        "strategy.organizations_extracted": "0",
+        "strategy.page_record_count": "1",
+        "strategy.pagination_type": "page_number",
+        "strategy.raw_page_count": "1",
+        "strategy.raw_path_prefix": "runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer",
+        "strategy.records_extracted": "1",
+        "strategy.request_count": "1",
+        "strategy.request_timeout_seconds": "60",
+        "strategy.resources_extracted": "0",
+        "strategy.retry_count": "0",
+        "strategy.strategy_family": "catalog",
+        "strategy.strategy_variant": "metadata_catalog",
+        "strategy.write_result_count": "3"
+      },
+      "plan_notes": [
+        "strategy_family:catalog",
+        "strategy_variant:metadata_catalog",
+        "dispatch:catalog.metadata_catalog"
+      ],
+      "records_extracted": 1,
+      "run_attributes": {
+        "source_id": "B",
+        "source_type": "catalog",
+        "strategy": "catalog",
+        "strategy_variant": "metadata_catalog",
+        "trigger": "baseline"
+      },
+      "run_id": "order14-catalog_consumer",
+      "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+      "source_id": "B",
+      "source_name": "Synthetic B",
+      "status": "succeeded",
+      "strategy_family": "catalog",
+      "strategy_variant": "metadata_catalog"
+    },
+    "data/metadata/B/runs/order14-catalog_consumer.json": {
+      "checkpoint_strategy": "none",
+      "configured_outputs": [
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/raw/B",
+          "zone": "raw"
+        },
+        {
+          "format": "iceberg",
+          "path": "<PROJECT>/data/bronze/B",
+          "zone": "bronze"
+        },
+        {
+          "format": "json",
+          "path": "<PROJECT>/data/metadata/B",
+          "zone": "metadata"
+        }
+      ],
+      "duration_seconds": 5.0,
+      "ended_at": "2026-09-13T12:00:05+00:00",
+      "environment": "local",
+      "extraction_mode": "full_refresh",
+      "materialized_outputs": [
+        {
+          "format": "json",
+          "metadata": {
+            "checksum": "75a7ca1ed3e3b363110f2588615d0c04e511ead79307bc4c6573a07106b36626"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "<PROJECT>/data/raw/B/runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer/pages/page-0001.json",
+          "records_written": 1,
+          "zone": "raw"
+        },
+        {
+          "format": "jsonl",
+          "metadata": {
+            "checksum": "21d2a02360954e5e4d96e26473f62b873c11c66b2f904b76ff815041a7e595e5"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "<PROJECT>/data/raw/B/runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer/normalized/datasets.jsonl",
+          "records_written": 1,
+          "zone": "raw"
+        },
+        {
+          "format": "iceberg",
+          "metadata": {
+            "writer": "order14-compute-double"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "bronze.b",
+          "records_written": 1,
+          "zone": "bronze"
+        }
+      ],
+      "metadata": {
+        "strategy.artifact_count": "2",
+        "strategy.attempt_count": "1",
+        "strategy.checkpoint_loaded": "false",
+        "strategy.datasets_extracted": "1",
+        "strategy.dead_letter_count": "0",
+        "strategy.dead_letter_skipped_count": "0",
+        "strategy.entity_types_emitted": "dataset",
+        "strategy.groups_extracted": "0",
+        "strategy.input_format": "jsonl",
+        "strategy.normalized_artifact_count": "1",
+        "strategy.organizations_extracted": "0",
+        "strategy.page_record_count": "1",
+        "strategy.pagination_type": "page_number",
+        "strategy.raw_page_count": "1",
+        "strategy.raw_path_prefix": "runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer",
+        "strategy.records_extracted": "1",
+        "strategy.request_count": "1",
+        "strategy.request_timeout_seconds": "60",
+        "strategy.resources_extracted": "0",
+        "strategy.retry_count": "0",
+        "strategy.strategy_family": "catalog",
+        "strategy.strategy_variant": "metadata_catalog",
+        "strategy.write_result_count": "3"
+      },
+      "plan_notes": [
+        "strategy_family:catalog",
+        "strategy_variant:metadata_catalog",
+        "dispatch:catalog.metadata_catalog"
+      ],
+      "records_extracted": 1,
+      "run_attributes": {
+        "source_id": "B",
+        "source_type": "catalog",
+        "strategy": "catalog",
+        "strategy_variant": "metadata_catalog",
+        "trigger": "baseline"
+      },
+      "run_id": "order14-catalog_consumer",
+      "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+      "source_id": "B",
+      "source_name": "Synthetic B",
+      "started_at": "2026-09-13T12:00:00+00:00",
+      "status": "succeeded",
+      "strategy_family": "catalog",
+      "strategy_variant": "metadata_catalog"
+    },
+    "data/metadata/B/validations/order14-catalog_consumer.json": {
+      "checks": [
+        {
+          "details": {
+            "required_fields": "",
+            "unique_fields": ""
+          },
+          "message": "Quality rules are internally consistent.",
+          "name": "quality_contract",
+          "outcome": "passed",
+          "phase": "config"
+        },
+        {
+          "details": {
+            "schema_mode": "infer"
+          },
+          "message": "Schema evolution is enabled; unexpected columns will be tolerated.",
+          "name": "schema_contract_mode",
+          "outcome": "passed",
+          "phase": "config"
+        },
+        {
+          "details": {},
+          "message": "No required_fields were configured.",
+          "name": "required_fields",
+          "outcome": "skipped",
+          "phase": "data"
+        },
+        {
+          "details": {},
+          "message": "No unique_fields were configured.",
+          "name": "unique_fields",
+          "outcome": "skipped",
+          "phase": "data"
+        },
+        {
+          "details": {},
+          "message": "No dataframe was provided for schema validation.",
+          "name": "schema_expectations",
+          "outcome": "skipped",
+          "phase": "data"
+        },
+        {
+          "details": {},
+          "message": "No dataframe was provided for bronze output sanity checks.",
+          "name": "output_columns",
+          "outcome": "skipped",
+          "phase": "output"
+        },
+        {
+          "details": {
+            "checked_outputs": "3"
+          },
+          "message": "All materialized outputs satisfy the configured zone contracts.",
+          "name": "materialized_outputs",
+          "outcome": "passed",
+          "phase": "output"
+        },
+        {
+          "details": {},
+          "message": "No unique_fields were configured.",
+          "name": "bronze_key_uniqueness",
+          "outcome": "skipped",
+          "phase": "output"
+        }
+      ],
+      "emitted_at": "2026-09-13T12:00:05+00:00",
+      "environment": "local",
+      "metadata": {
+        "allow_schema_evolution": "True",
+        "schema_expectation_source": ""
+      },
+      "run_id": "order14-catalog_consumer",
+      "source_id": "B",
+      "source_name": "Synthetic B",
+      "strategy_family": "catalog",
+      "strategy_variant": "metadata_catalog",
+      "summary": {
+        "failed": 0,
+        "passed": 3,
+        "skipped": 5
+      }
+    }
+  },
+  "requests": [
+    "https://fixtures.invalid/B?a_id=1&page=1&size=10"
+  ],
+  "summary": {
+    "executed_run": {
+      "artifact_count": 2,
+      "artifacts": [
+        {
+          "checksum": "75a7ca1ed3e3b363110f2588615d0c04e511ead79307bc4c6573a07106b36626",
+          "format": "json",
+          "path": "<PROJECT>/data/raw/B/runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer/pages/page-0001.json"
+        },
+        {
+          "checksum": "21d2a02360954e5e4d96e26473f62b873c11c66b2f904b76ff815041a7e595e5",
+          "format": "jsonl",
+          "path": "<PROJECT>/data/raw/B/runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer/normalized/datasets.jsonl"
+        }
+      ],
+      "checkpoint_value": null,
+      "extraction_metadata": {
+        "attempt_count": "1",
+        "checkpoint_loaded": "false",
+        "datasets_extracted": "1",
+        "dead_letter_count": "0",
+        "dead_letter_skipped_count": "0",
+        "entity_types_emitted": "dataset",
+        "groups_extracted": "0",
+        "normalized_artifact_count": "1",
+        "organizations_extracted": "0",
+        "page_record_count": "1",
+        "pagination_type": "page_number",
+        "raw_page_count": "1",
+        "raw_path_prefix": "runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer",
+        "request_count": "1",
+        "resources_extracted": "0",
+        "retry_count": "0"
+      },
+      "materialized_outputs": [
+        {
+          "format": "json",
+          "metadata": {
+            "checksum": "75a7ca1ed3e3b363110f2588615d0c04e511ead79307bc4c6573a07106b36626"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "<PROJECT>/data/raw/B/runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer/pages/page-0001.json",
+          "records_written": 1,
+          "zone": "raw"
+        },
+        {
+          "format": "jsonl",
+          "metadata": {
+            "checksum": "21d2a02360954e5e4d96e26473f62b873c11c66b2f904b76ff815041a7e595e5"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "<PROJECT>/data/raw/B/runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer/normalized/datasets.jsonl",
+          "records_written": 1,
+          "zone": "raw"
+        },
+        {
+          "format": "iceberg",
+          "metadata": {
+            "writer": "order14-compute-double"
+          },
+          "mode": "overwrite",
+          "partition_by": [
+            "ingestion_date"
+          ],
+          "path": "bronze.b",
+          "records_written": 1,
+          "zone": "bronze"
+        }
+      ],
+      "metadata_outputs": {
+        "checkpoint_history_path": null,
+        "checkpoint_state_path": null,
+        "lineage_path": "<PROJECT>/data/metadata/B/lineage/order14-catalog_consumer.json",
+        "run_metadata_path": "<PROJECT>/data/metadata/B/runs/order14-catalog_consumer.json",
+        "validation_report_path": "<PROJECT>/data/metadata/B/validations/order14-catalog_consumer.json"
+      },
+      "records_extracted": 1,
+      "status": "succeeded",
+      "strategy_metadata": {
+        "artifact_count": 2,
+        "attempt_count": "1",
+        "checkpoint_loaded": "false",
+        "checkpoint_value": "",
+        "datasets_extracted": "1",
+        "dead_letter_count": "0",
+        "dead_letter_skipped_count": "0",
+        "entity_types_emitted": "dataset",
+        "groups_extracted": "0",
+        "input_format": "jsonl",
+        "normalized_artifact_count": "1",
+        "organizations_extracted": "0",
+        "page_record_count": "1",
+        "pagination_type": "page_number",
+        "raw_page_count": "1",
+        "raw_path_prefix": "runs/ingestion_date=2026-09-13/run_id=order14-catalog_consumer",
+        "records_extracted": 1,
+        "request_count": "1",
+        "request_timeout_seconds": 60,
+        "resources_extracted": "0",
+        "retry_count": "0",
+        "strategy_family": "catalog",
+        "strategy_variant": "metadata_catalog",
+        "write_result_count": 3
+      },
+      "validation": {
+        "failed_checks": [],
+        "is_successful": true,
+        "summary": {
+          "failed": 0,
+          "passed": 3,
+          "skipped": 5
+        }
+      }
+    },
+    "planned_run": {
+      "execution": {
+        "checkpoint_field": null,
+        "checkpoint_strategy": "none",
+        "mode": "full_refresh"
+      },
+      "outputs": {
+        "bronze": {
+          "format": "iceberg",
+          "path": "data/bronze/B"
+        },
+        "metadata": {
+          "format": "json",
+          "path": "data/metadata/B"
+        },
+        "raw": {
+          "format": "json",
+          "path": "data/raw/B"
+        }
+      },
+      "plan_notes": [
+        "strategy_family:catalog",
+        "strategy_variant:metadata_catalog",
+        "dispatch:catalog.metadata_catalog"
+      ],
+      "pre_run_metadata": {
+        "bronze_output_path": "data/bronze/B",
+        "checkpoint_strategy": "none",
+        "dispatch_path": "catalog.metadata_catalog",
+        "environment": "local",
+        "extraction_mode": "full_refresh",
+        "metadata_output_path": "data/metadata/B",
+        "project_root": "<PROJECT>",
+        "raw_output_path": "data/raw/B",
+        "run_id": "order14-catalog_consumer",
+        "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+        "source_id": "B",
+        "source_name": "Synthetic B",
+        "started_at": "2026-09-13T12:00:00+00:00",
+        "strategy_family": "catalog",
+        "strategy_variant": "metadata_catalog"
+      },
+      "run": {
+        "attributes": {
+          "source_id": "B",
+          "source_type": "catalog",
+          "strategy": "catalog",
+          "strategy_variant": "metadata_catalog",
+          "trigger": "baseline"
+        },
+        "environment": "local",
+        "run_id": "order14-catalog_consumer",
+        "started_at": "2026-09-13T12:00:00+00:00"
+      },
+      "source": {
+        "config_path": "<PROJECT>/conf/sources/sources.yaml",
+        "hook_id": null,
+        "name": "Synthetic B",
+        "source_id": "B",
+        "tags": [
+          "reference"
+        ]
+      },
+      "strategy": {
+        "dispatch_path": "catalog.metadata_catalog",
+        "family": "catalog",
+        "hook_implementation": null,
+        "implementation": "CatalogStrategy",
+        "variant": "metadata_catalog"
+      }
+    },
+    "spark_session": {
+      "app_name": null,
+      "master": null
+    }
+  }
+}

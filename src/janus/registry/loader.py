@@ -7,6 +7,7 @@ from typing import Any, Self
 
 import yaml
 
+from janus.models.dependencies import SourceDependencyGraph
 from janus.models.source_config import (
     DEFAULT_VALIDATION_POLICY,
     STRATEGY_REGISTRY,
@@ -15,6 +16,10 @@ from janus.models.source_config import (
     StrategyRegistry,
     ValidationIssue,
     ValidationPolicy,
+)
+from janus.registry.dependencies import (
+    SourceLocation,
+    build_source_dependency_graph,
 )
 
 
@@ -52,17 +57,30 @@ class AppConfig:
 
 @dataclass(frozen=True, slots=True)
 class SourceRegistry:
+    """Every configured source, plus the validated graph they form."""
+
     project_root: Path
     app_config: AppConfig
     sources: tuple[SourceConfig, ...]
+    locations: tuple[SourceLocation, ...] = ()
     _sources_by_id: dict[str, SourceConfig] = field(init=False, repr=False)
+    graph: SourceDependencyGraph = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        """Build an in-memory lookup table so planner code can fetch sources by id."""
+        """Index the sources by id, then resolve and validate their dependency graph."""
         object.__setattr__(
             self,
             "_sources_by_id",
             {source.source_id: source for source in self.sources},
+        )
+        object.__setattr__(
+            self,
+            "graph",
+            build_source_dependency_graph(
+                self.sources,
+                locations=self.locations,
+                sources_dir=self.app_config.registry.resolve_sources_dir(self.project_root),
+            ),
         )
 
     @classmethod
@@ -80,6 +98,10 @@ class SourceRegistry:
         the returned registry: which policy validated a load is lineage, not registry state,
         and a field would change ``__eq__`` and ``repr`` for every consumer to record
         something nobody reads afterwards.
+
+        Graph validation happens last, in ``__post_init__``: after every individual config
+        is typed and after duplicate ids are rejected, because a graph over configs that do
+        not parse would report the same problem twice under a worse name.
         """
         resolved_project_root = project_root.resolve()
         app_config = load_app_config(resolved_project_root)
@@ -88,12 +110,13 @@ class SourceRegistry:
             raise FileNotFoundError(f"Configured source directory does not exist: {sources_dir}")
 
         sources: list[SourceConfig] = []
+        locations: list[SourceLocation] = []
         seen_source_ids: dict[str, Path] = {}
         for config_path in _discover_source_config_paths(
             sources_dir,
             app_config.registry.file_pattern,
         ):
-            for source in _load_source_configs(
+            for source, entry in _load_source_configs(
                 config_path,
                 policy=policy,
                 strategy_registry=strategy_registry,
@@ -106,11 +129,19 @@ class SourceRegistry:
                     )
                 seen_source_ids[source.source_id] = config_path
                 sources.append(source)
+                locations.append(
+                    SourceLocation(
+                        source_id=source.source_id,
+                        config_path=config_path,
+                        entry=entry,
+                    )
+                )
 
         return cls(
             project_root=resolved_project_root,
             app_config=app_config,
             sources=tuple(sources),
+            locations=tuple(locations),
         )
 
     def list_sources(self, *, enabled_only: bool = True) -> tuple[SourceConfig, ...]:
@@ -192,19 +223,22 @@ def _load_source_configs(
     *,
     policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
     strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
-) -> tuple[SourceConfig, ...]:
-    """Read one YAML file and return one or more validated source configs."""
+) -> tuple[tuple[SourceConfig, str | None], ...]:
+    """Read one YAML file and return its validated configs, each with its entry label."""
     raw = _load_yaml_document(config_path)
     if not isinstance(raw, Mapping):
         raise ValueError(f"Config file must contain a mapping: {config_path}")
 
     if "sources" not in raw:
         return (
-            SourceConfig.from_mapping(
-                raw,
-                config_path,
-                policy=policy,
-                registry=strategy_registry,
+            (
+                SourceConfig.from_mapping(
+                    raw,
+                    config_path,
+                    policy=policy,
+                    registry=strategy_registry,
+                ),
+                None,
             ),
         )
     return _load_grouped_source_configs(
@@ -221,7 +255,7 @@ def _load_grouped_source_configs(
     *,
     policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
     strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
-) -> tuple[SourceConfig, ...]:
+) -> tuple[tuple[SourceConfig, str], ...]:
     """Load a grouped source file whose top level is a `sources:` list."""
     issues: list[ValidationIssue] = []
 
@@ -242,7 +276,7 @@ def _load_grouped_source_configs(
         issues.append(ValidationIssue("sources", "must not be empty"))
         raise SourceConfigValidationError(config_path, issues)
 
-    sources: list[SourceConfig] = []
+    sources: list[tuple[SourceConfig, str]] = []
     for index, item in enumerate(sources_value):
         entry_path = f"sources[{index}]"
         if not isinstance(item, Mapping):
@@ -250,11 +284,14 @@ def _load_grouped_source_configs(
             continue
         try:
             sources.append(
-                SourceConfig.from_mapping(
-                    item,
-                    config_path,
-                    policy=policy,
-                    registry=strategy_registry,
+                (
+                    SourceConfig.from_mapping(
+                        item,
+                        config_path,
+                        policy=policy,
+                        registry=strategy_registry,
+                    ),
+                    entry_path,
                 )
             )
         except SourceConfigValidationError as exc:

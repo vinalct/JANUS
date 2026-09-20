@@ -185,7 +185,7 @@ Supported request-input types:
 
 - `none`
 - `date_window` with `start`, `end`, and `step`
-- `iceberg_rows` with `namespace`, `table_name`, `columns`, and optional `distinct`
+- `iceberg_rows` with required `upstream_source_id`, `namespace`, `table_name`, `columns`, and optional `distinct`
 - `combined` with an `inputs:` list of two or more `date_window` or `iceberg_rows` entries
 
 Supported binding sources:
@@ -251,7 +251,8 @@ access:
     situacao: ATIVO
   request_inputs:
     type: iceberg_rows
-    namespace: bronze_transparencia
+    upstream_source_id: transparencia__orgaos__siape__full_refresh
+    namespace: bronze__transparencia
     table_name: orgaos__siape
     columns:
       orgao_codigo: codOrgaoExercicioSiape
@@ -281,8 +282,9 @@ access:
     type: combined
     inputs:
       - type: iceberg_rows
-        namespace: bronze_transparencia
-        table_name: orgaos
+        upstream_source_id: transparencia__orgaos__siafi__full_refresh
+        namespace: bronze__transparencia
+        table_name: orgaos__siafi
         columns:
           orgao_codigo: codigo
         distinct: true
@@ -307,6 +309,79 @@ access:
 ```
 
 JANUS computes the Cartesian product of the two input streams and runs one request stream per combination. With 5 org codes and 12 monthly windows, that produces 60 request streams, each bound with its own `codigoOrgao`, `dataInicio`, and `dataFinal`.
+
+### Step 5b: declare the producer of every Iceberg input
+
+An `iceberg_rows` input reads a bronze table **another configured source wrote**. That makes
+your source a consumer in a source-to-source graph, and the relationship must be declared:
+`upstream_source_id` is required on every `iceberg_rows` leaf, including each leaf inside a
+`combined` input.
+
+The declaration is not a label. The registry validates it against the table the named
+producer actually writes, and validates the graph across the *whole* registry at load time —
+so a bad declaration fails every entry point, including a single-source run of an unrelated
+source. What it rejects:
+
+| Problem | Why it is refused |
+|---|---|
+| `upstream_source_id` naming no configured source | Upstreams are **managed**. A table that happens to exist in the warehouse is not a producer, and JANUS will not treat stale data as a successful dependency. |
+| A declared producer that writes a different table | The declaration and the reference disagree; one of them is a typo, and guessing which would schedule the wrong source. |
+| An enabled consumer whose producer is disabled | A run never enables an upstream on your behalf. |
+| A dependency cycle, including a self-cycle | No execution order satisfies it. |
+| Two sources writing one table without saying so | An undeclared collision is indistinguishable from a mistake. Declare it with `outputs.bronze.shared_with` on both sides, or give one source its own table. |
+| A producer whose bronze output is not Iceberg | An `iceberg_rows` input cannot read it. |
+
+A fully disabled, acyclic subgraph is fine: disabled producers and disabled consumers simply
+stay out of every run.
+
+#### Finding the producer
+
+You need two things: the producing source's **id**, and the bronze table it **actually**
+writes. The table is not always the one spelled in YAML — when `outputs.bronze.namespace` and
+`table_name` are omitted, the identifier is derived from the configured path, with segments
+sanitized and joined. Ask the code rather than reading it off a filename:
+
+```python
+from pathlib import Path
+
+from janus.registry import load_registry, producer_table_identifier
+
+registry = load_registry(Path("."))
+for source in registry.list_sources(enabled_only=False):
+    table = producer_table_identifier(source)
+    if table is not None:
+        print(f"{table}\t{source.source_id}\tenabled={source.enabled}")
+```
+
+`producer_table_identifier` is the same derivation the registry validates against and the
+writer commits to, so it cannot disagree with either.
+
+Match the `namespace.table_name` you intend to read against the left column, and copy the
+`source_id` beside it into `upstream_source_id`. If nothing matches, the table has no
+configured producer, and the right fix is to onboard that producer — not to point at a table
+you hope is there.
+
+#### Migrating an existing consumer
+
+For each `iceberg_rows` leaf in a source you already maintain:
+
+1. Resolve the producer of the `namespace.table_name` it reads, using the snippet above.
+2. Add `upstream_source_id: <that source id>` to the leaf. Repeat for every leaf of a
+   `combined` input — one declaration per leaf, not one per source.
+3. If the resolver reports that two sources write that table, decide whether the sharing is
+   deliberate. If it is, declare it on both with `outputs.bronze.shared_with`; the consumer
+   still names exactly one producer and waits only for that pipeline.
+4. Reload the registry (`janus --environment local --source-id <id> --include-disabled` is
+   enough) and read the diagnostics. They name the field path, the file and entry, and the
+   source that actually produces the referenced table.
+
+Nothing else changes: ids, enabled flags, parameters, columns, output locations, and write
+modes all stay as they were. The config hash changes because the YAML changed, which is
+expected and visible in `config_versions` in a pipeline summary.
+
+Once declared, a consumer and its producer run in the right order automatically under
+[`janus run-all`](orchestration.md). A single-source run still executes only that source and
+does not pull in its dependencies.
 
 ### Concurrent pagination
 
@@ -485,8 +560,9 @@ storage a full-refresh source occupies grows with each run.
 
 - Each source defines `outputs.raw`, `outputs.bronze`, and `outputs.metadata`.
 - Each output target must define `path` and `format`.
-- Only `outputs.bronze` may define `namespace` and `table_name`.
-- `namespace` and `table_name` are only valid when `outputs.bronze.format` is `iceberg`.
+- Only `outputs.bronze` may define `namespace`, `table_name` and `shared_with`.
+- `namespace`, `table_name` and `shared_with` are only valid when `outputs.bronze.format` is `iceberg`.
+- Two sources may write the same bronze table only if each names the other in `outputs.bronze.shared_with`. The declaration must be mutual and complete: every co-writer names all the others and only those, and a source that declares a co-writer it does not actually share a table with is rejected.
 
 ### `quality`
 
@@ -581,6 +657,23 @@ Each source must define:
 - a metadata path for run records, checkpoints, lineage, and validations.
 
 If `outputs.bronze.format` is `iceberg`, the source may also define `outputs.bronze.namespace` and `outputs.bronze.table_name` when the default path-derived Iceberg identifier is not the desired bronze table name.
+
+A dataset that is served by more than one pipeline — typically a full-refresh rebuild alongside an incremental delta job — keeps one bronze table, and each of those sources declares the others:
+
+```yaml
+outputs:
+  bronze:
+    path: data/bronze/transparencia/gastos_cartoes__cartoes
+    format: iceberg
+    namespace: bronze__transparencia
+    table_name: gastos_cartoes__cartoes
+    shared_with:
+      - transparencia__gastos_cartoes__cartoes__incremental
+```
+
+The registry rejects an *undeclared* collision — two sources whose paths, defaults or identifier sanitization land on one table without saying so — because that is indistinguishable from a mistake. It accepts a declared one. A consumer reading a shared table still names one producer in its `iceberg_rows.upstream_source_id`, and waits only for that pipeline.
+
+Co-writers share a table, not a schedule: a full refresh with `spark.write_mode: overwrite` replaces the whole table, so make sure its window covers everything the dataset is meant to hold, or it will drop rows another pipeline appended.
 
 Checkpoint choices should match the family:
 

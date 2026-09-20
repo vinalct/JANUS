@@ -134,6 +134,60 @@ def test_registry_parses_optional_bronze_iceberg_namespace_and_table(tmp_path):
     assert source.outputs.bronze.table_name == "named_bronze_table"
 
 
+def test_registry_parses_declared_bronze_co_writers(tmp_path):
+    """``shared_with`` is how two pipelines say they write one table on purpose."""
+    project_root = _create_project(
+        tmp_path,
+        {
+            "rebuild.yaml": _shared_table_yaml("rebuild_source", "delta_source"),
+            "delta.yaml": _shared_table_yaml("delta_source", "rebuild_source"),
+        },
+    )
+
+    registry = load_registry(project_root)
+
+    assert registry.get_source("rebuild_source").outputs.bronze.shared_with == ("delta_source",)
+    assert registry.get_source("delta_source").outputs.bronze.shared_with == ("rebuild_source",)
+
+
+@pytest.mark.parametrize(
+    ("zone", "expected"),
+    [
+        ("raw", "outputs.raw.shared_with: is only supported for outputs.bronze"),
+        ("metadata", "outputs.metadata.shared_with: is only supported for outputs.bronze"),
+    ],
+)
+def test_registry_rejects_shared_with_outside_the_bronze_iceberg_target(
+    tmp_path, zone, expected
+):
+    source_yaml = _valid_source_yaml("misplaced_share_source", enabled=True).replace(
+        f"  {zone}:\n"
+        f"    path: data/{zone}/example/misplaced_share_source\n"
+        "    format: json\n",
+        f"  {zone}:\n"
+        f"    path: data/{zone}/example/misplaced_share_source\n"
+        "    format: json\n"
+        "    shared_with:\n"
+        "      - somebody_else\n",
+    )
+    project_root = _create_project(tmp_path, {"misplaced.yaml": source_yaml})
+
+    with pytest.raises(SourceConfigValidationError) as exc_info:
+        load_registry(project_root)
+
+    assert expected in str(exc_info.value)
+
+
+def test_registry_rejects_a_repeated_co_writer_declaration(tmp_path):
+    source_yaml = _shared_table_yaml("repeat_source", "peer_source", "peer_source")
+    project_root = _create_project(tmp_path, {"repeat.yaml": source_yaml})
+
+    with pytest.raises(SourceConfigValidationError) as exc_info:
+        load_registry(project_root)
+
+    assert "outputs.bronze.shared_with: must not repeat a source id" in str(exc_info.value)
+
+
 def test_registry_rejects_legacy_bronze_table_key(tmp_path):
     source_yaml = _valid_source_yaml("legacy_table_source", enabled=True).replace(
         "  bronze:\n"
@@ -328,6 +382,7 @@ def test_registry_parses_iceberg_rows_request_inputs_and_parameter_bindings(tmp_
         "    type: none\n",
         "  request_inputs:\n"
         "    type: iceberg_rows\n"
+        "    upstream_source_id: emendas_parlamentares__emendas\n"
         "    namespace: bronze_transparencia\n"
         "    table_name: emendas_parlamentares__emendas\n"
         "    columns:\n"
@@ -340,7 +395,17 @@ def test_registry_parses_iceberg_rows_request_inputs_and_parameter_bindings(tmp_
         "    type: none\n",
         1,
     )
-    project_root = _create_project(tmp_path, {"detail.yaml": source_yaml})
+    project_root = _create_project(
+        tmp_path,
+        {
+            "detail.yaml": source_yaml,
+            "producer.yaml": _iceberg_producer_yaml(
+                "emendas_parlamentares__emendas",
+                namespace="bronze_transparencia",
+                table_name="emendas_parlamentares__emendas",
+            ),
+        },
+    )
 
     source = load_registry(project_root).get_source("detail_source")
 
@@ -385,6 +450,7 @@ def test_registry_rejects_duplicate_static_and_bound_request_params(tmp_path):
         "    id: fixed\n"
         "  request_inputs:\n"
         "    type: iceberg_rows\n"
+        "    upstream_source_id: emendas_parlamentares__emendas\n"
         "    namespace: bronze_transparencia\n"
         "    table_name: emendas_parlamentares__emendas\n"
         "    columns:\n"
@@ -396,7 +462,17 @@ def test_registry_rejects_duplicate_static_and_bound_request_params(tmp_path):
         "    type: none\n",
         1,
     )
-    project_root = _create_project(tmp_path, {"duplicate_param.yaml": source_yaml})
+    project_root = _create_project(
+        tmp_path,
+        {
+            "duplicate_param.yaml": source_yaml,
+            "producer.yaml": _iceberg_producer_yaml(
+                "emendas_parlamentares__emendas",
+                namespace="bronze_transparencia",
+                table_name="emendas_parlamentares__emendas",
+            ),
+        },
+    )
 
     with pytest.raises(SourceConfigValidationError) as exc_info:
         load_registry(project_root)
@@ -492,6 +568,42 @@ def _as_grouped_entry(source_yaml: str) -> str:
     rendered = [f"  - {lines[0]}"]
     rendered.extend(f"    {line}" if line else "" for line in lines[1:])
     return "\n".join(rendered)
+
+
+def _shared_table_yaml(source_id: str, *peers: str) -> str:
+    """Render a source that writes the shared table and declares its co-writers."""
+    declarations = "".join(f"      - {peer}\n" for peer in peers)
+    return _valid_source_yaml(source_id, enabled=True).replace(
+        "  bronze:\n"
+        f"    path: data/bronze/example/{source_id}\n"
+        "    format: iceberg\n",
+        "  bronze:\n"
+        "    path: data/bronze/example/one_dataset\n"
+        "    format: iceberg\n"
+        "    namespace: bronze_example\n"
+        "    table_name: one_dataset\n"
+        "    shared_with:\n" + declarations,
+    )
+
+
+def _iceberg_producer_yaml(
+    source_id: str,
+    *,
+    namespace: str,
+    table_name: str,
+    enabled: bool = True,
+) -> str:
+    """Render the source that actually writes ``namespace.table_name``."""
+    return _valid_source_yaml(source_id, enabled=enabled).replace(
+        "  bronze:\n"
+        f"    path: data/bronze/example/{source_id}\n"
+        "    format: iceberg\n",
+        "  bronze:\n"
+        f"    path: data/bronze/example/{source_id}\n"
+        "    format: iceberg\n"
+        f"    namespace: {namespace}\n"
+        f"    table_name: {table_name}\n",
+    )
 
 
 def _valid_source_yaml(
@@ -633,6 +745,7 @@ def test_registry_rejects_invalid_iceberg_request_inputs(tmp_path):
         load_registry(project_root)
 
     message = str(exc_info.value)
+    assert "access.request_inputs.upstream_source_id: is required" in message
     assert "access.request_inputs.table_name: is required" in message
     assert "access.request_inputs.columns: is required" in message
 
@@ -697,6 +810,7 @@ def test_registry_parses_combined_request_inputs_and_parameter_bindings(tmp_path
         "    type: combined\n"
         "    inputs:\n"
         "      - type: iceberg_rows\n"
+        "        upstream_source_id: orgaos\n"
         "        namespace: bronze_transparencia\n"
         "        table_name: orgaos\n"
         "        columns:\n"
@@ -718,7 +832,17 @@ def test_registry_parses_combined_request_inputs_and_parameter_bindings(tmp_path
         "    type: none\n",
         1,
     )
-    project_root = _create_project(tmp_path, {"combined.yaml": source_yaml})
+    project_root = _create_project(
+        tmp_path,
+        {
+            "combined.yaml": source_yaml,
+            "producer.yaml": _iceberg_producer_yaml(
+                "orgaos",
+                namespace="bronze_transparencia",
+                table_name="orgaos",
+            ),
+        },
+    )
 
     source = load_registry(project_root).get_source("combined_source")
 
@@ -806,6 +930,7 @@ def test_registry_rejects_combined_parameter_binding_referencing_unknown_field(t
         "    type: combined\n"
         "    inputs:\n"
         "      - type: iceberg_rows\n"
+        "        upstream_source_id: orgaos\n"
         "        namespace: bronze_transparencia\n"
         "        table_name: orgaos\n"
         "        columns:\n"

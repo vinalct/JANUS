@@ -87,6 +87,7 @@ def _build_output_target(
     format_name = _require_enum(data, "format", SUPPORTED_DATA_FORMATS, issues, field_path)
     namespace = _optional_string(data, "namespace", issues, field_path)
     table_name = _optional_string(data, "table_name", issues, field_path)
+    shared_with = _build_shared_with(data, field_path, format_name, issues)
 
     if "table" in data and data["table"] is not None:
         issues.append(
@@ -133,7 +134,39 @@ def _build_output_target(
         format=format_name,
         namespace=namespace,
         table_name=table_name,
+        shared_with=shared_with,
     )
+
+
+def _build_shared_with(
+    data: Any,
+    field_path: str,
+    format_name: str,
+    issues: list[ValidationIssue],
+) -> tuple[str, ...]:
+    """Validate the declared co-writers of one bronze Iceberg table.
+
+    Only the shape is decided here. Whether the named sources exist, write this same
+    table, and name this source back is a whole-registry question, answered where the
+    dependency graph is built.
+    """
+    peers = tuple(_optional_string_list(data, "shared_with", issues, field_path))
+    if not peers:
+        return ()
+
+    if field_path != "outputs.bronze":
+        issues.append(
+            ValidationIssue(f"{field_path}.shared_with", "is only supported for outputs.bronze")
+        )
+    elif format_name != "iceberg":
+        issues.append(ValidationIssue(f"{field_path}.shared_with", "requires format='iceberg'"))
+
+    if len(set(peers)) != len(peers):
+        issues.append(
+            ValidationIssue(f"{field_path}.shared_with", "must not repeat a source id")
+        )
+        return tuple(dict.fromkeys(peers))
+    return peers
 
 
 def _build_quality_config(raw_value: Any, issues: list[ValidationIssue]) -> QualityConfig:

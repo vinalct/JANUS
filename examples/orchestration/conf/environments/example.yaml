@@ -1,0 +1,36 @@
+name: orchestration-example
+
+runtime:
+  log_level: ${JANUS_LOG_LEVEL:-WARN}
+
+spark:
+  app_name: janus-orchestration-example
+  master: ${JANUS_SPARK_MASTER:-local[1]}
+  warehouse_dir: runtime/spark/warehouse
+  ivy_dir: runtime/ivy
+  iceberg:
+    catalog_name: janus
+    catalog_type: jdbc
+    warehouse_dir: runtime/data/bronze/iceberg
+    runtime_package: org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1
+    default_namespace: orchestration_example
+    uri: jdbc:sqlite:runtime/catalog/catalog.sqlite?journal_mode=WAL&busy_timeout=30000
+    driver_package: org.xerial:sqlite-jdbc:3.53.2.1
+    credentials:
+      user: ""
+      password: ""
+  config:
+    spark.driver.bindAddress: 127.0.0.1
+    spark.driver.host: 127.0.0.1
+    spark.driver.memory: ${JANUS_SPARK_DRIVER_MEMORY:-1g}
+    spark.driver.maxResultSize: 512m
+    spark.sql.session.timeZone: UTC
+    spark.sql.shuffle.partitions: "1"
+    spark.sql.adaptive.enabled: "true"
+    spark.ui.enabled: "false"
+
+storage:
+  root_dir: runtime/data
+  raw_dir: runtime/data/raw
+  bronze_dir: runtime/data/bronze
+  metadata_dir: runtime/data/metadata

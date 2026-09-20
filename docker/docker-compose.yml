@@ -13,6 +13,7 @@ x-janus-service: &janus-service
   volumes:
     - ${JANUS_PROJECT_ROOT:-..}/src:/workspace/src:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/tests:/workspace/tests:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/examples:/workspace/examples:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/conf:/workspace/conf:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/data:/workspace/data:z
     - ${JANUS_PROJECT_ROOT:-..}/pyproject.toml:/workspace/pyproject.toml:ro,z
@@ -21,7 +22,8 @@ x-janus-service: &janus-service
   command: ["sh", "-lc", "trap 'exit 0' TERM INT; while :; do sleep 3600; done"]
 
 x-janus-environment: &janus-environment
-  PYTHONPATH: /workspace/src
+  PYTHONPATH: /workspace/src:/workspace
+  PYTEST_ADDOPTS: "-o cache_dir=/tmp/janus-pytest-cache"
   JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
   JANUS_CA_BUNDLE: /workspace/conf/certs/rnpicpedugr46ovtlsca2025.pem
 

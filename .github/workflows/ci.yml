@@ -28,6 +28,12 @@ jobs:
             pytest==9.0.2 \
             PyYAML==6.0.3 \
             certifi==2026.2.25
+          python -m pip install --no-deps .
+      - name: Installed-package smoke without Dagster or PySpark
+        run: |
+          python -I -c "import importlib.util; assert importlib.util.find_spec('dagster') is None; assert importlib.util.find_spec('pyspark') is None"
+          python -I -c "import sys, janus, janus.main; assert not any(name == 'dagster' or name.startswith('dagster.') for name in sys.modules)"
+          python -I -m janus.main --help >/dev/null
       - name: Lint (ruff, pinned 0.11.6)
         run: |
           ruff --version
@@ -38,8 +44,30 @@ jobs:
           ruff check src tests
       - name: Type check
         run: mypy
-      - name: Unit tests (Spark tests self-skip)
-        run: pytest tests/unit -ra
+      - name: Fast tests without adapter or active Spark
+        run: make test-fast PYTHON=python
+
+  adapter:
+    name: Dagster gate (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install the pinned Dagster optional extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install '.[dagster]' pytest==9.0.2
+      - name: Adapter definitions, execution, retries, collection, and example loading
+        run: make test-adapter PYTHON=python
 
   spark:
     name: Spark gate (full suite in container)
@@ -88,6 +116,10 @@ jobs:
           set -euo pipefail
           docker compose -f docker/docker-compose.yml run --rm -T janus \
             sh -lc "ls -1 data/metadata/ivy/jars/${IVY_JAR} data/metadata/ivy/jars/${SQLITE_JAR} data/metadata/ivy/jars/${POSTGRES_JAR}"
+      - name: Type check with PySpark installed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m mypy
       - name: Full test suite + coverage incl. integration (inside container)
         run: |
           set -o pipefail
@@ -95,10 +127,11 @@ jobs:
           docker compose -f docker/docker-compose.yml run --rm -T \
             -e COVERAGE_FILE=data/.coverage \
             janus \
-            python -m pytest -ra tests \
+            python -m pytest -ra -m 'not cluster' tests \
               --cov=janus \
               --cov-report=term-missing \
               --cov-report=xml:data/coverage.xml \
+              --junitxml=data/metadata/test-reports/ci.xml \
             | tee data/pytest-output.txt
       - name: Prove PySpark is importable in the image
         run: |
@@ -141,6 +174,13 @@ jobs:
             exit 1
           fi
           echo "OK: pyiceberg was present; the cross-engine round trip executed."
+      - name: Assert required orchestration Spark scenarios executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate \
+              data/metadata/test-reports/ci.xml \
+              --class-name tests.integration.orchestration.test_dependency_execution \
+              --minimum-passed 8
       - name: Coverage summary (inside container)
         if: always()
         run: |

@@ -32,6 +32,7 @@ VALID_DATE_WINDOW = {
 }
 VALID_ICEBERG_ROWS = {
     "type": "iceberg_rows",
+    "upstream_source_id": "orgaos",
     "namespace": "bronze_transparencia",
     "table_name": "orgaos",
     "columns": {"orgao_codigo": "codigo"},
@@ -129,7 +130,11 @@ def test_unbuildable_iceberg_rows_entry_is_never_constructed():
     issues: list[Any] = []
 
     entry = _parse_request_input_entry(
-        {"namespace": "bronze_transparencia", "columns": {"orgao_codigo": "codigo"}},
+        {
+            "upstream_source_id": "orgaos",
+            "namespace": "bronze_transparencia",
+            "columns": {"orgao_codigo": "codigo"},
+        },
         "iceberg_rows",
         "access.request_inputs",
         issues,

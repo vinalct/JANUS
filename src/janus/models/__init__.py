@@ -34,6 +34,16 @@ from janus.models.contracts import (
     SourceReference,
     WriteResult,
 )
+from janus.models.dependencies import (
+    ROOT_REQUEST_INPUT_PATH,
+    IcebergInputReference,
+    SourceDependencyEdge,
+    SourceDependencyGraph,
+    SourceDependencyNode,
+    find_dependency_cycles,
+    iter_iceberg_input_references,
+    render_dependency_cycle,
+)
 from janus.models.source_config import SourceConfig
 from janus.models.write_intent import (
     BRONZE_WRITE_STRATEGIES,
@@ -48,6 +58,7 @@ __all__ = [
     "DEFAULT_RETRYABLE_STATUS_CODES",
     "DEFAULT_VALIDATION_POLICY",
     "RETRYABLE_CLIENT_STATUS_CODES",
+    "ROOT_REQUEST_INPUT_PATH",
     "SUPPORTED_OUTPUT_ZONES",
     "AccessConfig",
     "AuthConfig",
@@ -58,6 +69,7 @@ __all__ = [
     "ExtractedArtifact",
     "ExtractionConfig",
     "ExtractionResult",
+    "IcebergInputReference",
     "IcebergRowsRequestInputsConfig",
     "OutputTarget",
     "OutputsConfig",
@@ -72,10 +84,16 @@ __all__ = [
     "SchemaConfig",
     "SourceConfig",
     "SourceConfigValidationError",
+    "SourceDependencyEdge",
+    "SourceDependencyGraph",
+    "SourceDependencyNode",
     "SourceReference",
     "SparkConfig",
     "ValidationIssue",
     "ValidationPolicy",
     "WriteResult",
+    "find_dependency_cycles",
+    "iter_iceberg_input_references",
+    "render_dependency_cycle",
     "resolve_bronze_write_intent",
 ]

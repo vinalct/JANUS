@@ -677,6 +677,7 @@ def test_api_strategy_dead_letters_failed_request_input_and_continues(tmp_path):
         pagination_type="none",
         request_inputs={
             "type": "iceberg_rows",
+            "upstream_source_id": "ids",
             "namespace": "bronze_test",
             "table_name": "ids",
             "columns": {"entity_id": "id"},
@@ -733,6 +734,7 @@ def test_api_strategy_resume_skips_preexisting_dead_lettered_input(tmp_path):
         pagination_type="none",
         request_inputs={
             "type": "iceberg_rows",
+            "upstream_source_id": "ids",
             "namespace": "bronze_test",
             "table_name": "ids",
             "columns": {"entity_id": "id"},
@@ -805,6 +807,7 @@ def test_api_strategy_request_inputs_bind_iceberg_rows_from_runtime_spark(tmp_pa
         source_id="iceberg_row_source",
         request_inputs={
             "type": "iceberg_rows",
+            "upstream_source_id": "emendas_parlamentares__emendas",
             "namespace": "bronze_transparencia",
             "table_name": "emendas_parlamentares__emendas",
             "columns": {"emenda_id": "id"},
@@ -862,6 +865,7 @@ def test_api_strategy_combined_request_inputs_cross_join_iceberg_and_date_window
             "inputs": [
                 {
                     "type": "iceberg_rows",
+                    "upstream_source_id": "orgaos",
                     "namespace": "bronze_transparencia",
                     "table_name": "orgaos",
                     "columns": {"orgao_codigo": "codigo"},
@@ -985,6 +989,7 @@ def test_api_strategy_scopes_the_session_to_the_request_input_lookup(
         pagination_type="none",
         request_inputs={
             "type": "iceberg_rows",
+            "upstream_source_id": "ids",
             "namespace": "bronze_test",
             "table_name": "ids",
             "columns": {"entity_id": "id"},
@@ -1036,6 +1041,7 @@ def test_api_strategy_scopes_one_session_for_combined_request_inputs(
                 },
                 {
                     "type": "iceberg_rows",
+                    "upstream_source_id": "ids",
                     "namespace": "bronze_test",
                     "table_name": "ids",
                     "columns": {"entity_id": "id"},
@@ -1119,6 +1125,7 @@ def test_api_strategy_stops_the_scoped_session_when_the_lookup_fails(
         pagination_type="none",
         request_inputs={
             "type": "iceberg_rows",
+            "upstream_source_id": "absent",
             "namespace": "bronze_test",
             "table_name": "absent",
             "columns": {"entity_id": "id"},

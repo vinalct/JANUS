@@ -1,0 +1,405 @@
+{
+  "duplicates": {
+    "bronze__transparencia.gastos_cartoes__cartoes": [
+      "transparencia__gastos_cartoes__cartoes__full_refresh",
+      "transparencia__gastos_cartoes__cartoes__incremental"
+    ]
+  },
+  "outputs": [
+    {
+      "bronze_path": "data/bronze/dados_abertos/catalog",
+      "enabled": false,
+      "entry": "sources[0]",
+      "format": "iceberg",
+      "namespace": "bronze__dados_abertos_catalog",
+      "physical_table": "bronze__dados_abertos_catalog.conjuntos_dados",
+      "source_id": "dados_abertos_catalog__conjunto_dados__full_refresh",
+      "table_name": "conjuntos_dados",
+      "yaml": "conf/sources/dados_abertos_catalog/conjunto_de_dados.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/dados_abertos/catalog/conjunto_dados_details",
+      "enabled": false,
+      "entry": "sources[1]",
+      "format": "iceberg",
+      "namespace": "bronze__dados_abertos_catalog",
+      "physical_table": "bronze__dados_abertos_catalog.conjuntos_dados_details",
+      "source_id": "dados_abertos_catalog__conjunto_dados_details__full_refresh",
+      "table_name": "conjuntos_dados_details",
+      "yaml": "conf/sources/dados_abertos_catalog/conjunto_de_dados.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/example/federal_open_data_example",
+      "enabled": true,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze_example",
+      "physical_table": "bronze_example.federal_open_data_example",
+      "source_id": "federal_open_data_example",
+      "table_name": "federal_open_data_example",
+      "yaml": "conf/sources/example/example_source.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/ibge/pib_brasil",
+      "enabled": false,
+      "entry": "sources[0]",
+      "format": "iceberg",
+      "namespace": null,
+      "physical_table": "bronze.ibge__pib_brasil",
+      "source_id": "ibge_pib_brasil",
+      "table_name": null,
+      "yaml": "conf/sources/ibge/sidra.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/ibge/agro_abacaxi_pronaf",
+      "enabled": false,
+      "entry": "sources[1]",
+      "format": "iceberg",
+      "namespace": null,
+      "physical_table": "bronze.ibge__agro_abacaxi_pronaf",
+      "source_id": "ibge_agro_abacaxi_pronaf",
+      "table_name": null,
+      "yaml": "conf/sources/ibge/sidra.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/inep/censo_escolar_microdados",
+      "enabled": false,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze_inep",
+      "physical_table": "bronze_inep.censo_escolar_microdados",
+      "source_id": "inep_censo_escolar_microdados",
+      "table_name": "censo_escolar_microdados",
+      "yaml": "conf/sources/inep/inep.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/receita_federal/cnpj/cnaes",
+      "enabled": false,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze__receita_federal",
+      "physical_table": "bronze__receita_federal.cnpj_cnaes",
+      "source_id": "receita_federal__cnpj__cnaes_full_refresh",
+      "table_name": "cnpj_cnaes",
+      "yaml": "conf/sources/receita_federal/cnpj/cnaes.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/receita_federal/cnpj/empresas",
+      "enabled": false,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze__receita_federal",
+      "physical_table": "bronze__receita_federal.cnpj_empresas",
+      "source_id": "receita_federal__cnpj__empresas_full_refresh",
+      "table_name": "cnpj_empresas",
+      "yaml": "conf/sources/receita_federal/cnpj/empresas.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/receita_federal/cnpj/estabelecimentos",
+      "enabled": false,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze__receita_federal",
+      "physical_table": "bronze__receita_federal.cnpj_estabelecimentos",
+      "source_id": "receita_federal__cnpj__estabelecimentos_full_refresh",
+      "table_name": "cnpj_estabelecimentos",
+      "yaml": "conf/sources/receita_federal/cnpj/estabelecimentos.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/receita_federal/cnpj/motivos",
+      "enabled": false,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze__receita_federal",
+      "physical_table": "bronze__receita_federal.cnpj_motivos",
+      "source_id": "receita_federal__cnpj__motivos_full_refresh",
+      "table_name": "cnpj_motivos",
+      "yaml": "conf/sources/receita_federal/cnpj/motivos.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/receita_federal/cnpj/municipios",
+      "enabled": false,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze__receita_federal",
+      "physical_table": "bronze__receita_federal.cnpj_municipios",
+      "source_id": "receita_federal__cnpj__municipios_full_refresh",
+      "table_name": "cnpj_municipios",
+      "yaml": "conf/sources/receita_federal/cnpj/municipios.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/receita_federal/cnpj/naturezas",
+      "enabled": false,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze__receita_federal",
+      "physical_table": "bronze__receita_federal.cnpj_naturezas",
+      "source_id": "receita_federal__cnpj__naturezas_full_refresh",
+      "table_name": "cnpj_naturezas",
+      "yaml": "conf/sources/receita_federal/cnpj/naturezas.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/receita_federal/cnpj/paises",
+      "enabled": false,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze__receita_federal",
+      "physical_table": "bronze__receita_federal.cnpj_paises",
+      "source_id": "receita_federal__cnpj__paises_full_refresh",
+      "table_name": "cnpj_paises",
+      "yaml": "conf/sources/receita_federal/cnpj/paises.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/receita_federal/cnpj/qualificacoes",
+      "enabled": false,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze__receita_federal",
+      "physical_table": "bronze__receita_federal.cnpj_qualificacoes",
+      "source_id": "receita_federal__cnpj__qualificacoes_full_refresh",
+      "table_name": "cnpj_qualificacoes",
+      "yaml": "conf/sources/receita_federal/cnpj/qualificacoes.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/receita_federal/cnpj/simples",
+      "enabled": false,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze__receita_federal",
+      "physical_table": "bronze__receita_federal.cnpj_simples",
+      "source_id": "receita_federal__cnpj__simples_full_refresh",
+      "table_name": "cnpj_simples",
+      "yaml": "conf/sources/receita_federal/cnpj/simples.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/receita_federal/cnpj/socios",
+      "enabled": false,
+      "entry": "$",
+      "format": "iceberg",
+      "namespace": "bronze__receita_federal",
+      "physical_table": "bronze__receita_federal.cnpj_socios",
+      "source_id": "receita_federal__cnpj__socios_full_refresh",
+      "table_name": "cnpj_socios",
+      "yaml": "conf/sources/receita_federal/cnpj/socios.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/contratos__contratos",
+      "enabled": false,
+      "entry": "sources[0]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.contratos__contratos",
+      "source_id": "transparencia__contratos__contratos__full_refresh",
+      "table_name": "contratos__contratos",
+      "yaml": "conf/sources/transparencia/contratos.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/emendas_parlamentares__emendas",
+      "enabled": false,
+      "entry": "sources[0]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.emendas_parlamentares__emendas",
+      "source_id": "transparencia__emendas_parlamentares__emendas__full_refresh",
+      "table_name": "emendas_parlamentares__emendas",
+      "yaml": "conf/sources/transparencia/emendas_parlamentares.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/emendas_parlamentares__documentos",
+      "enabled": false,
+      "entry": "sources[1]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.emendas_parlamentares__documentos",
+      "source_id": "transparencia__emendas_parlamentares__documentos__full_refresh",
+      "table_name": "emendas_parlamentares__documentos",
+      "yaml": "conf/sources/transparencia/emendas_parlamentares.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/gastos_cartoes__cartoes",
+      "enabled": false,
+      "entry": "sources[0]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.gastos_cartoes__cartoes",
+      "source_id": "transparencia__gastos_cartoes__cartoes__full_refresh",
+      "table_name": "gastos_cartoes__cartoes",
+      "yaml": "conf/sources/transparencia/gastos_cartoes.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/gastos_cartoes__cartoes",
+      "enabled": false,
+      "entry": "sources[1]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.gastos_cartoes__cartoes",
+      "source_id": "transparencia__gastos_cartoes__cartoes__incremental",
+      "table_name": "gastos_cartoes__cartoes",
+      "yaml": "conf/sources/transparencia/gastos_cartoes.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/licitacoes__licitacoes",
+      "enabled": false,
+      "entry": "sources[0]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.licitacoes__licitacoes",
+      "source_id": "transparencia__licitacoes__licitacoes__full_refresh",
+      "table_name": "licitacoes__licitacoes",
+      "yaml": "conf/sources/transparencia/licitacoes.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/licitacoes__unidades_gestoras",
+      "enabled": false,
+      "entry": "sources[1]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.licitacoes__unidades_gestoras",
+      "source_id": "transparencia__licitacoes__unidades_gestoras__full_refresh",
+      "table_name": "licitacoes__unidades_gestoras",
+      "yaml": "conf/sources/transparencia/licitacoes.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/licitacoes__modalidades",
+      "enabled": false,
+      "entry": "sources[2]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.licitacoes__modalidades",
+      "source_id": "transparencia__licitacoes__modalidades__full_refresh",
+      "table_name": "licitacoes__modalidades",
+      "yaml": "conf/sources/transparencia/licitacoes.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/orgaos__siape",
+      "enabled": false,
+      "entry": "sources[0]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.orgaos__siape",
+      "source_id": "transparencia__orgaos__siape__full_refresh",
+      "table_name": "orgaos__siape",
+      "yaml": "conf/sources/transparencia/orgaos.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/orgaos__siafi",
+      "enabled": false,
+      "entry": "sources[1]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.orgaos__siafi",
+      "source_id": "transparencia__orgaos__siafi__full_refresh",
+      "table_name": "orgaos__siafi",
+      "yaml": "conf/sources/transparencia/orgaos.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/renuncias_fiscais__renuncias_valores",
+      "enabled": false,
+      "entry": "sources[0]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.renuncias_fiscais__renuncias_valores",
+      "source_id": "transparencia__renuncias_fiscais__renuncias_valores__full_refresh",
+      "table_name": "renuncias_fiscais__renuncias_valores",
+      "yaml": "conf/sources/transparencia/renuncias_fiscais.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/renuncias_fiscais__empresas_imunes_isentas",
+      "enabled": false,
+      "entry": "sources[1]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.renuncias_fiscais__empresas_imunes_isentas",
+      "source_id": "transparencia__renuncias_fiscais__empresas_imunes_isentas__full_refresh",
+      "table_name": "renuncias_fiscais__empresas_imunes_isentas",
+      "yaml": "conf/sources/transparencia/renuncias_fiscais.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/renuncias_fiscais__empresas_habilitadas",
+      "enabled": false,
+      "entry": "sources[2]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.renuncias_fiscais__empresas_habilitadas",
+      "source_id": "transparencia__renuncias_fiscais__empresas_habilitadas__full_refresh",
+      "table_name": "renuncias_fiscais__empresas_habilitadas",
+      "yaml": "conf/sources/transparencia/renuncias_fiscais.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/poder_executivo_federal__servidores_por_orgao",
+      "enabled": false,
+      "entry": "sources[0]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.poder_executivo_federal__servidores_por_orgao",
+      "source_id": "transparencia__poder_executivo_federal__servidores_por_orgao__full_refresh",
+      "table_name": "poder_executivo_federal__servidores_por_orgao",
+      "yaml": "conf/sources/transparencia/servidores.yaml"
+    },
+    {
+      "bronze_path": "data/bronze/transparencia/poder_executivo_federal__servidores",
+      "enabled": false,
+      "entry": "sources[1]",
+      "format": "iceberg",
+      "namespace": "bronze__transparencia",
+      "physical_table": "bronze__transparencia.poder_executivo_federal__servidores",
+      "source_id": "transparencia__poder_executivo_federal__servidores__full_refresh",
+      "table_name": "poder_executivo_federal__servidores",
+      "yaml": "conf/sources/transparencia/servidores.yaml"
+    }
+  ],
+  "references": [
+    {
+      "consumer": "dados_abertos_catalog__conjunto_dados_details__full_refresh",
+      "consumer_enabled": false,
+      "leaf": "sources[1].access.request_inputs",
+      "producers": [
+        {
+          "enabled": false,
+          "source_id": "dados_abertos_catalog__conjunto_dados__full_refresh"
+        }
+      ],
+      "table": "bronze__dados_abertos_catalog.conjuntos_dados",
+      "yaml": "conf/sources/dados_abertos_catalog/conjunto_de_dados.yaml"
+    },
+    {
+      "consumer": "transparencia__contratos__contratos__full_refresh",
+      "consumer_enabled": false,
+      "leaf": "sources[0].access.request_inputs",
+      "producers": [
+        {
+          "enabled": false,
+          "source_id": "transparencia__orgaos__siafi__full_refresh"
+        }
+      ],
+      "table": "bronze__transparencia.orgaos__siafi",
+      "yaml": "conf/sources/transparencia/contratos.yaml"
+    },
+    {
+      "consumer": "transparencia__emendas_parlamentares__documentos__full_refresh",
+      "consumer_enabled": false,
+      "leaf": "sources[1].access.request_inputs",
+      "producers": [
+        {
+          "enabled": false,
+          "source_id": "transparencia__emendas_parlamentares__emendas__full_refresh"
+        }
+      ],
+      "table": "bronze__transparencia.emendas_parlamentares__emendas",
+      "yaml": "conf/sources/transparencia/emendas_parlamentares.yaml"
+    },
+    {
+      "consumer": "transparencia__licitacoes__licitacoes__full_refresh",
+      "consumer_enabled": false,
+      "leaf": "sources[0].access.request_inputs.inputs[0]",
+      "producers": [
+        {
+          "enabled": false,
+          "source_id": "transparencia__orgaos__siafi__full_refresh"
+        }
+      ],
+      "table": "bronze__transparencia.orgaos__siafi",
+      "yaml": "conf/sources/transparencia/licitacoes.yaml"
+    }
+  ]
+}

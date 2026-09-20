@@ -51,7 +51,7 @@ def load_spark_schema_from_schema_path(path: Path) -> Any:
 
     raw = json.loads(path.read_text(encoding="utf-8"))
     if (
-        isinstance(raw, Mapping)
+        isinstance(raw, dict)
         and raw.get("type") == "struct"
         and isinstance(raw.get("fields"), Sequence)
     ):

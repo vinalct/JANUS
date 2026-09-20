@@ -582,6 +582,8 @@ def _required_field_violation_counts(
         aggregations.append(spark_sum(when(invalid_condition, 1).otherwise(0)).alias(field))
 
     row = dataframe.agg(*aggregations).first()
+    if row is None:
+        raise RuntimeError("Spark returned no row for the required-field aggregation")
     return {field: int(row[field] or 0) for field in fields}
 
 

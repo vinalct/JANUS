@@ -32,6 +32,7 @@ sources:
         type: combined
         inputs:
           - type: iceberg_rows
+            upstream_source_id: transparencia__orgaos__siafi__full_refresh
             namespace: bronze__transparencia
             table_name: orgaos__siafi
             columns:

@@ -270,6 +270,7 @@ def test_merge_request_params_rejects_duplicate_keys():
 def test_validate_iceberg_request_input_source_rejects_missing_tables():
     request_inputs = IcebergRowsRequestInputsConfig(
         type="iceberg_rows",
+        upstream_source_id="emendas_parlamentares__emendas",
         namespace="bronze_transparencia",
         table_name="emendas_parlamentares__emendas",
         columns={"emenda_id": "id"},
@@ -287,6 +288,7 @@ def test_validate_iceberg_request_input_source_rejects_missing_tables():
 def test_validate_iceberg_request_input_source_rejects_missing_columns():
     request_inputs = IcebergRowsRequestInputsConfig(
         type="iceberg_rows",
+        upstream_source_id="emendas_parlamentares__emendas",
         namespace="bronze_transparencia",
         table_name="emendas_parlamentares__emendas",
         columns={"emenda_id": "id"},
@@ -307,6 +309,7 @@ def test_validate_iceberg_request_input_source_rejects_missing_columns():
 def test_load_request_inputs_reads_projected_iceberg_rows_with_binding_field_names():
     request_inputs = IcebergRowsRequestInputsConfig(
         type="iceberg_rows",
+        upstream_source_id="emendas_parlamentares__emendas",
         namespace="bronze_transparencia",
         table_name="emendas_parlamentares__emendas",
         columns={
@@ -340,6 +343,7 @@ def test_load_request_inputs_reads_projected_iceberg_rows_with_binding_field_nam
 def test_load_request_inputs_applies_distinct_to_projected_iceberg_rows_only():
     request_inputs = IcebergRowsRequestInputsConfig(
         type="iceberg_rows",
+        upstream_source_id="emendas_parlamentares__emendas",
         namespace="bronze_transparencia",
         table_name="emendas_parlamentares__emendas",
         columns={"emenda_id": "id"},
@@ -366,6 +370,7 @@ def test_load_request_inputs_applies_distinct_to_projected_iceberg_rows_only():
 def test_load_request_inputs_rejects_iceberg_rows_without_spark():
     request_inputs = IcebergRowsRequestInputsConfig(
         type="iceberg_rows",
+        upstream_source_id="emendas_parlamentares__emendas",
         namespace="bronze_transparencia",
         table_name="emendas_parlamentares__emendas",
         columns={"emenda_id": "id"},
@@ -382,6 +387,7 @@ def test_load_request_inputs_rejects_iceberg_rows_without_spark():
 def test_load_request_inputs_combined_computes_cartesian_product_of_iceberg_and_date_window():
     iceberg_input = IcebergRowsRequestInputsConfig(
         type="iceberg_rows",
+        upstream_source_id="orgaos",
         namespace="bronze_transparencia",
         table_name="orgaos",
         columns={"orgao_codigo": "codigo"},
@@ -440,6 +446,7 @@ def test_load_request_inputs_combined_resolves_bindings_from_merged_context():
     }
     iceberg_input = IcebergRowsRequestInputsConfig(
         type="iceberg_rows",
+        upstream_source_id="orgaos",
         namespace="bronze_transparencia",
         table_name="orgaos",
         columns={"orgao_codigo": "codigo"},

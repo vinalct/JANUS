@@ -1,0 +1,16 @@
+{
+  "north": [
+    {
+      "detail_id": "north-001",
+      "reference_id": "north",
+      "amount": 10
+    }
+  ],
+  "south": [
+    {
+      "detail_id": "south-001",
+      "reference_id": "south",
+      "amount": 20
+    }
+  ]
+}
