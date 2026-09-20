@@ -142,7 +142,7 @@ pyspark-local: ensure-up
 	catalog_type="$${JANUS_ICEBERG_CATALOG_TYPE:-jdbc}"; \
 	packages="$${JANUS_ICEBERG_RUNTIME_PACKAGE:-org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1}"; \
 	catalog_uri="$${JANUS_ICEBERG_CATALOG_URI:-}"; \
-	if [ "$$catalog_type" = jdbc ] && [ -z "$$catalog_uri" ]; then catalog_uri='$(ICEBERG_CATALOG_URI)'; fi; \
+	if [ "$$catalog_type" = jdbc ] && [ -z "$$catalog_uri" ]; then catalog_uri="$(ICEBERG_CATALOG_URI)"; fi; \
 	uri_path="$${catalog_uri#jdbc:sqlite:}"; \
 	if [ "$$uri_path" != "$$catalog_uri" ] && [ "$$uri_path" = "$${uri_path#/}" ]; then catalog_uri="jdbc:sqlite:/workspace/$$uri_path"; fi; \
 	catalog_conf="--conf spark.sql.catalog.$$catalog.type=$$catalog_type"; \

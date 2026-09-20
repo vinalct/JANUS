@@ -211,7 +211,7 @@ jobs:
               --class-name tests.integration.orchestration.test_dependency_execution \
               --minimum-passed 8
       - name: Coverage summary (inside container)
-        if: always()
+        if: ${{ always() && hashFiles('data/.coverage') != '' }}
         run: |
           set -o pipefail
           JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
