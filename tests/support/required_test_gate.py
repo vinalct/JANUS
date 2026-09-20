@@ -14,6 +14,13 @@ def _outcome(case: ElementTree.Element) -> str:
     return "passed"
 
 
+def _matches_test_name(reported_name: str | None, required_name: str) -> bool:
+    """Match a pytest function name with or without its parameter-set suffix."""
+    return reported_name == required_name or (
+        reported_name is not None and reported_name.startswith(f"{required_name}[")
+    )
+
+
 def assert_required_tests_ran(
     report: Path,
     *,
@@ -26,7 +33,7 @@ def assert_required_tests_ran(
         case
         for case in root.iter("testcase")
         if class_name is None or case.get("classname") == class_name
-        if test_name is None or case.get("name") == test_name
+        if test_name is None or _matches_test_name(case.get("name"), test_name)
     ]
     outcomes = {
         f"{case.get('classname')}::{case.get('name')}": _outcome(case) for case in cases

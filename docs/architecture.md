@@ -124,7 +124,43 @@ Operational metadata is a first-class part of the architecture, not a later clea
 
 The metadata zone is where JANUS explains what happened during a run, not just whether a run returned exit code zero.
 
-### 8. Batch orchestration
+### 8. Queryable observability
+
+`RunObserver` owns the authoritative metadata-zone JSON lifecycle. Queryable and interoperable
+observability is a strictly downstream, additive projection:
+
+```text
+Spark materialize + validate
+          |
+          v
+stop Spark provider
+          |
+          v
+RunObserver persists authoritative JSON
+  (run metadata -> lineage -> checkpoint, where applicable)
+          |
+          v
+RunRecord.from_run
+          |
+          +--------------------------+
+          v                          v
+PyIceberg append                OpenLineage emitter
+metadata.runs                   file / HTTP / disabled
+```
+
+The terminal projection and both destinations run only after JSON persistence and outside the
+Spark lifetime. `RunRecord.from_run` is the sole projection; `RUNS_TABLE_SCHEMA` is the sole table
+declaration; and the sink reuses the catalog derivation that bronze uses. No observability path may
+start Spark, write an authoritative JSON artifact, or raise into the run. The fan-out has one
+bounded budget and records a redacted warning on degradation.
+
+The table is append-only and partitioned by `day(emitted_at)`. Retried run ids can therefore have
+more than one row, and published queries select the latest row. There is no retention or expiry
+job. JSON remains authoritative for a single run, so best-effort emission means a missing row is
+not evidence that no run occurred. See [queryable observability](queryable-observability.md) for
+the schema, executable queries, transports, and operator guidance.
+
+### 9. Batch orchestration
 
 Steps 1–7 describe **one** source. An `iceberg_rows` request input makes one source read a
 bronze table another source wrote, which means the source set is a graph, not a list. That

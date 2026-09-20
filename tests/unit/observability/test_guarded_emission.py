@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -346,24 +345,38 @@ def test_sink_degradation_is_reported_truthfully(tmp_path, sink_outcome, expecte
     assert result.to_summary()["outcome"] == expected_outcome.value
 
 
-def test_total_budget_bounds_projection_and_records_the_timeout(tmp_path):
+def test_total_budget_joins_worker_once_and_records_the_timeout(tmp_path, monkeypatch):
     persisted = _terminal_artifacts(tmp_path, status="succeeded")
+    started = []
+    joined_with = []
 
-    def slow_projection(artifacts):
-        time.sleep(0.25)
-        return emission._project_run_record(artifacts)
+    class BudgetExhaustingThread:
+        def __init__(self, *, target, name, daemon):
+            del target
+            assert name == "janus-run-event-emission"
+            assert daemon is True
+
+        def start(self):
+            started.append(True)
+
+        def join(self, timeout):
+            joined_with.append(timeout)
+
+        def is_alive(self):
+            return True
+
+    monkeypatch.setattr(emission.threading, "Thread", BudgetExhaustingThread)
 
     emitter = build_run_event_emitter(
         {},
         {},
-        projector=slow_projection,
         timeout_seconds=0.01,
     )
-    started_at = time.monotonic()
 
     emitter.emit_succeeded(_plan(tmp_path, "unused"), persisted)
 
-    assert time.monotonic() - started_at < 0.15
+    assert started == [True]
+    assert joined_with == [0.01]
     assert emitter.last_result is not None
     assert emitter.last_result.outcome is RunEmissionOutcome.FAILED
     assert emitter.last_result.stage == "budget"
