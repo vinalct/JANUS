@@ -20,7 +20,16 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from urllib.request import HTTPSHandler, OpenerDirector, Request, build_opener
+from urllib.request import (
+    HTTPDefaultErrorHandler,
+    HTTPErrorProcessor,
+    HTTPHandler,
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    OpenerDirector,
+    ProxyHandler,
+    Request,
+)
 
 from janus.models import AuthConfig
 from janus.strategies.common import _freeze_string_mapping, _stringify_mapping
@@ -30,6 +39,7 @@ HTTP_STATUS_MIN = 100
 HTTP_STATUS_SUCCESS = 200
 HTTP_STATUS_REDIRECT = 300
 HTTP_STATUS_CLIENT_ERROR = 400
+SUPPORTED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +135,34 @@ class ApiTransport(Protocol):
     def send(self, request: ApiRequest) -> ApiResponse: ...
 
 
+def _require_supported_scheme(url: str) -> None:
+    scheme = urlsplit(url).scheme.lower()
+    if scheme not in SUPPORTED_URL_SCHEMES:
+        raise ApiTransportError(
+            f"Refusing to open {redact_url(url)!r}: scheme "
+            f"{scheme or '<none>'!r} is not http or https"
+        )
+
+
+def _build_opener(
+    context: ssl.SSLContext,
+    *,
+    redirect_handler: HTTPRedirectHandler,
+) -> OpenerDirector:
+    """Build an opener with exactly the handlers JANUS needs."""
+    opener = OpenerDirector()
+    for handler in (
+        ProxyHandler(),
+        HTTPHandler(),
+        HTTPSHandler(context=context),
+        HTTPDefaultErrorHandler(),
+        redirect_handler,
+        HTTPErrorProcessor(),
+    ):
+        opener.add_handler(handler)
+    return opener
+
+
 @dataclass(slots=True)
 class UrllibApiTransport:
     """Stdlib-backed HTTP transport with an explicit open/close lifecycle."""
@@ -134,8 +172,9 @@ class UrllibApiTransport:
 
     def open(self) -> None:
         if self.opener is None:
-            self.opener = build_opener(
-                HTTPSHandler(context=_build_ssl_context(self.ca_bundle_path))
+            self.opener = _build_opener(
+                _build_ssl_context(self.ca_bundle_path),
+                redirect_handler=HTTPRedirectHandler(),
             )
 
     def close(self) -> None:
@@ -143,6 +182,7 @@ class UrllibApiTransport:
 
     def send(self, request: ApiRequest) -> ApiResponse:
         self.open()
+        _require_supported_scheme(request.full_url())
         if self.opener is None:
             raise ApiTransportError("API transport failed to initialize urllib opener")
 

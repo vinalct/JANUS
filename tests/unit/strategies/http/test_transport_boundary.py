@@ -25,12 +25,10 @@ from janus.strategies.http import (
 
 from .conftest import CountingThrottle, FakeTransport, build_plan, make_client, recording_logger
 
-
 REDIRECT_POLICY_ATTR = "janus_redirect_policy"
 REDIRECT_HOPS_ATTR = "janus_redirect_hops"
 
 # Reasons, spelled once so the -ra summary reads as a task list.
-RED_UNTIL_03 = "red until: scheme allow-list and explicit opener"
 RED_UNTIL_04 = "red until: redirect policy and credential stripping"
 RED_UNTIL_09 = "red until: transport byte cap and stream()"
 
@@ -112,7 +110,6 @@ def _handler_class_names(transport: UrllibApiTransport) -> list[str]:
 # FR-1 — scheme allow-list at the transport
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_03)
 @pytest.mark.parametrize("url", UNSUPPORTED_URLS)
 def test_transport_refuses_each_unsupported_scheme(url):
     """A non-``http(s)`` URL is refused *before* the opener is touched."""
@@ -125,7 +122,6 @@ def test_transport_refuses_each_unsupported_scheme(url):
     assert spy.calls == [], f"the opener was reached for {url!r} before the scheme was checked"
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_03)
 def test_opener_installs_no_file_ftp_data_or_unknown_handler():
     """The opener carries exactly the handlers JANUS needs — never ``build_opener``'s nine."""
     transport = UrllibApiTransport()
@@ -192,7 +188,6 @@ def test_https_handler_still_carries_the_janus_ssl_context():
     assert context.check_hostname is True
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_03)
 def test_openlineage_http_transport_inherits_the_scheme_rule(tmp_path):
     """The lineage POST composes the same transport, so it inherits the boundary."""
 
