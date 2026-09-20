@@ -14,17 +14,26 @@ def _outcome(case: ElementTree.Element) -> str:
     return "passed"
 
 
+def _matches_test_name(reported_name: str | None, required_name: str) -> bool:
+    """Match a pytest function name with or without its parameter-set suffix."""
+    return reported_name == required_name or (
+        reported_name is not None and reported_name.startswith(f"{required_name}[")
+    )
+
+
 def assert_required_tests_ran(
     report: Path,
     *,
     minimum_passed: int,
     class_name: str | None = None,
+    test_name: str | None = None,
 ) -> None:
     root = ElementTree.parse(report).getroot()
     cases = [
         case
         for case in root.iter("testcase")
         if class_name is None or case.get("classname") == class_name
+        if test_name is None or _matches_test_name(case.get("name"), test_name)
     ]
     outcomes = {
         f"{case.get('classname')}::{case.get('name')}": _outcome(case) for case in cases
@@ -45,11 +54,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("report", type=Path)
     parser.add_argument("--minimum-passed", type=int, required=True)
     parser.add_argument("--class-name")
+    parser.add_argument("--test-name")
     args = parser.parse_args(argv)
     assert_required_tests_ran(
         args.report,
         minimum_passed=args.minimum_passed,
         class_name=args.class_name,
+        test_name=args.test_name,
     )
     print(f"OK: required pytest cases executed ({args.report})")
     return 0

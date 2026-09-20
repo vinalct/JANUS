@@ -1,0 +1,185 @@
+{
+  "eventTime": "2026-07-04T12:00:05+00:00",
+  "eventType": "FAIL",
+  "inputs": [
+    {
+      "name": "bronze.producer",
+      "namespace": "iceberg://janus/s3%3A%2F%2Fjanus-bronze%2Fwarehouse"
+    }
+  ],
+  "job": {
+    "facets": {
+      "documentation": {
+        "_producer": "https://github.com/vinalct/janus/tree/v0.1.0",
+        "_schemaURL": "https://openlineage.io/spec/facets/1-1-0/DocumentationJobFacet.json#/$defs/DocumentationJobFacet",
+        "contentType": "text/plain",
+        "description": "Source consumer"
+      },
+      "jobType": {
+        "_producer": "https://github.com/vinalct/janus/tree/v0.1.0",
+        "_schemaURL": "https://openlineage.io/spec/facets/2-0-4/JobTypeJobFacet.json#/$defs/JobTypeJobFacet",
+        "integration": "JANUS",
+        "jobType": "INGESTION",
+        "processingType": "BATCH"
+      },
+      "sourceCodeLocation": {
+        "_producer": "https://github.com/vinalct/janus/tree/v0.1.0",
+        "_schemaURL": "https://openlineage.io/spec/facets/1-1-0/SourceCodeLocationJobFacet.json#/$defs/SourceCodeLocationJobFacet",
+        "path": "conf/sources/consumer.yaml",
+        "type": "file",
+        "url": "file:conf/sources/consumer.yaml",
+        "version": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    },
+    "name": "consumer",
+    "namespace": "janus://local"
+  },
+  "outputs": [
+    {
+      "name": "/data/raw/consumer/runs/run/page-0001.json",
+      "namespace": "file",
+      "outputFacets": {
+        "outputStatistics": {
+          "_producer": "https://github.com/vinalct/janus/tree/v0.1.0",
+          "_schemaURL": "https://openlineage.io/spec/facets/1-0-2/OutputStatisticsOutputDatasetFacet.json#/$defs/OutputStatisticsOutputDatasetFacet",
+          "rowCount": 1
+        }
+      }
+    },
+    {
+      "name": "bronze.consumer",
+      "namespace": "iceberg://janus/s3%3A%2F%2Fjanus-bronze%2Fwarehouse",
+      "outputFacets": {
+        "outputStatistics": {
+          "_producer": "https://github.com/vinalct/janus/tree/v0.1.0",
+          "_schemaURL": "https://openlineage.io/spec/facets/1-0-2/OutputStatisticsOutputDatasetFacet.json#/$defs/OutputStatisticsOutputDatasetFacet",
+          "rowCount": 2
+        }
+      }
+    }
+  ],
+  "producer": "https://github.com/vinalct/janus/tree/v0.1.0",
+  "run": {
+    "facets": {
+      "errorMessage": {
+        "_producer": "https://github.com/vinalct/janus/tree/v0.1.0",
+        "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/ErrorMessageRunFacet.json#/$defs/ErrorMessageRunFacet",
+        "message": "Quality validation failed: data.required_fields",
+        "programmingLanguage": "Python"
+      },
+      "janusRun": {
+        "_producer": "https://github.com/vinalct/janus/tree/v0.1.0",
+        "_schemaURL": "https://raw.githubusercontent.com/vinalct/janus/v0.1.0/docs/schemas/openlineage/JanusRunFacet.json#/$defs/JanusRunFacet",
+        "artifacts": [
+          {
+            "checksum": "abc123",
+            "format": "json",
+            "path": "/data/raw/consumer/runs/run/page-0001.json"
+          }
+        ],
+        "checkpoint_advanced": null,
+        "checkpoint_decision": null,
+        "checkpoint_field": "updated_at",
+        "checkpoint_strategy": "max_value",
+        "checkpoint_value": "2026-07-02",
+        "config_version": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "configured_outputs": [
+          {
+            "format": "json",
+            "path": "/data/raw/consumer",
+            "zone": "raw"
+          },
+          {
+            "format": "iceberg",
+            "path": "/data/bronze/consumer",
+            "zone": "bronze"
+          },
+          {
+            "format": "json",
+            "path": "/data/metadata/consumer",
+            "zone": "metadata"
+          }
+        ],
+        "declared_inputs": [
+          {
+            "input_paths": [
+              "access.request_inputs"
+            ],
+            "producer_id": "producer",
+            "table": "bronze.producer"
+          }
+        ],
+        "emitted_at": "2026-07-04T12:00:05+00:00",
+        "environment": "local",
+        "error_type": "RuntimeError",
+        "extraction_metadata": {
+          "request_count": "1"
+        },
+        "extraction_mode": "incremental",
+        "failure_reason": "Quality validation failed: data.required_fields",
+        "materialized_outputs": [
+          {
+            "format": "json",
+            "metadata": {
+              "checksum": "abc123"
+            },
+            "mode": "overwrite",
+            "partition_by": [
+              "ingestion_date"
+            ],
+            "path": "/data/raw/consumer/runs/run/page-0001.json",
+            "records_written": 1,
+            "zone": "raw"
+          },
+          {
+            "format": "iceberg",
+            "metadata": {
+              "writer": "spark"
+            },
+            "mode": "overwrite",
+            "partition_by": [
+              "ingestion_date"
+            ],
+            "path": "bronze.consumer",
+            "records_written": 2,
+            "zone": "bronze"
+          }
+        ],
+        "metadata": {
+          "strategy.request_count": "1"
+        },
+        "metadata_zone_paths": {
+          "checkpoint_history": null,
+          "lineage": "metadata/lineage/run.json",
+          "run_metadata": "metadata/runs/run.json",
+          "validation_report": "metadata/validations/run.json"
+        },
+        "plan_notes": [
+          "dispatch:api.page_number_api"
+        ],
+        "quality": {
+          "checks_failed": 1,
+          "checks_passed": 0,
+          "checks_skipped": 0,
+          "failed_checks": [
+            "data.required_fields"
+          ],
+          "outcome": "failed"
+        },
+        "records_extracted": 2,
+        "run_attributes": {},
+        "run_id": "order15-quality_failure",
+        "source_config_path": "conf/sources/consumer.yaml",
+        "source_hook": "janus.hooks.example",
+        "source_id": "consumer",
+        "source_name": "Source consumer",
+        "started_at": "2026-07-04T12:00:00+00:00",
+        "status": "failed",
+        "strategy_family": "api",
+        "strategy_variant": "page_number_api"
+      }
+    },
+    "runId": "f05242e9-8505-597f-971c-a5e9ff6dd900"
+  },
+  "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
+}

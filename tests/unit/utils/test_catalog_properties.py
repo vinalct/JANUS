@@ -658,7 +658,11 @@ def test_the_postgres_credentials_are_the_same_on_both_sides(tmp_path):
 
 # ── containment: no second-engine dependency enters `src/janus` ──────────────
 
-FORBIDDEN_RUNTIME_IMPORTS = ("pyiceberg", "sqlalchemy", "duckdb")
+FORBIDDEN_RUNTIME_IMPORTS = ("pyarrow", "pyiceberg", "sqlalchemy", "duckdb")
+ORDER_15_RUNTIME_IMPORTS = {
+    "observability/iceberg_sink.py": frozenset({"pyarrow", "pyiceberg"}),
+}
+JANUS_PACKAGE = Path(janus.__file__).parent
 
 
 def _catalog_properties_source() -> str:
@@ -676,29 +680,52 @@ def _imported_root_modules(source: str) -> set[str]:
 
 
 def _source_modules() -> list[Path]:
-    return sorted(Path(janus.__file__).parent.rglob("*.py"))
+    return sorted(JANUS_PACKAGE.rglob("*.py"))
 
 
-def test_no_module_under_src_imports_a_second_engine():
-    """The derivation maps strings to strings; the live `pyiceberg` lives in tests only.
-
-    Package-scoped on purpose: a sweep pinned to `catalog_properties.py` would go quiet the moment
-    the import it guards against appeared in a neighbour.
-    """
+def test_only_sink_imports_a_second_engine():
+    """overrules the old prohibition only for its runtime append sink."""
 
     offenders = {
-        module.name: sorted(imported)
+        str(module.relative_to(JANUS_PACKAGE)): sorted(unexpected)
         for module in _source_modules()
         if (
             imported := _imported_root_modules(module.read_text(encoding="utf-8"))
             & set(FORBIDDEN_RUNTIME_IMPORTS)
         )
+        and (
+            unexpected := imported
+            - ORDER_15_RUNTIME_IMPORTS.get(
+                str(module.relative_to(JANUS_PACKAGE)), frozenset()
+            )
+        )
     }
 
     assert not offenders, (
-        "src/janus must keep its three runtime dependencies — a second engine is a dev/test "
-        f"dependency, not a runtime one: {offenders}"
+        "only append sink may import the promoted second engine: "
+        f"{offenders}"
     )
+
+
+def test_order_15_engine_import_is_present_and_lazy():
+    """The allowance stays exact and cannot acquire an import-time engine side effect."""
+
+    for relative_path, allowed_imports in ORDER_15_RUNTIME_IMPORTS.items():
+        source = (JANUS_PACKAGE / relative_path).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imported = _imported_root_modules(source) & set(FORBIDDEN_RUNTIME_IMPORTS)
+        module_level = set()
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                module_level.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                module_level.add(node.module.split(".")[0])
+
+        assert imported == allowed_imports
+        assert module_level.isdisjoint(allowed_imports), (
+            f"{relative_path} must import {sorted(allowed_imports)} only inside the sink "
+            "function so importing janus stays engine-free"
+        )
 
 
 def test_the_import_sweep_actually_read_the_package():

@@ -18,7 +18,9 @@ __all__ = [
     "LineageStore",
     "MaterializedOutput",
     "MetadataZonePaths",
+    "NullRunEventEmitter",
     "PersistedArtifacts",
+    "RunEventEmitter",
     "RunMetadata",
     "RunMetadataStore",
     "RunObserver",
@@ -28,17 +30,30 @@ __all__ = [
     "write_json_atomic",
 ]
 
+
 def __getattr__(name: str):
-    if name in {"LineageStore", "PersistedArtifacts", "RunMetadataStore", "RunObserver"}:
+    if name in {
+        "LineageStore",
+        "NullRunEventEmitter",
+        "PersistedArtifacts",
+        "RunEventEmitter",
+        "RunMetadataStore",
+        "RunObserver",
+    }:
         from janus.lineage.store import (
             LineageStore,
+            NullRunEventEmitter,
             PersistedArtifacts,
+            RunEventEmitter,
             RunMetadataStore,
             RunObserver,
         )
+
         exports = {
             "LineageStore": LineageStore,
+            "NullRunEventEmitter": NullRunEventEmitter,
             "PersistedArtifacts": PersistedArtifacts,
+            "RunEventEmitter": RunEventEmitter,
             "RunMetadataStore": RunMetadataStore,
             "RunObserver": RunObserver,
         }

@@ -16,11 +16,23 @@ from janus.utils.catalog_properties import (
 )
 from janus.utils.storage import StorageLayout
 from janus.writers import SparkDatasetWriter
-from tests.support.spark_sessions import CatalogTarget, require_pyiceberg
+from tests.support.spark_sessions import (
+    CatalogTarget,
+    catalog_acceptance_prerequisites_available,
+    require_pyiceberg,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_PROJECT_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "catalog_commits"
 SOURCE_ID = "catalog_commits_round_trip"
+
+CROSS_ENGINE_SKIP_REASON = (
+    "CROSS_ENGINE_READBACK_UNAVAILABLE: catalog engines or seeded jars are missing"
+)
+pytestmark = pytest.mark.skipif(
+    not catalog_acceptance_prerequisites_available(),
+    reason=CROSS_ENGINE_SKIP_REASON,
+)
 
 SPARK_SCHEMA = "id BIGINT, name STRING"
 SPARK_ROWS = [(1, "written by spark"), (2, "written by spark")]

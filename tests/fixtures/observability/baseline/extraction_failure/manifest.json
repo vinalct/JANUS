@@ -1,0 +1,108 @@
+{
+  "captured_files": [
+    "metadata/baseline_api/dead_letters/current.json",
+    "metadata/baseline_api/lineage/order15-extraction_failure.json",
+    "metadata/baseline_api/runs/order15-extraction_failure.json"
+  ],
+  "case": "extraction_failure",
+  "entry_point": "execute",
+  "events": [
+    "request"
+  ],
+  "requests": [
+    "https://fixtures.invalid/baseline_api?page=1&size=10"
+  ],
+  "run_id": "order15-extraction_failure",
+  "source_id": "baseline_api",
+  "spark_session_started": false,
+  "status": "failed",
+  "strategy_family": "api",
+  "summary": {
+    "executed_run": {
+      "error_type": "RuntimeError",
+      "failure_reason": "scripted extraction failure",
+      "materialized_outputs": [],
+      "metadata_outputs": {
+        "checkpoint_history_path": null,
+        "checkpoint_state_path": null,
+        "lineage_path": "<PROJECT>/data/metadata/baseline_api/lineage/order15-extraction_failure.json",
+        "run_metadata_path": "<PROJECT>/data/metadata/baseline_api/runs/order15-extraction_failure.json",
+        "validation_report_path": null
+      },
+      "status": "failed",
+      "strategy_metadata": {}
+    },
+    "planned_run": {
+      "execution": {
+        "checkpoint_field": "updated_at",
+        "checkpoint_strategy": "max_value",
+        "mode": "full_refresh"
+      },
+      "outputs": {
+        "bronze": {
+          "format": "iceberg",
+          "path": "data/bronze/baseline_api"
+        },
+        "metadata": {
+          "format": "json",
+          "path": "data/metadata/baseline_api"
+        },
+        "raw": {
+          "format": "json",
+          "path": "data/raw/baseline_api"
+        }
+      },
+      "plan_notes": [
+        "strategy_family:api",
+        "strategy_variant:page_number_api",
+        "dispatch:api.page_number_api"
+      ],
+      "pre_run_metadata": {
+        "bronze_output_path": "data/bronze/baseline_api",
+        "checkpoint_field": "updated_at",
+        "checkpoint_strategy": "max_value",
+        "dispatch_path": "api.page_number_api",
+        "environment": "local",
+        "extraction_mode": "full_refresh",
+        "metadata_output_path": "data/metadata/baseline_api",
+        "project_root": "<PROJECT>",
+        "raw_output_path": "data/raw/baseline_api",
+        "run_id": "order15-extraction_failure",
+        "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
+        "source_id": "baseline_api",
+        "source_name": "Baseline api source",
+        "started_at": "2026-07-04T12:00:00+00:00",
+        "strategy_family": "api",
+        "strategy_variant": "page_number_api"
+      },
+      "run": {
+        "attributes": {
+          "source_id": "baseline_api",
+          "source_type": "api",
+          "strategy": "api",
+          "strategy_variant": "page_number_api",
+          "trigger": "baseline"
+        },
+        "environment": "local",
+        "run_id": "order15-extraction_failure",
+        "started_at": "2026-07-04T12:00:00+00:00"
+      },
+      "source": {
+        "config_path": "<PROJECT>/conf/sources/sources.yaml",
+        "hook_id": null,
+        "name": "Baseline api source",
+        "source_id": "baseline_api",
+        "tags": [
+          "baseline"
+        ]
+      },
+      "strategy": {
+        "dispatch_path": "api.page_number_api",
+        "family": "api",
+        "hook_implementation": null,
+        "implementation": "ApiStrategy",
+        "variant": "page_number_api"
+      }
+    }
+  }
+}

@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/vinalct/janus/v0.1.0/docs/schemas/openlineage/JanusRunFacet.json",
+  "$defs": {
+    "NullableString": {
+      "type": ["string", "null"]
+    },
+    "StringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "Output": {
+      "type": "object",
+      "properties": {
+        "zone": {"type": "string"},
+        "path": {"type": "string"},
+        "format": {"type": "string"},
+        "mode": {"type": "string"},
+        "records_written": {"type": "integer"},
+        "partition_by": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "metadata": {"$ref": "#/$defs/StringMap"}
+      },
+      "required": ["zone", "path", "format"],
+      "additionalProperties": false
+    },
+    "Artifact": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string"},
+        "format": {"type": "string"},
+        "checksum": {"type": "string"}
+      },
+      "required": ["path", "format"],
+      "additionalProperties": false
+    },
+    "DeclaredInput": {
+      "type": "object",
+      "properties": {
+        "producer_id": {"type": "string"},
+        "table": {"type": "string"},
+        "input_paths": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        }
+      },
+      "required": ["producer_id", "table", "input_paths"],
+      "additionalProperties": false
+    },
+    "Quality": {
+      "type": ["object", "null"],
+      "properties": {
+        "outcome": {
+          "enum": ["failed", "not_run", "passed"]
+        },
+        "checks_passed": {"type": ["integer", "null"]},
+        "checks_failed": {"type": ["integer", "null"]},
+        "checks_skipped": {"type": ["integer", "null"]},
+        "failed_checks": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "array", "items": {"type": "string"}}
+          ]
+        }
+      },
+      "required": [
+        "outcome",
+        "checks_passed",
+        "checks_failed",
+        "checks_skipped",
+        "failed_checks"
+      ],
+      "additionalProperties": false
+    },
+    "JanusRunFacet": {
+      "type": "object",
+      "properties": {
+        "_producer": {"type": "string", "format": "uri"},
+        "_schemaURL": {"type": "string", "format": "uri"},
+        "run_id": {"type": "string"},
+        "source_id": {"type": "string"},
+        "source_name": {"type": "string"},
+        "environment": {"type": "string"},
+        "strategy_family": {"type": "string"},
+        "strategy_variant": {"type": "string"},
+        "extraction_mode": {"type": "string"},
+        "checkpoint_strategy": {"type": "string"},
+        "status": {"enum": ["failed", "running", "succeeded"]},
+        "emitted_at": {
+          "oneOf": [
+            {"type": "string", "format": "date-time"},
+            {"type": "null"}
+          ]
+        },
+        "source_config_path": {"type": "string"},
+        "config_version": {"$ref": "#/$defs/NullableString"},
+        "configured_outputs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/Output"}
+        },
+        "materialized_outputs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/Output"}
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/Artifact"}
+        },
+        "checkpoint_field": {"$ref": "#/$defs/NullableString"},
+        "source_hook": {"$ref": "#/$defs/NullableString"},
+        "records_extracted": {"type": ["integer", "null"]},
+        "checkpoint_value": {"$ref": "#/$defs/NullableString"},
+        "failure_reason": {"$ref": "#/$defs/NullableString"},
+        "error_type": {"$ref": "#/$defs/NullableString"},
+        "run_attributes": {"$ref": "#/$defs/StringMap"},
+        "plan_notes": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "extraction_metadata": {"$ref": "#/$defs/StringMap"},
+        "metadata": {"$ref": "#/$defs/StringMap"},
+        "started_at": {"type": "string", "format": "date-time"},
+        "checkpoint_decision": {
+          "type": ["string", "null"],
+          "enum": ["advanced", "retained", "reused", "skipped", null]
+        },
+        "checkpoint_advanced": {"type": ["boolean", "null"]},
+        "quality": {"$ref": "#/$defs/Quality"},
+        "metadata_zone_paths": {
+          "type": "object",
+          "properties": {
+            "run_metadata": {"$ref": "#/$defs/NullableString"},
+            "lineage": {"$ref": "#/$defs/NullableString"},
+            "checkpoint_history": {"$ref": "#/$defs/NullableString"},
+            "validation_report": {"$ref": "#/$defs/NullableString"}
+          },
+          "required": [
+            "run_metadata",
+            "lineage",
+            "checkpoint_history",
+            "validation_report"
+          ],
+          "additionalProperties": false
+        },
+        "declared_inputs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/DeclaredInput"}
+        }
+      },
+      "required": [
+        "_producer",
+        "_schemaURL",
+        "run_id",
+        "source_id",
+        "source_name",
+        "environment",
+        "strategy_family",
+        "strategy_variant",
+        "extraction_mode",
+        "checkpoint_strategy",
+        "status",
+        "emitted_at",
+        "source_config_path",
+        "config_version",
+        "configured_outputs",
+        "materialized_outputs",
+        "artifacts",
+        "checkpoint_field",
+        "source_hook",
+        "records_extracted",
+        "checkpoint_value",
+        "failure_reason",
+        "error_type",
+        "run_attributes",
+        "plan_notes",
+        "extraction_metadata",
+        "metadata",
+        "started_at",
+        "checkpoint_decision",
+        "checkpoint_advanced",
+        "quality",
+        "metadata_zone_paths",
+        "declared_inputs"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$ref": "#/$defs/JanusRunFacet"
+}

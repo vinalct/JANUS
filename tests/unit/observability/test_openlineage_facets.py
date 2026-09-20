@@ -1,0 +1,456 @@
+"""OpenLineage 2-0-2 mapping, schema, identity and architecture contract."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from dataclasses import fields, replace
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+from jsonschema import Draft202012Validator, FormatChecker
+
+from janus.checkpoints import CheckpointWriteResult
+from janus.lineage import (
+    ArtifactSnapshot,
+    ConfiguredOutput,
+    LineageRecord,
+    MaterializedOutput,
+    RunMetadata,
+)
+from janus.models import SourceDependencyEdge, SourceDependencyGraph, SourceDependencyNode
+from janus.observability import RunEvidencePaths, RunRecord
+from janus.observability.openlineage import (
+    CUSTOM_ONLY_LINEAGE_FIELDS,
+    DELIBERATELY_DROPPED_LINEAGE_FIELDS,
+    LINEAGE_FIELD_MAPPING,
+    OPENLINEAGE_SCHEMA_URL,
+    OPENLINEAGE_SPEC_VERSION,
+    OpenLineageDatasetContext,
+    build_openlineage_run_event,
+    openlineage_run_id,
+)
+from janus.quality import ValidationCheck, ValidationReport
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+FIXTURES = PROJECT_ROOT / "tests" / "fixtures" / "openlineage"
+OPENLINEAGE_SCHEMA = FIXTURES / "OpenLineage-2-0-2.json"
+JANUS_FACET_SCHEMA = (
+    PROJECT_ROOT / "docs" / "schemas" / "openlineage" / "JanusRunFacet.json"
+)
+
+STARTED_AT = datetime(2026, 7, 4, 12, 0, tzinfo=UTC)
+FINISHED_AT = datetime(2026, 7, 4, 12, 0, 5, tzinfo=UTC)
+SOURCE_ID = "consumer"
+RAW_PATH = "/data/raw/consumer/runs/run/page-0001.json"
+BRONZE_TABLE = "bronze.consumer"
+DATASETS = OpenLineageDatasetContext(
+    catalog_name="janus",
+    warehouse="s3://janus-bronze/warehouse",
+)
+GRAPH = SourceDependencyGraph(
+    nodes=(
+        SourceDependencyNode(SOURCE_ID, enabled=True, bronze_table=BRONZE_TABLE),
+        SourceDependencyNode("producer", enabled=True, bronze_table="bronze.producer"),
+    ),
+    edges=(
+        SourceDependencyEdge(
+            producer_id="producer",
+            consumer_id=SOURCE_ID,
+            table="bronze.producer",
+            input_paths=("access.request_inputs",),
+        ),
+    ),
+)
+
+
+def _configured_outputs() -> tuple[ConfiguredOutput, ...]:
+    return (
+        ConfiguredOutput("raw", "/data/raw/consumer", "json"),
+        ConfiguredOutput("bronze", "/data/bronze/consumer", "iceberg"),
+        ConfiguredOutput("metadata", "/data/metadata/consumer", "json"),
+    )
+
+
+def _materialized_outputs(*, bronze: bool = True) -> tuple[MaterializedOutput, ...]:
+    raw = MaterializedOutput(
+        zone="raw",
+        path=RAW_PATH,
+        format="json",
+        mode="overwrite",
+        records_written=1,
+        partition_by=("ingestion_date",),
+        metadata=(("checksum", "abc123"),),
+    )
+    if not bronze:
+        return (raw,)
+    return (
+        raw,
+        MaterializedOutput(
+            zone="bronze",
+            path=BRONZE_TABLE,
+            format="iceberg",
+            mode="overwrite",
+            records_written=2,
+            partition_by=("ingestion_date",),
+            metadata=(("writer", "spark"),),
+        ),
+    )
+
+
+def _run_metadata(
+    *,
+    run_id: str,
+    status: str,
+    source_id: str = SOURCE_ID,
+    environment: str = "local",
+    outputs: tuple[MaterializedOutput, ...] = (),
+    records_extracted: int | None = None,
+    failure_reason: str | None = None,
+    error_type: str | None = None,
+    attributes: tuple[tuple[str, str], ...] = (),
+) -> RunMetadata:
+    return RunMetadata(
+        run_id=run_id,
+        source_id=source_id,
+        source_name=f"Source {source_id}",
+        environment=environment,
+        strategy_family="api",
+        strategy_variant="page_number_api",
+        extraction_mode="incremental",
+        checkpoint_strategy="max_value",
+        checkpoint_field="updated_at",
+        status=status,
+        started_at=STARTED_AT,
+        ended_at=FINISHED_AT if status != "running" else None,
+        duration_seconds=5.0 if status != "running" else None,
+        source_config_path="conf/sources/consumer.yaml",
+        configured_outputs=_configured_outputs(),
+        materialized_outputs=outputs,
+        records_extracted=records_extracted,
+        checkpoint_value="2026-07-02" if records_extracted is not None else None,
+        failure_reason=failure_reason,
+        error_type=error_type,
+        run_attributes=attributes,
+        plan_notes=("dispatch:api.page_number_api",),
+        metadata=(("strategy.request_count", "1"),),
+    )
+
+
+def _lineage(metadata: RunMetadata, *, replay: bool = False) -> LineageRecord:
+    return LineageRecord(
+        run_id=metadata.run_id,
+        source_id=metadata.source_id,
+        source_name=metadata.source_name,
+        environment=metadata.environment,
+        strategy_family=metadata.strategy_family,
+        strategy_variant=metadata.strategy_variant,
+        extraction_mode=metadata.extraction_mode,
+        checkpoint_strategy=metadata.checkpoint_strategy,
+        checkpoint_field=metadata.checkpoint_field,
+        source_hook="janus.hooks.example",
+        status=metadata.status,
+        emitted_at=FINISHED_AT,
+        source_config_path=metadata.source_config_path,
+        config_version="f" * 64,
+        configured_outputs=metadata.configured_outputs,
+        materialized_outputs=metadata.materialized_outputs,
+        artifacts=(ArtifactSnapshot(RAW_PATH, "json", "abc123"),)
+        if metadata.materialized_outputs
+        else (),
+        records_extracted=metadata.records_extracted,
+        checkpoint_value=metadata.checkpoint_value,
+        failure_reason=metadata.failure_reason,
+        error_type=metadata.error_type,
+        run_attributes=metadata.run_attributes,
+        plan_notes=metadata.plan_notes,
+        extraction_metadata=(
+            (("raw_to_bronze", "true"),)
+            if replay
+            else (("request_count", "1"),)
+        ),
+        metadata=metadata.metadata,
+    )
+
+
+def _validation_report(metadata: RunMetadata, *, failed: bool) -> ValidationReport:
+    check = (
+        ValidationCheck.failed("data", "required_fields", "updated_at is null")
+        if failed
+        else ValidationCheck.passed("data", "required_fields", "all present")
+    )
+    return ValidationReport(
+        run_id=metadata.run_id,
+        source_id=metadata.source_id,
+        source_name=metadata.source_name,
+        environment=metadata.environment,
+        strategy_family=metadata.strategy_family,
+        strategy_variant=metadata.strategy_variant,
+        emitted_at=FINISHED_AT,
+        checks=(check,),
+    )
+
+
+def _terminal_records(
+    shape: str,
+    *,
+    run_id: str | None = None,
+    source_id: str = SOURCE_ID,
+    environment: str = "local",
+) -> tuple[RunMetadata, LineageRecord, RunRecord]:
+    failed = shape in {"extraction_failure", "quality_failure"}
+    extraction_failed = shape == "extraction_failure"
+    empty_handoff = shape == "empty_handoff"
+    replay = shape == "replay"
+    outputs = () if extraction_failed else _materialized_outputs(bronze=not empty_handoff)
+    records_extracted = None if extraction_failed or replay else 2
+    attributes = (
+        (
+            ("pipeline_attempt", "2"),
+            ("pipeline_run_id", "pipeline-20260704"),
+            ("trigger", "run-all"),
+        )
+        if shape == "batch_attempt"
+        else ()
+    )
+    reason = (
+        "scripted extraction failure"
+        if extraction_failed
+        else "Quality validation failed: data.required_fields"
+        if shape == "quality_failure"
+        else None
+    )
+    metadata = _run_metadata(
+        run_id=run_id or f"order15-{shape}",
+        status="failed" if failed else "succeeded",
+        source_id=source_id,
+        environment=environment,
+        outputs=outputs,
+        records_extracted=records_extracted,
+        failure_reason=reason,
+        error_type="RuntimeError" if failed else None,
+        attributes=attributes,
+    )
+    lineage = _lineage(metadata, replay=replay)
+    validation = (
+        None
+        if extraction_failed
+        else _validation_report(metadata, failed=shape == "quality_failure")
+    )
+    checkpoint = (
+        CheckpointWriteResult(
+            state=None,
+            decision="skipped" if replay else "advanced",
+            advanced=not replay,
+            current_path=Path("metadata/checkpoints/current.json"),
+            history_path=Path("metadata/checkpoints/history/run.json"),
+        )
+        if not failed
+        else None
+    )
+    run_record = RunRecord.from_run(
+        metadata,
+        lineage,
+        emitted_at=FINISHED_AT,
+        checkpoint_result=checkpoint,
+        validation_report=validation,
+        evidence=RunEvidencePaths(
+            run_metadata_path="metadata/runs/run.json",
+            lineage_path="metadata/lineage/run.json",
+            validation_report_path=(
+                "metadata/validations/run.json" if validation is not None else None
+            ),
+        ),
+    )
+    return metadata, lineage, run_record
+
+
+def _terminal_event(shape: str, **kwargs: str) -> dict:
+    metadata, lineage, run_record = _terminal_records(shape, **kwargs)
+    graph = GRAPH if metadata.source_id == SOURCE_ID else None
+    return build_openlineage_run_event(
+        metadata,
+        DATASETS,
+        lineage_record=lineage,
+        run_record=run_record,
+        graph=graph,
+    )
+
+
+def _validator(path: Path) -> Draft202012Validator:
+    return Draft202012Validator(
+        json.loads(path.read_text(encoding="utf-8")),
+        format_checker=FormatChecker(),
+    )
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "success",
+        "extraction_failure",
+        "quality_failure",
+        "empty_handoff",
+        "replay",
+        "batch_attempt",
+    ],
+)
+def test_every_terminal_shape_validates_against_the_pinned_schema(shape):
+    event = _terminal_event(shape)
+
+    _validator(OPENLINEAGE_SCHEMA).validate(event)
+    _validator(JANUS_FACET_SCHEMA).validate(event["run"]["facets"]["janusRun"])
+
+
+def test_start_complete_and_fail_lifecycle_mapping_uses_recorded_timestamps():
+    started = _run_metadata(run_id="paired-run", status="running")
+    start = build_openlineage_run_event(started, DATASETS, graph=GRAPH)
+    _validator(OPENLINEAGE_SCHEMA).validate(start)
+    _validator(JANUS_FACET_SCHEMA).validate(start["run"]["facets"]["janusRun"])
+    complete = _terminal_event("success", run_id="paired-run")
+    failed = _terminal_event("extraction_failure")
+
+    assert (start["eventType"], complete["eventType"], failed["eventType"]) == (
+        "START",
+        "COMPLETE",
+        "FAIL",
+    )
+    assert start["eventTime"] == STARTED_AT.isoformat()
+    assert complete["eventTime"] == FINISHED_AT.isoformat()
+    assert start["run"]["runId"] == complete["run"]["runId"]
+
+
+def test_run_uuid_is_valid_deterministic_cross_process_and_collision_resistant():
+    run_id = "pipeline-consumer-a2-cafe1234"
+    expected = openlineage_run_id(run_id)
+    command = (
+        "from janus.observability.openlineage import openlineage_run_id; "
+        f"print(openlineage_run_id({run_id!r}))"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", command],
+        cwd=PROJECT_ROOT,
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT / "src")},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert UUID(expected).version == 5
+    assert completed.stdout.strip() == expected
+    assert openlineage_run_id("another-run") != expected
+
+
+def test_job_identity_is_source_scoped_and_environment_scoped():
+    first = _terminal_event("success", run_id="run-1")
+    second = _terminal_event("success", run_id="run-2")
+    other_source = _terminal_event("success", source_id="other-source")
+    other_environment = _terminal_event("success", environment="prod")
+
+    assert first["job"] == second["job"]
+    assert first["job"]["name"] != other_source["job"]["name"]
+    assert first["job"]["namespace"] != other_environment["job"]["namespace"]
+
+
+def test_declared_graph_edge_becomes_the_iceberg_input_dataset():
+    event = _terminal_event("success")
+
+    assert event["inputs"] == [
+        {
+            "namespace": "iceberg://janus/s3%3A%2F%2Fjanus-bronze%2Fwarehouse",
+            "name": "bronze.producer",
+        }
+    ]
+    assert event["run"]["facets"]["janusRun"]["declared_inputs"] == [
+        {
+            "producer_id": "producer",
+            "table": "bronze.producer",
+            "input_paths": ["access.request_inputs"],
+        }
+    ]
+
+
+def test_every_lineage_field_has_a_mapping_decision_and_custom_only_fields_survive():
+    event = _terminal_event("quality_failure")
+    facet = event["run"]["facets"]["janusRun"]
+
+    assert set(LINEAGE_FIELD_MAPPING) == {field.name for field in fields(LineageRecord)}
+    assert not DELIBERATELY_DROPPED_LINEAGE_FIELDS
+    assert set(facet) >= CUSTOM_ONLY_LINEAGE_FIELDS
+    assert facet["run_id"] == "order15-quality_failure"
+    assert facet["error_type"] == "RuntimeError"
+    assert facet["quality"] == {
+        "outcome": "failed",
+        "checks_passed": 0,
+        "checks_failed": 1,
+        "checks_skipped": 0,
+        "failed_checks": ["data.required_fields"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("shape", "fixture_name"),
+    [("success", "success.json"), ("quality_failure", "quality_failure.json")],
+)
+def test_success_and_quality_failure_payloads_match_goldens(shape, fixture_name):
+    expected = json.loads((FIXTURES / fixture_name).read_text(encoding="utf-8"))
+
+    assert _terminal_event(shape) == expected
+
+
+def test_schema_version_and_vendored_bytes_are_pinned():
+    expected = (FIXTURES / "OpenLineage-2-0-2.sha256").read_text(encoding="utf-8").split()[0]
+    actual = hashlib.sha256(OPENLINEAGE_SCHEMA.read_bytes()).hexdigest()
+
+    assert OPENLINEAGE_SPEC_VERSION == "2-0-2"
+    assert OPENLINEAGE_SCHEMA_URL == (
+        "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
+    )
+    assert actual == expected
+
+
+def test_mapping_imports_no_compute_or_catalog_engine():
+    command = """
+import json
+import sys
+import janus.observability.openlineage
+forbidden = sorted(
+    name for name in sys.modules
+    if name.split('.', 1)[0] in {'pyarrow', 'pyiceberg', 'pyspark'}
+)
+print(json.dumps(forbidden))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", command],
+        cwd=PROJECT_ROOT,
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT / "src")},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert json.loads(completed.stdout) == []
+
+
+def test_same_inputs_produce_byte_identical_payloads():
+    first = json.dumps(_terminal_event("batch_attempt"), separators=(",", ":"))
+    second = json.dumps(_terminal_event("batch_attempt"), separators=(",", ":"))
+
+    assert first == second
+
+
+def test_terminal_records_must_describe_one_run():
+    metadata, lineage, run_record = _terminal_records("success")
+
+    with pytest.raises(ValueError, match="lineage_record must describe run"):
+        build_openlineage_run_event(
+            metadata,
+            DATASETS,
+            lineage_record=replace(lineage, run_id="another-run"),
+            run_record=run_record,
+        )

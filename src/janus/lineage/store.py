@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from janus.checkpoints.store import CheckpointStore, CheckpointWriteResult
 from janus.lineage.models import LineageRecord, RunMetadata
@@ -12,7 +13,11 @@ from janus.lineage.persistence import MetadataZonePaths, write_json_atomic
 from janus.models import ExecutionPlan, ExtractionResult, WriteResult
 from janus.utils.logging import StructuredLogger
 
+if TYPE_CHECKING:
+    from janus.quality.store import PersistedValidationReport
+
 STRATEGY_METADATA_PREFIX = "strategy."
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +29,43 @@ class PersistedArtifacts:
     lineage_record: LineageRecord | None = None
     lineage_path: Path | None = None
     checkpoint_result: CheckpointWriteResult | None = None
+    validation_report: PersistedValidationReport | None = None
+
+
+class RunEventEmitter(Protocol):
+    """Additive lifecycle emission owned by lineage and supplied by the runtime."""
+
+    def emit_started(
+        self,
+        plan: ExecutionPlan,
+        persisted: PersistedArtifacts,
+    ) -> None: ...
+
+    def emit_succeeded(
+        self,
+        plan: ExecutionPlan,
+        persisted: PersistedArtifacts,
+    ) -> None: ...
+
+    def emit_failed(
+        self,
+        plan: ExecutionPlan,
+        persisted: PersistedArtifacts,
+    ) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class NullRunEventEmitter:
+    """Default emitter: constructing a bare observer has no external side effects."""
+
+    def emit_started(self, plan: ExecutionPlan, persisted: PersistedArtifacts) -> None:
+        del plan, persisted
+
+    def emit_succeeded(self, plan: ExecutionPlan, persisted: PersistedArtifacts) -> None:
+        del plan, persisted
+
+    def emit_failed(self, plan: ExecutionPlan, persisted: PersistedArtifacts) -> None:
+        del plan, persisted
 
 
 @dataclass(slots=True)
@@ -52,14 +94,18 @@ class RunObserver:
     lineage_store: LineageStore = field(default_factory=LineageStore)
     checkpoint_store: CheckpointStore = field(default_factory=CheckpointStore)
     logger: StructuredLogger | None = None
+    emitter: RunEventEmitter = field(default_factory=NullRunEventEmitter)
 
     def start_run(self, plan: ExecutionPlan) -> PersistedArtifacts:
         run_metadata = RunMetadata.started(plan)
         run_metadata_path = self.run_metadata_store.write(plan, run_metadata)
-        return PersistedArtifacts(
+        persisted = PersistedArtifacts(
             run_metadata=run_metadata,
             run_metadata_path=run_metadata_path,
         )
+        # Emission is deliberately last: it can never influence the authoritative JSON.
+        self._emit_guarded("emit_started", plan, persisted)
+        return persisted
 
     def record_success(
         self,
@@ -69,7 +115,9 @@ class RunObserver:
         *,
         finished_at: datetime | None = None,
         strategy_metadata: Mapping[str, Any] | None = None,
+        validation_report: PersistedValidationReport | None = None,
     ) -> PersistedArtifacts:
+        """Persist the success artifacts and hand back the run's outcome evidence."""
         prepared_metadata = _prepare_strategy_metadata(strategy_metadata, logger=self.logger)
 
         run_metadata = RunMetadata.succeeded(
@@ -98,13 +146,16 @@ class RunObserver:
             updated_at=finished_at,
             metadata=_checkpoint_metadata(extraction_result),
         )
-        return PersistedArtifacts(
+        persisted = PersistedArtifacts(
             run_metadata=run_metadata,
             run_metadata_path=run_metadata_path,
             lineage_record=lineage_record,
             lineage_path=lineage_path,
             checkpoint_result=checkpoint_result,
+            validation_report=validation_report,
         )
+        self._emit_guarded("emit_succeeded", plan, persisted)
+        return persisted
 
     def record_failure(
         self,
@@ -115,7 +166,9 @@ class RunObserver:
         *,
         finished_at: datetime | None = None,
         strategy_metadata: Mapping[str, Any] | None = None,
+        validation_report: PersistedValidationReport | None = None,
     ) -> PersistedArtifacts:
+        """Persist the failure artifacts and hand back the run's outcome evidence."""
         prepared_metadata = _prepare_strategy_metadata(strategy_metadata, logger=self.logger)
 
         run_metadata = RunMetadata.failed(
@@ -139,12 +192,33 @@ class RunObserver:
             metadata=prepared_metadata,
         )
         lineage_path = self.lineage_store.write(plan, lineage_record)
-        return PersistedArtifacts(
+        persisted = PersistedArtifacts(
             run_metadata=run_metadata,
             run_metadata_path=run_metadata_path,
             lineage_record=lineage_record,
             lineage_path=lineage_path,
+            validation_report=validation_report,
         )
+        self._emit_guarded("emit_failed", plan, persisted)
+        return persisted
+
+    def _emit_guarded(
+        self,
+        method_name: str,
+        plan: ExecutionPlan,
+        persisted: PersistedArtifacts,
+    ) -> None:
+        """Keep even a defective injected emitter outside the run's failure boundary."""
+        try:
+            method = getattr(self.emitter, method_name)
+            method(plan, persisted)
+        except Exception as exc:
+            _report_emitter_failure(
+                self.logger,
+                stage=method_name,
+                exception_type=type(exc).__name__,
+                run_id=plan.run_context.run_id,
+            )
 
 
 def _checkpoint_metadata(extraction_result: ExtractionResult) -> dict[str, str]:
@@ -216,3 +290,24 @@ def _coerce_metadata_value(value: Any) -> tuple[str | None, str]:
 def _log_warning(logger: StructuredLogger | None, event: str, **fields: Any) -> None:
     if logger is not None:
         logger.warning(event, **fields)
+
+
+def _report_emitter_failure(
+    logger: StructuredLogger | None,
+    *,
+    stage: str,
+    exception_type: str,
+    run_id: str,
+) -> None:
+    fields = {
+        "stage": stage,
+        "exception_type": exception_type,
+        "run_id": run_id,
+    }
+    try:
+        if logger is None:
+            _LOG.warning("run_event_emission_failed", extra={"event_fields": fields})
+        else:
+            logger.warning("run_event_emission_failed", **fields)
+    except Exception:
+        pass

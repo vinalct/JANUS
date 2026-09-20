@@ -15,6 +15,8 @@ x-janus-service: &janus-service
     - ${JANUS_PROJECT_ROOT:-..}/tests:/workspace/tests:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/examples:/workspace/examples:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/conf:/workspace/conf:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/docs:/workspace/docs:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/.github:/workspace/.github:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/data:/workspace/data:z
     - ${JANUS_PROJECT_ROOT:-..}/pyproject.toml:/workspace/pyproject.toml:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/requirements.txt:/workspace/requirements.txt:ro,z
@@ -23,6 +25,7 @@ x-janus-service: &janus-service
 
 x-janus-environment: &janus-environment
   PYTHONPATH: /workspace/src:/workspace
+  MYPY_CACHE_DIR: /tmp/janus-mypy-cache
   PYTEST_ADDOPTS: "-o cache_dir=/tmp/janus-pytest-cache"
   JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
   JANUS_CA_BUNDLE: /workspace/conf/certs/rnpicpedugr46ovtlsca2025.pem

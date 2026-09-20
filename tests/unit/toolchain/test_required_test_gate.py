@@ -38,6 +38,65 @@ def test_a_skipped_required_case_fails_the_gate(tmp_path: Path) -> None:
         assert_required_tests_ran(report, minimum_passed=1)
 
 
+def test_one_named_case_can_be_required_without_accepting_a_neighbour(tmp_path: Path) -> None:
+    report = _report(
+        tmp_path,
+        '<testcase classname="required.suite" name="acceptance" />'
+        '<testcase classname="required.suite" name="neighbour"><skipped /></testcase>',
+    )
+
+    assert_required_tests_ran(
+        report,
+        minimum_passed=1,
+        class_name="required.suite",
+        test_name="acceptance",
+    )
+
+
+def test_a_parametrized_named_case_satisfies_the_gate(tmp_path: Path) -> None:
+    report = _report(
+        tmp_path,
+        '<testcase classname="required.suite" name="acceptance[sqlite]" />',
+    )
+
+    assert_required_tests_ran(
+        report,
+        minimum_passed=1,
+        class_name="required.suite",
+        test_name="acceptance",
+    )
+
+
+def test_a_longer_unparametrized_name_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+    report = _report(
+        tmp_path,
+        '<testcase classname="required.suite" name="acceptance_extended" />',
+    )
+
+    with pytest.raises(AssertionError, match="collected 0 matching cases"):
+        assert_required_tests_ran(
+            report,
+            minimum_passed=1,
+            class_name="required.suite",
+            test_name="acceptance",
+        )
+
+
+def test_a_missing_named_case_fails_the_gate(tmp_path: Path) -> None:
+    report = _report(
+        tmp_path,
+        '<testcase classname="required.suite" name="different" />',
+    )
+
+    with pytest.raises(AssertionError, match="collected 0 matching cases"):
+        assert_required_tests_ran(
+            report,
+            minimum_passed=1,
+            class_name="required.suite",
+            test_name="acceptance",
+        )
+
+
 def test_missing_or_under_collected_cases_fail_the_gate(tmp_path: Path) -> None:
     report = _report(
         tmp_path,

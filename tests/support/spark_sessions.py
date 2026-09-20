@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -60,6 +61,15 @@ TEST_SESSION_CONFIG = {
 JDBC_SQLITE_PREFIX = "jdbc:sqlite:"
 
 PYICEBERG_UNAVAILABLE = "pyiceberg is not available"
+
+
+def catalog_acceptance_prerequisites_available() -> bool:
+    """Whether a real-catalog acceptance case can run instead of self-skipping."""
+
+    engine_roots = ("pyspark", "pyiceberg", "pyarrow")
+    if any(importlib.util.find_spec(root) is None for root in engine_roots):
+        return False
+    return all(jar.is_file() for jar in pinned_jars())
 
 
 def checked_in_iceberg_block(profile: str = PROFILE_NAME) -> dict[str, Any]:

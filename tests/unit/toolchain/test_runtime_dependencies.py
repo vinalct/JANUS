@@ -1,4 +1,4 @@
-"""The runtime dependency list is three entries, and a second engine is not one of them."""
+"""The exact runtime set, including order-15's deliberate second-engine decision."""
 
 from __future__ import annotations
 
@@ -11,8 +11,10 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 REQUIREMENTS = PROJECT_ROOT / "requirements.txt"
-EXPECTED_RUNTIME_DEPENDENCIES = ("PyYAML", "certifi", "pyspark")
-DEV_ONLY_DISTRIBUTIONS = ("pyiceberg",)
+EXPECTED_RUNTIME_DEPENDENCIES = ("PyYAML", "certifi", "pyspark", "pyiceberg")
+PYICEBERG_RUNTIME_REQUIREMENT = (
+    "pyiceberg[pyarrow,pyiceberg-core,sql-postgres,sql-sqlite,s3fs]==0.12.0"
+)
 
 _REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9._-]+)")
 
@@ -44,37 +46,37 @@ def test_the_sweep_actually_read_the_declarations():
     assert _dev(), "no dev dependencies were parsed — the optional-dependencies table moved"
 
 
-def test_the_runtime_dependencies_are_the_three_the_project_ships():
+def test_the_runtime_dependencies_are_the_four_the_project_ships():
     assert tuple(_distribution(item) for item in _runtime()) == tuple(
         name.lower() for name in EXPECTED_RUNTIME_DEPENDENCIES
     )
 
 
-@pytest.mark.parametrize("distribution", DEV_ONLY_DISTRIBUTIONS)
-def test_a_dev_only_distribution_never_reaches_the_runtime_list(distribution: str):
-    runtime = [_distribution(item) for item in _runtime()]
+def test_order_15_deliberately_promotes_pyiceberg_to_runtime():
+    """Overrule the old prohibition in the order authorized to pay its runtime cost."""
 
-    assert distribution not in runtime, (
-        f"{distribution} is a dev/test dependency: it exists to prove the catalog is "
-        "engine-neutral, not to be imported by the product. Promoting it to a runtime "
-        "dependency is decision and needs its own order."
+    assert PYICEBERG_RUNTIME_REQUIREMENT in _runtime()
+    assert all(_distribution(item) != "pyiceberg" for item in _dev()), (
+        "pyiceberg must have one declaration: moved it from dev to runtime"
     )
 
 
-@pytest.mark.parametrize("distribution", DEV_ONLY_DISTRIBUTIONS)
-def test_a_dev_only_distribution_is_declared_and_pinned(distribution: str):
-    """Declared, and pinned exactly — an unpinned engine makes the evidence unreproducible."""
+def test_every_runtime_dependency_is_declared_once_and_pinned_exactly():
+    runtime = _runtime()
+    distributions = [_distribution(item) for item in runtime]
 
-    declared = [item for item in _dev() if _distribution(item) == distribution]
-
-    assert len(declared) == 1, f"{distribution} must be declared once in the dev extras"
-    assert "==" in declared[0], f"{distribution} must be pinned exactly: {declared[0]!r}"
+    assert len(distributions) == len(set(distributions)), (
+        "each runtime distribution must have one declaration"
+    )
+    assert all("==" in item for item in runtime), (
+        f"every runtime dependency must be pinned exactly: {runtime!r}"
+    )
 
 
 def test_the_declared_pins_and_the_images_requirements_agree():
     """Two files declare the same pins, and a dependency must be added to both."""
 
-    if not REQUIREMENTS.exists():  
+    if not REQUIREMENTS.exists():
         pytest.skip("requirements.txt is not readable from here")
 
     installed = {

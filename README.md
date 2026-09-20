@@ -33,6 +33,8 @@ Deeper context: [PRD](docs/PRD.md), [foundation](docs/foundation.md), and [archi
 4. The strategy extracts the source and preserves raw artifacts.
 5. Spark reads the handoff, applies shared normalization, and writes structured bronze outputs.
 6. JANUS persists validation results, checkpoints, lineage, and run metadata in the metadata zone.
+7. After those authoritative JSON artifacts exist and Spark has stopped, JANUS best-effort
+   projects the terminal run into `metadata.runs` and emits an OpenLineage lifecycle event.
 
 Control flow:
 
@@ -165,6 +167,18 @@ troubleshooting: [batch orchestration guide](docs/orchestration.md). A self-cont
 runnable A → B plus independent C project — CLI and Dagster, including a deliberate-failure
 variant — lives in [examples/orchestration/](examples/orchestration/README.md).
 
+### Query run observability
+
+Completed runs are projected into the append-only Iceberg table `metadata.runs`, in the same
+catalog as bronze, and each observer lifecycle emits OpenLineage `START`, `COMPLETE`, or `FAIL`.
+Both destinations are additive to the per-run JSON and best-effort: JSON remains authoritative,
+and an emission problem is logged without changing run status or exit code. Consequently, a
+missing table row is not proof that a run did not happen.
+
+Table columns, the tested failed-run and quality-breach queries, OpenLineage transports,
+retention limits, retry semantics, and troubleshooting are in the
+[queryable observability guide](docs/queryable-observability.md).
+
 ## Documentation Map
 
 - [Architecture guide](docs/architecture.md): control flow and extension boundaries.
@@ -172,5 +186,6 @@ variant — lives in [examples/orchestration/](examples/orchestration/README.md)
 - [Source onboarding](docs/source-onboarding.md): how to add a new source without script sprawl.
 - [Batch orchestration guide](docs/orchestration.md): `run-all`, the source DAG, pipeline summaries, and the Dagster adapter.
 - [Orchestration example](examples/orchestration/README.md): a runnable dependency graph and an operations runbook.
+- [Queryable observability guide](docs/queryable-observability.md): `metadata.runs`, tested SQL, OpenLineage, and operational limits.
 - [Reproducibility guide](docs/reproducibility.md): environment profiles, container workflow, and cluster-shaped runs.
 - [Implementation notes](docs/implementations/): component-level notes for planner, strategies, Spark I/O, quality, lineage, and source integrations.

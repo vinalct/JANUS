@@ -17,6 +17,7 @@ from janus.cli.common import (
     format_runtime_permission_error,
     parse_started_at,
 )
+from janus.observability.openlineage import resolve_openlineage_settings
 from janus.orchestration import (
     BatchPlan,
     BatchPlanner,
@@ -180,6 +181,7 @@ def _prepare_batch(args: argparse.Namespace, project_root: Path) -> _PreparedBat
     registry = load_registry(project_root)
     plan = BatchPlanner().plan(request, registry=registry)
     resolved_paths = prepare_runtime(config, project_root)
+    resolve_openlineage_settings(config)
     return _PreparedBatch(config, resolved_paths, request, registry, plan)
 
 

@@ -20,6 +20,7 @@ IVY_JAR_DEST_DIR := data/metadata/ivy/jars
 
 DAGSTER_VERSION := 1.13.22
 DAGSTER_TEST_REPORT := data/metadata/test-reports/dagster.xml
+FAST_TEST_REPORT := data/metadata/test-reports/fast.xml
 CI_TEST_REPORT := data/metadata/test-reports/ci.xml
 DAGSTER_TESTS := tests/unit/adapters/test_dagster_adapter.py \
 	tests/integration/dagster \
@@ -27,7 +28,26 @@ DAGSTER_TESTS := tests/unit/adapters/test_dagster_adapter.py \
 FAST_TEST_ARGS := tests/unit \
 	--ignore=tests/unit/adapters/test_dagster_adapter.py \
 	--deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
+FAST_OBSERVABILITY_CLASSES := \
+	tests.unit.observability.test_acceptance_evidence \
+	tests.unit.observability.test_architecture_guardrails \
+	tests.unit.observability.test_example_queries_and_docs \
+	tests.unit.observability.test_failure_injection_matrix \
+	tests.unit.observability.test_guarded_emission \
+	tests.unit.observability.test_openlineage_facets \
+	tests.unit.observability.test_openlineage_mapping_failure \
+	tests.unit.observability.test_openlineage_transports \
+	tests.unit.observability.test_profile_spark_isolation \
+	tests.unit.observability.test_pyiceberg_append_sink \
+	tests.unit.observability.test_run_record_projection \
+	tests.unit.observability.test_runs_table_contract
 SPARK_ORCHESTRATION_CLASS := tests.integration.orchestration.test_dependency_execution
+QUERYABLE_CLASS := tests.integration.catalog_commits.test_queryable_observability
+RUNS_SINK_CLASS := tests.integration.catalog_commits.test_runs_table_append_sink
+CROSS_ENGINE_CLASS := tests.integration.catalog_commits.test_pyiceberg_round_trip
+AC1_TEST := test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources
+AC2_TEST := test_published_ac2_queries_execute_verbatim_with_retry_and_window_boundaries
+CROSS_ENGINE_TEST := test_spark_reads_the_row_pyiceberg_committed
 
 # ── the cluster profile ─────────────────────────────────────────────────────
 CLUSTER_PROFILE := cluster
@@ -122,7 +142,7 @@ pyspark-local: ensure-up
 	catalog_type="$${JANUS_ICEBERG_CATALOG_TYPE:-jdbc}"; \
 	packages="$${JANUS_ICEBERG_RUNTIME_PACKAGE:-org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1}"; \
 	catalog_uri="$${JANUS_ICEBERG_CATALOG_URI:-}"; \
-	if [ "$$catalog_type" = jdbc ] && [ -z "$$catalog_uri" ]; then catalog_uri='$(ICEBERG_CATALOG_URI)'; fi; \
+	if [ "$$catalog_type" = jdbc ] && [ -z "$$catalog_uri" ]; then catalog_uri="$(ICEBERG_CATALOG_URI)"; fi; \
 	uri_path="$${catalog_uri#jdbc:sqlite:}"; \
 	if [ "$$uri_path" != "$$catalog_uri" ] && [ "$$uri_path" = "$${uri_path#/}" ]; then catalog_uri="jdbc:sqlite:/workspace/$$uri_path"; fi; \
 	catalog_conf="--conf spark.sql.catalog.$$catalog.type=$$catalog_type"; \
@@ -166,7 +186,12 @@ test: ensure-up
 
 # Dependency-free orchestration and repository guardrails, matching CI's host-side fast job.
 test-fast:
-	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS)
+	@mkdir -p "$(dir $(FAST_TEST_REPORT))"
+	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --junitxml="$(FAST_TEST_REPORT)"
+	@for class_name in $(FAST_OBSERVABILITY_CLASSES); do \
+		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
+			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
+	done
 
 test-adapter:
 	@mkdir -p "$(dir $(DAGSTER_TEST_REPORT))"
@@ -181,6 +206,10 @@ ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
 	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage $(SERVICE) python -m pytest -ra -m 'not cluster' --cov=janus --cov-report=term-missing --cov-report=xml:data/coverage.xml --junitxml=$(CI_TEST_REPORT))
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_SINK_CLASS) --minimum-passed 2)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)
 
 run-local: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main --environment $(ENVIRONMENT) --with-spark)

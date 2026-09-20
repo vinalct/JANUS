@@ -43,6 +43,16 @@ ALLOWED_SITES: dict[str, str] = {
         "the engine-neutrality gap that justifies this order. An unnamed error would state "
         "the failure without stating the reason."
     ),
+    "src/janus/observability/iceberg_sink.py": (
+        "requires the append sink to treat the shipped local-hadoop profile as a "
+        "first-class degradation. It catches the derivation's named unrepresentable error, "
+        "logs one warning, and returns a skipped result; it neither adds a Hadoop path nor "
+        "builds a Spark session."
+    ),
+    "tests/unit/observability/test_pyiceberg_append_sink.py": (
+        "Pins required local-hadoop degradation and proves it happens before "
+        "either engine is imported. The test builds no Spark session."
+    ),
     "conf/environments/local-hadoop.yaml": (
         "The throwaway pre-migration profile itself, kept so the old commit path stays "
         "reproducible for the AC-4 baseline. Its header says it is not the supported local "
