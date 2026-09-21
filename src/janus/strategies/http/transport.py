@@ -32,6 +32,7 @@ from urllib.request import (
 )
 
 from janus.models import AuthConfig
+from janus.models.config.constants import DEFAULT_MAX_REDIRECTS, MAX_REDIRECTS_CEILING
 from janus.strategies.common import _freeze_string_mapping, _stringify_mapping
 from janus.utils.logging import redact_url
 
@@ -40,6 +41,8 @@ HTTP_STATUS_SUCCESS = 200
 HTTP_STATUS_REDIRECT = 300
 HTTP_STATUS_CLIENT_ERROR = 400
 SUPPORTED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https"})
+HTTP_DEFAULT_PORT = 80
+HTTPS_DEFAULT_PORT = 443
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +55,9 @@ class ApiRequest:
     headers: tuple[tuple[str, str], ...] = ()
     params: tuple[tuple[str, str], ...] = ()
     body: bytes | None = None
+    sensitive_headers: tuple[str, ...] = ()
+    sensitive_params: tuple[str, ...] = ()
+    max_redirects: int = DEFAULT_MAX_REDIRECTS
 
     def __post_init__(self) -> None:
         if not self.method.strip():
@@ -72,6 +78,15 @@ class ApiRequest:
         headers[name] = value
         return replace(self, headers=_freeze_string_mapping(headers))
 
+    def with_sensitive_header(self, name: str, value: str) -> ApiRequest:
+        request = self.with_header(name, value)
+        sensitive_headers = tuple(
+            existing
+            for existing in request.sensitive_headers
+            if existing.lower() != name.lower()
+        )
+        return replace(request, sensitive_headers=(*sensitive_headers, name))
+
     def with_url(self, url: str) -> ApiRequest:
         return replace(self, url=url)
 
@@ -79,6 +94,13 @@ class ApiRequest:
         merged_params = self.params_as_dict()
         merged_params.update(_stringify_mapping(params))
         return replace(self, params=_freeze_string_mapping(merged_params))
+
+    def with_sensitive_param(self, name: str, value: str) -> ApiRequest:
+        request = self.with_params({name: value})
+        sensitive_params = tuple(
+            existing for existing in request.sensitive_params if existing != name
+        )
+        return replace(request, sensitive_params=(*sensitive_params, name))
 
     def full_url(self) -> str:
         parsed = urlsplit(self.url)
@@ -123,6 +145,123 @@ class ApiTransportError(RuntimeError):
 
 class AuthResolutionError(RuntimeError):
     """Raised when API auth cannot be resolved from the configured environment."""
+
+
+class RedirectRefused(URLError):
+    """Raised when a redirect crosses a forbidden transport boundary."""
+
+
+class RedirectLimitExceeded(URLError):
+    """Raised when a request exceeds its configured redirect-hop limit."""
+
+
+@dataclass(frozen=True, slots=True)
+class RedirectPolicy:
+    """Credential and hop policy carried by each urllib request."""
+
+    origin: tuple[str, str, int]
+    sensitive_headers: frozenset[str]
+    sensitive_params: frozenset[str]
+    max_redirects: int
+
+
+class _JanusRequest(Request):
+    janus_redirect_policy: RedirectPolicy
+    janus_redirect_hops: int
+
+
+def _origin_of(url: str) -> tuple[str, str, int]:
+    parsed = urlsplit(url)
+    scheme = parsed.scheme.lower()
+    default_port = HTTPS_DEFAULT_PORT if scheme == "https" else HTTP_DEFAULT_PORT
+    return scheme, (parsed.hostname or "").lower(), parsed.port or default_port
+
+
+def _credentials_may_travel(
+    origin: tuple[str, str, int], target: tuple[str, str, int]
+) -> bool:
+    """Return whether credentials may travel from the original request to a target."""
+    if origin == target:
+        return True
+    return (
+        origin[0] == "http"
+        and origin[2] == HTTP_DEFAULT_PORT
+        and target[0] == "https"
+        and target[2] == HTTPS_DEFAULT_PORT
+        and origin[1] == target[1]
+    )
+
+
+def _strip_sensitive(request: Request, policy: RedirectPolicy) -> None:
+    for headers in (request.headers, request.unredirected_hdrs):
+        for name in tuple(headers):
+            if (
+                name.lower() == "authorization"
+                or name.lower() in policy.sensitive_headers
+            ):
+                del headers[name]
+
+    parsed = urlsplit(request.full_url)
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    filtered = [(name, value) for name, value in query if name not in policy.sensitive_params]
+    if filtered != query:
+        request.full_url = urlunsplit(parsed._replace(query=urlencode(filtered)))
+
+
+def _carry_sensitive_params(
+    source: Request, target: Request, policy: RedirectPolicy
+) -> None:
+    source_query = parse_qsl(urlsplit(source.full_url).query, keep_blank_values=True)
+    target_url = urlsplit(target.full_url)
+    target_query = parse_qsl(target_url.query, keep_blank_values=True)
+    target_names = {name for name, _value in target_query}
+    carried = [
+        (name, value)
+        for name, value in source_query
+        if name in policy.sensitive_params and name not in target_names
+    ]
+    if carried:
+        target.full_url = urlunsplit(
+            target_url._replace(query=urlencode([*target_query, *carried]))
+        )
+
+
+class JanusRedirectHandler(HTTPRedirectHandler):
+    """Apply JANUS's per-request redirect and credential policy."""
+
+    max_redirections = MAX_REDIRECTS_CEILING
+    max_repeats = MAX_REDIRECTS_CEILING
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        policy = getattr(req, "janus_redirect_policy", None)
+        if policy is None:
+            raise RedirectRefused("redirect without a JANUS policy")
+
+        hops = getattr(req, "janus_redirect_hops", 0) + 1
+        if hops > policy.max_redirects:
+            raise RedirectLimitExceeded(
+                "redirect exceeded "
+                f"access.limits.max_redirects={policy.max_redirects}"
+            )
+
+        target_scheme = urlsplit(newurl).scheme.lower()
+        if target_scheme not in SUPPORTED_URL_SCHEMES:
+            raise RedirectRefused(f"redirect to scheme {target_scheme!r} refused")
+        if urlsplit(req.full_url).scheme.lower() == "https" and target_scheme == "http":
+            raise RedirectRefused("https → http downgrade refused")
+
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+
+        if _credentials_may_travel(policy.origin, _origin_of(newurl)):
+            _carry_sensitive_params(req, redirected, policy)
+        else:
+            _strip_sensitive(redirected, policy)
+
+        redirected.janus_redirect_policy = policy
+        redirected.janus_redirect_hops = hops
+        return redirected
 
 
 class ApiTransport(Protocol):
@@ -174,7 +313,7 @@ class UrllibApiTransport:
         if self.opener is None:
             self.opener = _build_opener(
                 _build_ssl_context(self.ca_bundle_path),
-                redirect_handler=HTTPRedirectHandler(),
+                redirect_handler=JanusRedirectHandler(),
             )
 
     def close(self) -> None:
@@ -182,16 +321,26 @@ class UrllibApiTransport:
 
     def send(self, request: ApiRequest) -> ApiResponse:
         self.open()
-        _require_supported_scheme(request.full_url())
+        full_url = request.full_url()
+        _require_supported_scheme(full_url)
         if self.opener is None:
             raise ApiTransportError("API transport failed to initialize urllib opener")
 
-        urllib_request = Request(
-            request.full_url(),
+        urllib_request = _JanusRequest(
+            full_url,
             data=request.body,
             method=request.method,
             headers=request.headers_as_dict(),
         )
+        urllib_request.janus_redirect_policy = RedirectPolicy(
+            origin=_origin_of(full_url),
+            sensitive_headers=frozenset(
+                {"authorization", *(name.lower() for name in request.sensitive_headers)}
+            ),
+            sensitive_params=frozenset(request.sensitive_params),
+            max_redirects=request.max_redirects,
+        )
+        urllib_request.janus_redirect_hops = 0
 
         try:
             with self.opener.open(urllib_request, timeout=request.timeout_seconds) as stream:
@@ -210,10 +359,13 @@ class UrllibApiTransport:
                 headers=_freeze_string_mapping(headers),
             )
         except (URLError, OSError) as exc:
-            raise ApiTransportError(
+            message = (
                 f"Request failed for {redact_url(request.full_url())!r}: "
                 f"{type(exc).__name__}"
-            ) from exc
+            )
+            if isinstance(exc, RedirectRefused | RedirectLimitExceeded):
+                message = f"{message}: {exc.reason}"
+            raise ApiTransportError(message) from exc
 
 
 @dataclass(slots=True)
@@ -307,7 +459,7 @@ def inject_auth(
         username = _require_secret(auth.username_env_var, env_reader)
         password = _require_secret(auth.password_env_var, env_reader)
         token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
-        return request.with_header("Authorization", f"Basic {token}")
+        return request.with_sensitive_header("Authorization", f"Basic {token}")
 
     token = _require_secret(auth.env_var, env_reader)
     rendered_token = _render_token(auth.token_prefix, token)
@@ -315,15 +467,17 @@ def inject_auth(
     if auth.type == "bearer_token":
         header_name = auth.header_name or "Authorization"
         token_prefix = auth.token_prefix or "Bearer"
-        return request.with_header(header_name, _render_token(token_prefix, token))
+        return request.with_sensitive_header(
+            header_name, _render_token(token_prefix, token)
+        )
 
     if auth.type == "header_token":
         header_name = auth.header_name or "Authorization"
-        return request.with_header(header_name, rendered_token)
+        return request.with_sensitive_header(header_name, rendered_token)
 
     if auth.type == "query_token":
         query_param = auth.query_param or "token"
-        return request.with_params({query_param: rendered_token})
+        return request.with_sensitive_param(query_param, rendered_token)
 
     raise ValueError(f"Unsupported auth type: {auth.type}")
 

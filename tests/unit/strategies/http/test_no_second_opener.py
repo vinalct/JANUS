@@ -181,13 +181,6 @@ def test_only_the_shared_transport_builds_an_opener():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "red until: transport.py must construct the "
-        "OpenerDirector and define JanusRedirectHandler for the allowance to be load-bearing"
-    ),
-)
 def test_the_allowed_site_still_needs_its_allowance():
     """An allowance granted to a file that no longer needs it is fiction, not a decision.
 

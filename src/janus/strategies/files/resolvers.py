@@ -152,6 +152,7 @@ class NextcloudWebDavResolver:
             url=webdav_url,
             timeout_seconds=30,
             headers=(("Authorization", auth_value), ("Depth", _NEXTCLOUD_RECURSIVE_DEPTH)),
+            sensitive_headers=("Authorization",),
         )
         try:
             response = transport.send(request)

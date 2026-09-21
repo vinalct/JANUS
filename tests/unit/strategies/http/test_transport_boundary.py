@@ -18,6 +18,10 @@ from janus.strategies.http import (
     ApiClient,
     ApiRequest,
     ApiTransportError,
+    JanusRedirectHandler,
+    RedirectLimitExceeded,
+    RedirectPolicy,
+    RedirectRefused,
     UrllibApiTransport,
     inject_auth,
     send_with_retries,
@@ -29,7 +33,6 @@ REDIRECT_POLICY_ATTR = "janus_redirect_policy"
 REDIRECT_HOPS_ATTR = "janus_redirect_hops"
 
 # Reasons, spelled once so the -ra summary reads as a task list.
-RED_UNTIL_04 = "red until: redirect policy and credential stripping"
 RED_UNTIL_09 = "red until: transport byte cap and stream()"
 
 UNSUPPORTED_URLS = (
@@ -143,12 +146,9 @@ def test_opener_installs_no_file_ftp_data_or_unknown_handler():
         assert required in names, f"{required} is missing from {names}"
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_04)
 def test_the_one_redirect_handler_is_the_janus_one():
     """Exactly one redirect handler, and it is JANUS's — not CPython's header-copying default."""
     from urllib.request import HTTPRedirectHandler
-
-    from janus.strategies.http import JanusRedirectHandler
 
     transport = UrllibApiTransport()
     transport.open()
@@ -245,8 +245,6 @@ REFUSED_REDIRECTS = (
 
 def _redirect_policy(from_url: str, *, max_redirects: int = 5):
     """Build the per-request policy attaches, from the URL ``send()`` was given."""
-    from janus.strategies.http import RedirectPolicy
-
     parsed = urlsplit(from_url)
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     return RedirectPolicy(
@@ -274,8 +272,6 @@ def _redirected_request(from_url: str, *, max_redirects: int = 5, hops: int = 0)
 
 
 def _redirect(from_url: str, to_url: str, *, max_redirects: int = 5, hops: int = 0):
-    from janus.strategies.http import JanusRedirectHandler
-
     headers = email.message.Message()
     headers["Location"] = to_url
     return JanusRedirectHandler().redirect_request(
@@ -288,7 +284,6 @@ def _redirect(from_url: str, to_url: str, *, max_redirects: int = 5, hops: int =
     )
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_04)
 @pytest.mark.parametrize(
     ("label", "from_url", "to_url", "credentials_survive"),
     FOLLOWED_REDIRECTS,
@@ -319,7 +314,6 @@ def test_redirect_carries_credentials_only_within_the_origin(
         assert SENSITIVE_PARAM not in query
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_04)
 @pytest.mark.parametrize(
     ("label", "from_url", "to_url"),
     REFUSED_REDIRECTS,
@@ -333,22 +327,16 @@ def test_redirect_to_a_downgrade_or_a_foreign_scheme_is_refused(label, from_url,
     about CPython.
     """
     del label
-    from janus.strategies.http import RedirectRefused
-
     with pytest.raises(RedirectRefused):
         _redirect(from_url, to_url)
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_04)
 def test_the_hop_after_the_cap_is_refused():
     """The per-request cap must bite before CPython's own ``max_redirections`` of 10."""
-    from janus.strategies.http import RedirectLimitExceeded
-
     with pytest.raises(RedirectLimitExceeded):
         _redirect(ORIGIN_URL, "https://api.example.gov.br/v1/b", max_redirects=5, hops=5)
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_04)
 def test_the_last_hop_within_the_cap_is_still_followed():
     """The cap counts hops, not attempts: the fifth of five must go through."""
     redirected = _redirect(ORIGIN_URL, "https://api.example.gov.br/v1/b", max_redirects=5, hops=4)
@@ -400,7 +388,6 @@ def _serve() -> tuple[ThreadingHTTPServer, threading.Thread, type[_RedirectingHa
     return server, thread, handler
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_04)
 def test_a_real_cross_origin_redirect_drops_the_credential_and_a_same_origin_one_keeps_it():
     """Both servers bound to 127.0.0.1 and torn down in ``finally`` — hermetic, per CONTRIBUTING."""
     server_a, thread_a, handler_a = _serve()
@@ -471,7 +458,6 @@ AUTH_CASES = (
 )
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_04)
 @pytest.mark.parametrize(
     ("label", "auth", "env", "expected_headers", "expected_params"),
     AUTH_CASES,

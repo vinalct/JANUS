@@ -274,6 +274,7 @@ def test_nextcloud_webdav_resolver_returns_one_discovered_file_per_zip():
     req_headers = dict(transport.requests[0].headers)
     assert req_headers.get("Depth") == "infinity"
     assert req_headers.get("Authorization", "").startswith("Basic ")
+    assert transport.requests[0].sensitive_headers == ("Authorization",)
 
     filenames = {f.filename for f in files}
     assert filenames == {"CNPJ_2024.zip", "CNPJ_2024_b.zip"}
