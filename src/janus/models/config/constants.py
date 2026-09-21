@@ -6,6 +6,11 @@ The bottom of the package layering: this module imports nothing from
 
 from __future__ import annotations
 
+import re
+
+ALLOWED_HOST_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+ALLOWED_HOST_PATTERN = re.compile(rf"^(?:\*\.)?{ALLOWED_HOST_LABEL}(?:\.{ALLOWED_HOST_LABEL})*$")
+
 SUPPORTED_SOURCE_TYPES = frozenset({"api", "catalog", "file"})
 SUPPORTED_STRATEGIES = SUPPORTED_SOURCE_TYPES
 SUPPORTED_STRATEGY_VARIANTS = {

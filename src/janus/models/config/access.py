@@ -20,6 +20,7 @@ from janus.models.config.coercion import (
     _require_mapping,
 )
 from janus.models.config.constants import (
+    ALLOWED_HOST_PATTERN,
     CLIENT_ERROR_STATUS_MAX_EXCLUSIVE,
     CLIENT_ERROR_STATUS_MIN,
     DEFAULT_PAST_END_STATUS_CODES,
@@ -107,6 +108,14 @@ def _build_access_config(
     link_resolver = _optional_enum(
         data, "link_resolver", SUPPORTED_LINK_RESOLVERS, issues, "access", default="auto"
     )
+    allowed_hosts = _build_allowed_hosts(data.get("allowed_hosts"), issues)
+
+    configured_urls = (url, base_url)
+    if any(
+        value is not None and not value.lower().startswith(("http://", "https://"))
+        for value in configured_urls
+    ):
+        issues.append(ValidationIssue("access.url", "must use the http or https scheme"))
 
     return AccessConfig(
         format=format_name,
@@ -126,7 +135,49 @@ def _build_access_config(
         rate_limit=rate_limit,
         request_inputs=request_inputs,
         link_resolver=link_resolver,
+        allowed_hosts=allowed_hosts,
     )
+
+
+def _build_allowed_hosts(raw_value: Any, issues: list[ValidationIssue]) -> tuple[str, ...]:
+    """Normalize the optional hostname allow-list and collect every malformed entry."""
+    if raw_value is None:
+        return ()
+    if not isinstance(raw_value, list):
+        issues.append(ValidationIssue("access.allowed_hosts", "must be a list of hostnames"))
+        return ()
+
+    accepted: list[str] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(raw_value):
+        field_path = f"access.allowed_hosts[{index}]"
+        if not isinstance(entry, str) or not entry.strip():
+            issues.append(ValidationIssue(field_path, "must be a non-empty string"))
+            continue
+
+        normalized = entry.strip().lower()
+        if normalized in {"*", "*."}:
+            issues.append(ValidationIssue(field_path, "an allow-all wildcard is not an allow-list"))
+            continue
+        if ALLOWED_HOST_PATTERN.fullmatch(normalized) is None:
+            issues.append(
+                ValidationIssue(
+                    field_path,
+                    (
+                        "must be a bare hostname, optionally prefixed with '*.' "
+                        "(no scheme, port or path)"
+                    ),
+                )
+            )
+            continue
+        if normalized in seen:
+            issues.append(ValidationIssue(field_path, "duplicates an earlier entry"))
+            continue
+
+        accepted.append(normalized)
+        seen.add(normalized)
+
+    return tuple(accepted)
 
 
 def _build_auth_config(raw_value: Any, issues: list[ValidationIssue]) -> AuthConfig:

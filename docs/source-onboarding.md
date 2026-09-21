@@ -167,6 +167,7 @@ The registry contract is intentionally small. The most important current options
 - `access.request_inputs` is an optional API/catalog block for bounded runtime request contexts before pagination starts.
 - `access.parameter_bindings` is an optional API/catalog block for request parameters resolved from the current request input or checkpoint state.
 - `access.link_resolver` is a file-source option for remote URL discovery. Supported values are `auto`, `direct`, `html_links`, and `nextcloud_webdav`.
+- `access.allowed_hosts` lets a file source admit discovered links on explicitly named hosts; the default admits only the configured URL's origin, and a leading `*.` admits subdomains (use ASCII/punycode hostnames, without schemes, ports, or paths).
 - `access.remote_file_pattern` filters files discovered from a remote URL before download.
 - `access.file_pattern` filters local file discovery and archive members before Spark handoff.
 

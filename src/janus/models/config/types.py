@@ -158,6 +158,7 @@ class AccessConfig:
     params: dict[str, str] | None = None
     parameter_bindings: dict[str, ParameterBinding] | None = None
     link_resolver: str = "auto"
+    allowed_hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

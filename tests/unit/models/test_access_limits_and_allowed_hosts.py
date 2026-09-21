@@ -13,9 +13,6 @@ from janus.registry import load_registry
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-RED_UNTIL_06 = pytest.mark.xfail(
-    strict=True, reason="red until: access.allowed_hosts"
-)
 RED_UNTIL_08 = pytest.mark.xfail(
     strict=True, reason="red until: access.limits"
 )
@@ -127,13 +124,11 @@ def _issues_for(issues: tuple[ValidationIssue, ...], prefix: str) -> list[Valida
 # access.allowed_hosts
 
 
-@RED_UNTIL_06
 def test_allowed_hosts_defaults_to_the_empty_tuple(tmp_path):
     """Absent means same origin — the default is a rule, not a missing value."""
     assert _build(tmp_path).access.allowed_hosts == ()
 
 
-@RED_UNTIL_06
 def test_allowed_hosts_normalizes_case_and_whitespace_and_keeps_the_wildcard(tmp_path):
     """One spelling reaches the policy, so the resolver never lower-cases at match time."""
     config = _build(
@@ -158,7 +153,6 @@ ALLOWED_HOSTS_REJECTIONS = (
 )
 
 
-@RED_UNTIL_06
 @pytest.mark.parametrize(
     ("label", "value", "expected_path"),
     ALLOWED_HOSTS_REJECTIONS,
@@ -174,7 +168,6 @@ def test_each_malformed_allowed_hosts_entry_is_one_issue_at_its_own_path(
     assert paths == [expected_path], f"expected exactly one issue at {expected_path}, got {paths}"
 
 
-@RED_UNTIL_06
 def test_three_bad_entries_report_three_issues(tmp_path):
     """Issue collection, unchanged: one raise site, every problem reported (order-11)."""
     issues = _issues(
@@ -188,17 +181,38 @@ def test_three_bad_entries_report_three_issues(tmp_path):
     ]
 
 
-@RED_UNTIL_06
-@pytest.mark.parametrize("url", ("file:///etc/passwd", "ftp://example.gov.br/x.zip"))
-def test_a_non_http_access_url_is_refused_at_load_time(tmp_path, url):
+@pytest.mark.parametrize(
+    ("field_name", "url"),
+    (
+        ("url", "file:///etc/passwd"),
+        ("url", "ftp://example.gov.br/x.zip"),
+        ("base_url", "file:///etc/passwd"),
+        ("base_url", "ftp://example.gov.br/x.zip"),
+    ),
+)
+def test_a_non_http_access_url_is_refused_at_load_time(tmp_path, field_name, url):
     """Structural, not policy: TASK-03 makes such a URL unexecutable, so it fails at load.
 
     Without this rule a ``file:`` ``access.url`` costs ``max_attempts`` transport attempts
     before its dead letter, which reads like a network problem rather than a typo.
     """
-    paths = [issue.path for issue in _issues(tmp_path, url=url)]
+    issues = _issues(tmp_path, **{field_name: url})
 
-    assert "access.url" in paths
+    assert ValidationIssue("access.url", "must use the http or https scheme") in issues
+
+
+def test_allowed_hosts_issues_follow_the_link_resolver_issue(tmp_path):
+    """The builder's append order remains deterministic when adjacent keys are bad."""
+    issues = _issues(
+        tmp_path,
+        link_resolver="telepathy",
+        allowed_hosts=["https://cdn.example.gov.br"],
+    )
+
+    assert [issue.path for issue in issues] == [
+        "access.link_resolver",
+        "access.allowed_hosts[0]",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -317,19 +331,37 @@ def test_limits_issues_sit_between_the_rate_limit_and_link_resolver_issues(tmp_p
 # NFR-5 — structural, never policy
 
 
-@RED_UNTIL_08
-def test_neither_key_consults_the_validation_policy(tmp_path):
-    """The policy owns product scope. A hostname is not a product-scope decision."""
+def test_allowed_hosts_does_not_consult_the_validation_policy(tmp_path):
+    """A hostname allow-list is structural and adds no policy calls."""
     policy = SpyPolicy()
 
     config = _build(
         tmp_path,
         policy=policy,
         allowed_hosts=["cdn.example.gov.br"],
-        limits={"max_payload_bytes": 4096, "max_archive_member_bytes": 4096},
     )
 
     assert config.access.allowed_hosts == ("cdn.example.gov.br",)
+    assert policy.calls == [
+        "allowed_source_types",
+        "allowed_strategies",
+        "allowed_federation_levels",
+        "validate_strategy_pairing",
+        "validate_public_access",
+    ]
+
+
+@RED_UNTIL_08
+def test_limits_does_not_consult_the_validation_policy(tmp_path):
+    """The policy owns product scope; payload limits are structural."""
+    policy = SpyPolicy()
+
+    config = _build(
+        tmp_path,
+        policy=policy,
+        limits={"max_payload_bytes": 4096, "max_archive_member_bytes": 4096},
+    )
+
     assert config.access.limits.max_payload_bytes == 4096
 
     assert policy.calls == [
@@ -344,15 +376,24 @@ def test_neither_key_consults_the_validation_policy(tmp_path):
     )
 
 
-@RED_UNTIL_08
-def test_every_checked_in_source_still_loads_and_takes_the_defaults():
-    """AC-4's config half: no tracked YAML changes meaning because two keys were added."""
+def test_every_checked_in_source_still_loads_and_takes_the_allowed_hosts_default():
+    """Adding the structural key does not alter any checked-in source contract."""
     registry = load_registry(PROJECT_ROOT)
     sources = registry.list_sources(enabled_only=False)
 
     assert len(sources) >= 20, f"the registry looks truncated: {len(sources)} sources"
     for source in sources:
         assert source.access.allowed_hosts == (), source.source_id
+
+
+@RED_UNTIL_08
+def test_every_checked_in_source_still_loads_and_takes_the_limits_defaults():
+    """AC-4's config half: no tracked YAML changes meaning when limits are added."""
+    registry = load_registry(PROJECT_ROOT)
+    sources = registry.list_sources(enabled_only=False)
+
+    assert len(sources) >= 20, f"the registry looks truncated: {len(sources)} sources"
+    for source in sources:
         limits = source.access.limits
         assert {name: getattr(limits, name) for name in EXPECTED_DEFAULTS} == EXPECTED_DEFAULTS, (
             source.source_id
