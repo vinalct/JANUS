@@ -8,6 +8,7 @@ from janus.strategies.files.core import (
     FileStrategy,
     FileStrategyError,
 )
+from janus.strategies.files.link_policy import RemoteLinkPolicy
 
 __all__ = [
     "ArchiveExtractionError",
@@ -18,4 +19,5 @@ __all__ = [
     "FileIntegrityError",
     "FileStrategy",
     "FileStrategyError",
+    "RemoteLinkPolicy",
 ]

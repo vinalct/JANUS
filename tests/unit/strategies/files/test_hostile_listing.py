@@ -12,7 +12,7 @@ import pytest
 
 from janus.models import ExecutionPlan, RunContext, SourceConfig
 from janus.registry import load_registry
-from janus.strategies.files import DiscoveredFile, FileHook
+from janus.strategies.files import DiscoveredFile, FileHook, RemoteLinkPolicy
 from janus.strategies.files.discovery import _discover_files
 from janus.strategies.files.resolvers import (
     DirectResolver,
@@ -20,15 +20,6 @@ from janus.strategies.files.resolvers import (
     NextcloudWebDavResolver,
 )
 from janus.strategies.http import ApiRequest, ApiResponse
-
-
-RED_UNTIL_07 = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "red until: access.allowed_hosts and the resolver "
-        "host policy"
-    ),
-)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 FIXTURES = PROJECT_ROOT / "tests" / "fixtures" / "files"
@@ -167,8 +158,6 @@ def _plan(tmp_path: Path, source_config: SourceConfig) -> ExecutionPlan:
 
 
 def _policy_for(access):
-    from janus.strategies.files.link_policy import RemoteLinkPolicy
-
     return RemoteLinkPolicy.from_access(access)
 
 
@@ -188,7 +177,6 @@ def _drop_records(caplog) -> list[logging.LogRecord]:
 # AC-1 — the HTML listing
 
 
-@RED_UNTIL_07
 def test_a_hostile_listing_yields_only_same_origin_http_candidates(tmp_path):
     """The whole finding in one assertion: nothing off-origin becomes a candidate."""
     html = (FIXTURES / "hostile_listing.html").read_bytes()
@@ -211,7 +199,6 @@ def test_a_hostile_listing_yields_only_same_origin_http_candidates(tmp_path):
     ),
     ids=("exact", "wildcard", "userinfo_host_not_the_text_before_at"),
 )
-@RED_UNTIL_07
 def test_allowed_hosts_widens_the_set_by_host(tmp_path, label, allowed_hosts, admitted):
     """``allowed_hosts`` names hosts, and the *host* is what decides."""
     del label
@@ -225,7 +212,6 @@ def test_allowed_hosts_widens_the_set_by_host(tmp_path, label, allowed_hosts, ad
     assert set(EXPECTED_KEPT) <= locations, "widening the host set must not drop a same-origin href"
 
 
-@RED_UNTIL_07
 def test_every_dropped_href_is_logged_once_with_its_reason(tmp_path, caplog):
     """One DEBUG line per dropped href — an invisible boundary is an unauditable one."""
     html = (FIXTURES / "hostile_listing.html").read_bytes()
@@ -246,7 +232,6 @@ def test_every_dropped_href_is_logged_once_with_its_reason(tmp_path, caplog):
         )
 
 
-@RED_UNTIL_07
 def test_a_dropped_href_is_logged_with_its_query_token_redacted(tmp_path, caplog):
     """A drop line renders a URL, so it goes through ``redact_url`` like every other site."""
     html = (
@@ -277,7 +262,6 @@ def _resolve_propfind(tmp_path: Path, body: bytes, *, url: str = CNPJ_SHARE_URL)
     return NextcloudWebDavResolver().resolve(url, "binary", transport, policy=_policy_for(access))
 
 
-@RED_UNTIL_07
 def test_a_hostile_propfind_yields_only_the_same_origin_file_entry(tmp_path, caplog):
     """A foreign DAV href must be **dropped**, not silently re-homed onto the configured base."""
     body = (FIXTURES / "hostile_propfind.xml").read_bytes()
@@ -295,7 +279,6 @@ def test_a_hostile_propfind_yields_only_the_same_origin_file_entry(tmp_path, cap
     assert any("file:///" in message and "reason=scheme" in message for message in messages)
 
 
-@RED_UNTIL_07
 def test_a_traversal_href_stays_under_the_configured_base(tmp_path):
     """Containment, not rejection: the basename is already safe, the *location* is not."""
     body = (FIXTURES / "hostile_propfind.xml").read_bytes()
@@ -331,7 +314,6 @@ class _OffOriginHook(FileHook):
         )
 
 
-@RED_UNTIL_07
 def test_a_hook_cannot_bypass_the_host_policy(tmp_path, caplog):
     """``_discover_files`` filters hook output too — FR-2's "belongs to the framework" clause."""
     source_config = _file_source_config(
@@ -369,7 +351,6 @@ def test_the_checked_in_file_sources_are_actually_found():
     assert len(sources) >= 11, f"expected the eleven checked-in file sources, found {len(sources)}"
 
 
-@RED_UNTIL_07
 def test_every_cnpj_source_keeps_every_recorded_candidate():
     """The recorded PROPFIND, replayed per source: the same-origin default drops nothing.
 
@@ -399,7 +380,6 @@ def test_every_cnpj_source_keeps_every_recorded_candidate():
         )
 
 
-@RED_UNTIL_07
 def test_the_inep_direct_url_is_admitted_by_the_default_policy():
     """INEP is a direct URL: ``DirectResolver`` answers it with no HTTP call, and it passes."""
     inep = next(

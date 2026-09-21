@@ -110,10 +110,18 @@ class FileHook(SourceHook):
         formato: str | None,
         transport: ApiTransport,
     ) -> Sequence[DiscoveredFile]:
+        from janus.strategies.files.link_policy import RemoteLinkPolicy
         from janus.strategies.files.resolvers import build_resolver_chain, resolve_link
 
+        policy = RemoteLinkPolicy.from_access(plan.source_config.access)
+        if policy is None:
+            return ()
         return resolve_link(
-            url, formato, transport, build_resolver_chain(plan.source_config.access.link_resolver)
+            url,
+            formato,
+            transport,
+            build_resolver_chain(plan.source_config.access.link_resolver),
+            policy=policy,
         )
 
     def resolve_version(

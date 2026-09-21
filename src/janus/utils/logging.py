@@ -6,9 +6,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Self
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
 REDACTED_VALUE = "***REDACTED***"
+_ENCODED_REDACTED_VALUE = quote_plus(REDACTED_VALUE)
 SENSITIVE_FIELD_MARKERS = (
     "api-key",
     "apikey",
@@ -174,9 +175,11 @@ def redact_url(url: str) -> str:
 
     if not changed and redacted_path == parsed.path:
         return url
-    return urlunsplit(
-        parsed._replace(path=redacted_path, query=urlencode(redacted_pairs))
+    redacted_query = urlencode(redacted_pairs).replace(
+        _ENCODED_REDACTED_VALUE,
+        REDACTED_VALUE,
     )
+    return urlunsplit(parsed._replace(path=redacted_path, query=redacted_query))
 
 
 def _redact_sensitive_path(path: str) -> str:

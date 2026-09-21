@@ -6,10 +6,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from janus.models import ExecutionPlan, RunContext, SourceConfig
 from janus.strategies.api import ApiRequest, ApiResponse
-from janus.strategies.files import DiscoveredFile, FileHook, FileStrategy
+from janus.strategies.files import DiscoveredFile, FileHook, FileStrategy, RemoteLinkPolicy
 from janus.strategies.files.resolvers import (
     DEFAULT_RESOLVER_CHAIN,
     DirectResolver,
@@ -61,6 +62,18 @@ class FakeTransport:
         )
 
 
+def _policy_for(url: str) -> RemoteLinkPolicy:
+    parsed = urlsplit(url)
+    scheme = parsed.scheme.lower()
+    return RemoteLinkPolicy(
+        origin_scheme=scheme,
+        origin_host=(parsed.hostname or "").lower(),
+        origin_port=parsed.port or (443 if scheme == "https" else 80),
+        allowed_hosts=frozenset(),
+        allowed_suffixes=frozenset(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC1 — DirectResolver passthrough for known file extensions (no HTTP call)
 # ---------------------------------------------------------------------------
@@ -79,7 +92,7 @@ def test_direct_resolver_returns_one_file_without_http_call():
     transport = FakeTransport([])
     url = "https://example.gov.br/data/arquivo.zip"
 
-    files = DirectResolver().resolve(url, None, transport)
+    files = DirectResolver().resolve(url, None, transport, policy=_policy_for(url))
 
     assert len(files) == 1
     assert files[0].location == url
@@ -93,7 +106,7 @@ def test_direct_resolver_infers_csv_format():
     transport = FakeTransport([])
     url = "https://example.gov.br/data/records.csv"
 
-    files = DirectResolver().resolve(url, None, transport)
+    files = DirectResolver().resolve(url, None, transport, policy=_policy_for(url))
 
     assert files[0].format == "csv"
     assert len(transport.requests) == 0
@@ -113,7 +126,7 @@ def test_redirect_resolver_returns_file_on_non_html_content_type():
     ])
     url = "https://dados.gov.br/resource/abc123"
 
-    files = RedirectResolver().resolve(url, "csv", transport)
+    files = RedirectResolver().resolve(url, "csv", transport, policy=_policy_for(url))
 
     assert len(files) == 1
     assert files[0].location == url
@@ -128,7 +141,8 @@ def test_redirect_resolver_skips_html_response():
         ResponseSpec(200, b"", {"Content-Type": "text/html; charset=utf-8"})
     ])
 
-    files = RedirectResolver().resolve("https://example.gov.br/page", None, transport)
+    url = "https://example.gov.br/page"
+    files = RedirectResolver().resolve(url, None, transport, policy=_policy_for(url))
 
     assert list(files) == []
 
@@ -144,7 +158,8 @@ def test_redirect_resolver_uses_content_disposition_for_filename():
         )
     ])
 
-    files = RedirectResolver().resolve("https://example.gov.br/download/abc", None, transport)
+    url = "https://example.gov.br/download/abc"
+    files = RedirectResolver().resolve(url, None, transport, policy=_policy_for(url))
 
     assert len(files) == 1
     assert files[0].filename == "data_2026.csv"
@@ -156,7 +171,8 @@ def test_redirect_resolver_returns_empty_on_transport_error():
 
     transport = FakeTransport([ApiTransportError("network timeout")])
 
-    files = RedirectResolver().resolve("https://example.gov.br/data", None, transport)
+    url = "https://example.gov.br/data"
+    files = RedirectResolver().resolve(url, None, transport, policy=_policy_for(url))
 
     assert list(files) == []
 
@@ -164,7 +180,8 @@ def test_redirect_resolver_returns_empty_on_transport_error():
 def test_redirect_resolver_returns_empty_on_error_status():
     transport = FakeTransport([ResponseSpec(404, b"Not Found")])
 
-    files = RedirectResolver().resolve("https://example.gov.br/data", None, transport)
+    url = "https://example.gov.br/data"
+    files = RedirectResolver().resolve(url, None, transport, policy=_policy_for(url))
 
     assert list(files) == []
 
@@ -265,7 +282,9 @@ def test_nextcloud_webdav_resolver_returns_one_discovered_file_per_zip():
     transport = FakeTransport([ResponseSpec(207, _PROPFIND_RESPONSE)])
     url = "https://arquivos.receitafederal.gov.br/index.php/s/YggdBLfdninEJX9"
 
-    files = NextcloudWebDavResolver().resolve(url, None, transport)
+    files = NextcloudWebDavResolver().resolve(
+        url, None, transport, policy=_policy_for(url)
+    )
 
     assert len(files) == 2
     assert len(transport.requests) == 1  # single PROPFIND call
@@ -312,8 +331,9 @@ def test_nextcloud_webdav_resolver_filters_by_formato():
     """).encode()
 
     transport = FakeTransport([ResponseSpec(207, propfind_mixed)])
+    url = "https://host.gov.br/index.php/s/TOKEN"
     files = NextcloudWebDavResolver().resolve(
-        "https://host.gov.br/index.php/s/TOKEN", "binary", transport
+        url, "binary", transport, policy=_policy_for(url)
     )
 
     assert len(files) == 1
@@ -323,8 +343,9 @@ def test_nextcloud_webdav_resolver_filters_by_formato():
 def test_nextcloud_webdav_resolver_discovers_nested_files_recursively():
     transport = FakeTransport([ResponseSpec(207, _PROPFIND_RECURSIVE_RESPONSE)])
 
+    url = "https://host.gov.br/index.php/s/TOKEN"
     files = NextcloudWebDavResolver().resolve(
-        "https://host.gov.br/index.php/s/TOKEN", "binary", transport
+        url, "binary", transport, policy=_policy_for(url)
     )
 
     assert len(files) == 1
@@ -350,8 +371,9 @@ def test_nextcloud_webdav_resolver_preserves_nested_paths_in_download_url():
     """).encode()
 
     transport = FakeTransport([ResponseSpec(207, propfind_nested)])
+    url = "https://host.gov.br/index.php/s/TOKEN"
     files = NextcloudWebDavResolver().resolve(
-        "https://host.gov.br/index.php/s/TOKEN", None, transport
+        url, None, transport, policy=_policy_for(url)
     )
 
     assert len(files) == 1
@@ -365,7 +387,9 @@ def test_nextcloud_webdav_resolver_uses_token_as_basic_auth():
     transport = FakeTransport([ResponseSpec(207, _PROPFIND_RESPONSE)])
     url = "https://example.gov.br/index.php/s/MYTOKEN99"
 
-    NextcloudWebDavResolver().resolve(url, None, transport)
+    NextcloudWebDavResolver().resolve(
+        url, None, transport, policy=_policy_for(url)
+    )
 
     import base64
 
@@ -377,8 +401,9 @@ def test_nextcloud_webdav_resolver_uses_token_as_basic_auth():
 def test_nextcloud_webdav_resolver_returns_empty_on_propfind_failure():
     transport = FakeTransport([ResponseSpec(403, b"Forbidden")])
 
+    url = "https://example.gov.br/index.php/s/TOKEN"
     files = NextcloudWebDavResolver().resolve(
-        "https://example.gov.br/index.php/s/TOKEN", None, transport
+        url, None, transport, policy=_policy_for(url)
     )
 
     assert list(files) == []
@@ -408,7 +433,7 @@ def test_html_link_resolver_extracts_links_matching_formato():
     ])
     url = "https://example.gov.br/portal/datasets"
 
-    files = HtmlLinkResolver().resolve(url, "csv", transport)
+    files = HtmlLinkResolver().resolve(url, "csv", transport, policy=_policy_for(url))
 
     assert len(files) == 2
     assert all(f.format == "csv" for f in files)
@@ -421,7 +446,8 @@ def test_html_link_resolver_skips_links_not_matching_formato():
         ResponseSpec(200, _HTML_FIXTURE, {"Content-Type": "text/html"})
     ])
 
-    files = HtmlLinkResolver().resolve("https://example.gov.br/page", "binary", transport)
+    url = "https://example.gov.br/page"
+    files = HtmlLinkResolver().resolve(url, "binary", transport, policy=_policy_for(url))
 
     assert len(files) == 1
     assert files[0].filename == "data.zip"
@@ -432,7 +458,8 @@ def test_html_link_resolver_resolves_relative_links_against_base_url():
         ResponseSpec(200, _HTML_FIXTURE, {"Content-Type": "text/html"})
     ])
 
-    files = HtmlLinkResolver().resolve("https://example.gov.br/portal/datasets", "csv", transport)
+    url = "https://example.gov.br/portal/datasets"
+    files = HtmlLinkResolver().resolve(url, "csv", transport, policy=_policy_for(url))
 
     locations = {f.location for f in files}
     assert all(loc.startswith("https://example.gov.br") for loc in locations)
@@ -441,7 +468,8 @@ def test_html_link_resolver_resolves_relative_links_against_base_url():
 def test_html_link_resolver_returns_empty_on_http_error():
     transport = FakeTransport([ResponseSpec(404, b"Not Found")])
 
-    files = HtmlLinkResolver().resolve("https://example.gov.br/page", "csv", transport)
+    url = "https://example.gov.br/page"
+    files = HtmlLinkResolver().resolve(url, "csv", transport, policy=_policy_for(url))
 
     assert list(files) == []
 
@@ -492,7 +520,7 @@ def test_build_resolver_chain_direct_always_passes_through():
     chain = build_resolver_chain("direct")
     url = "https://arquivos.receitafederal.gov.br/index.php/s/TOKEN"
 
-    files = resolve_link(url, None, transport, chain)
+    files = resolve_link(url, None, transport, chain, policy=_policy_for(url))
 
     assert len(files) == 1
     assert files[0].location == url
@@ -605,7 +633,9 @@ def test_resolve_link_stops_at_first_successful_resolver():
     transport = FakeTransport([])
     url = "https://example.gov.br/data/file.csv"
 
-    files = resolve_link(url, None, transport, DEFAULT_RESOLVER_CHAIN)
+    files = resolve_link(
+        url, None, transport, DEFAULT_RESOLVER_CHAIN, policy=_policy_for(url)
+    )
 
     # DirectResolver handles .csv without HTTP
     assert len(files) == 1
@@ -619,8 +649,13 @@ def test_resolve_link_falls_through_when_all_resolvers_return_empty():
         ResponseSpec(200, b"<html></html>", {"Content-Type": "text/html"}),  # GET html resolver
     ])
 
+    url = "https://example.gov.br/portal"
     files = resolve_link(
-        "https://example.gov.br/portal", "csv", transport, DEFAULT_RESOLVER_CHAIN
+        url,
+        "csv",
+        transport,
+        DEFAULT_RESOLVER_CHAIN,
+        policy=_policy_for(url),
     )
 
     assert list(files) == []
@@ -652,7 +687,9 @@ def test_direct_resolver_handles_tar_gz_url():
     transport = FakeTransport([])
     url = "https://dados.rfb.gov.br/CNPJ/cnpj.tar.gz"
 
-    files = resolve_link(url, None, transport, DEFAULT_RESOLVER_CHAIN)
+    files = resolve_link(
+        url, None, transport, DEFAULT_RESOLVER_CHAIN, policy=_policy_for(url)
+    )
 
     assert len(files) == 1
     assert files[0].filename == "cnpj.tar.gz"
@@ -664,7 +701,9 @@ def test_direct_resolver_handles_tgz_url():
     transport = FakeTransport([])
     url = "https://dados.rfb.gov.br/CNPJ/cnpj.tgz"
 
-    files = resolve_link(url, None, transport, DEFAULT_RESOLVER_CHAIN)
+    files = resolve_link(
+        url, None, transport, DEFAULT_RESOLVER_CHAIN, policy=_policy_for(url)
+    )
 
     assert len(files) == 1
     assert files[0].format == "binary"
@@ -681,7 +720,13 @@ def test_html_link_resolver_includes_tar_gz_links_when_format_is_binary():
     transport = FakeTransport([ResponseSpec(200, html_body)])
     url = "https://dados.rfb.gov.br/CNPJ/"
 
-    files = resolve_link(url, "binary", transport, (HtmlLinkResolver(),))
+    files = resolve_link(
+        url,
+        "binary",
+        transport,
+        (HtmlLinkResolver(),),
+        policy=_policy_for(url),
+    )
 
     filenames = {f.filename for f in files}
     assert "cnpj.tar.gz" in filenames
@@ -805,7 +850,7 @@ def test_redirect_resolver_returns_empty_on_transport_exception():
     transport = FakeTransport([URLError("connection refused")])
     url = "https://example.gov.br/data/file"
 
-    files = RedirectResolver().resolve(url, "csv", transport)
+    files = RedirectResolver().resolve(url, "csv", transport, policy=_policy_for(url))
 
     assert list(files) == []
 
@@ -817,7 +862,7 @@ def test_html_link_resolver_returns_empty_on_transport_exception():
     transport = FakeTransport([URLError("connection refused")])
     url = "https://example.gov.br/portal/page"
 
-    files = HtmlLinkResolver().resolve(url, "csv", transport)
+    files = HtmlLinkResolver().resolve(url, "csv", transport, policy=_policy_for(url))
 
     assert list(files) == []
 
@@ -829,7 +874,9 @@ def test_nextcloud_webdav_resolver_returns_empty_on_transport_exception():
     transport = FakeTransport([URLError("connection refused")])
     url = "https://example.gov.br/index.php/s/TOKEN"
 
-    files = NextcloudWebDavResolver().resolve(url, None, transport)
+    files = NextcloudWebDavResolver().resolve(
+        url, None, transport, policy=_policy_for(url)
+    )
 
     assert list(files) == []
 
@@ -850,7 +897,7 @@ def test_resolve_link_chain_falls_through_when_redirect_resolver_fails():
     url = "https://example.gov.br/portal/page"
     chain = (RedirectResolver(), HtmlLinkResolver())
 
-    files = resolve_link(url, "csv", transport, chain)
+    files = resolve_link(url, "csv", transport, chain, policy=_policy_for(url))
 
     assert len(files) == 1
     assert files[0].filename == "report.csv"
@@ -863,7 +910,9 @@ def test_resolver_transport_diagnostic_uses_redacted_url(caplog):
     transport = FakeTransport([URLError("connection refused")])
     url = "https://example.gov.br/index.php/s/TOKEN123?token=secret&page=1"
 
-    files = NextcloudWebDavResolver().resolve(url, None, transport)
+    files = NextcloudWebDavResolver().resolve(
+        url, None, transport, policy=_policy_for(url)
+    )
 
     assert list(files) == []
     assert "NextcloudWebDavResolver" in caplog.text

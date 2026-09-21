@@ -26,6 +26,7 @@ from janus.strategies.files.formats import (
     _filename_from_url,
     _infer_format_name,
 )
+from janus.strategies.files.link_policy import RemoteLinkPolicy
 from janus.strategies.http import HTTP_STATUS_CLIENT_ERROR, HTTP_STATUS_SUCCESS
 from janus.utils.logging import redact_url
 
@@ -53,7 +54,12 @@ class LinkResolver(Protocol):
     def can_handle(self, url: str, formato: str | None) -> bool: ...
 
     def resolve(
-        self, url: str, formato: str | None, transport: ApiTransport
+        self,
+        url: str,
+        formato: str | None,
+        transport: ApiTransport,
+        *,
+        policy: RemoteLinkPolicy,
     ) -> Sequence[DiscoveredFile]: ...
 
 
@@ -65,8 +71,14 @@ class DirectResolver:
         return any(path.endswith(ext) for ext in DIRECT_FILE_EXTENSIONS)
 
     def resolve(
-        self, url: str, formato: str | None, transport: ApiTransport
+        self,
+        url: str,
+        formato: str | None,
+        transport: ApiTransport,
+        *,
+        policy: RemoteLinkPolicy,
     ) -> Sequence[DiscoveredFile]:
+        del policy
         filename = _filename_from_url(url)
         fmt = _infer_format_name(filename, fallback=formato or "binary")
         return (DiscoveredFile(source_kind="remote", location=url, filename=filename, format=fmt),)
@@ -79,8 +91,14 @@ class RedirectResolver:
         return urlsplit(url).scheme in {"http", "https"}
 
     def resolve(
-        self, url: str, formato: str | None, transport: ApiTransport
+        self,
+        url: str,
+        formato: str | None,
+        transport: ApiTransport,
+        *,
+        policy: RemoteLinkPolicy,
     ) -> Sequence[DiscoveredFile]:
+        del policy
         request = ApiRequest(method="HEAD", url=url, timeout_seconds=30)
         try:
             response = transport.send(request)
@@ -135,7 +153,12 @@ class NextcloudWebDavResolver:
         return bool(_NEXTCLOUD_SHARE_PATTERN.search(url))
 
     def resolve(
-        self, url: str, formato: str | None, transport: ApiTransport
+        self,
+        url: str,
+        formato: str | None,
+        transport: ApiTransport,
+        *,
+        policy: RemoteLinkPolicy,
     ) -> Sequence[DiscoveredFile]:
         match = _NEXTCLOUD_SHARE_PATTERN.search(url)
         if not match:
@@ -169,7 +192,15 @@ class NextcloudWebDavResolver:
             )
             return ()
 
-        files = tuple(_parse_propfind_response(response.body, base, token, formato))
+        files = tuple(
+            _parse_propfind_response(
+                response.body,
+                base,
+                token,
+                formato,
+                policy=policy,
+            )
+        )
         if not files:
             _log_resolver_diagnostic(self, url, "no_files_found")
         return files
@@ -182,7 +213,12 @@ class HtmlLinkResolver:
         return True
 
     def resolve(
-        self, url: str, formato: str | None, transport: ApiTransport
+        self,
+        url: str,
+        formato: str | None,
+        transport: ApiTransport,
+        *,
+        policy: RemoteLinkPolicy,
     ) -> Sequence[DiscoveredFile]:
         request = ApiRequest(method="GET", url=url, timeout_seconds=60)
         try:
@@ -207,7 +243,7 @@ class HtmlLinkResolver:
             return ()
 
         files = []
-        for href in _extract_anchor_hrefs(html, base_url=url):
+        for href in _extract_anchor_hrefs(html, base_url=url, policy=policy):
             filename = _filename_from_url(href)
             fmt = _infer_format_name(filename, fallback=formato or "binary")
             if formato and fmt != formato:
@@ -231,11 +267,14 @@ def resolve_link(
     formato: str | None,
     transport: ApiTransport,
     resolvers: Sequence[LinkResolver],
+    *,
+    policy: RemoteLinkPolicy,
 ) -> Sequence[DiscoveredFile]:
     """Run resolvers in order; return the first non-empty result."""
     for resolver in resolvers:
         if resolver.can_handle(url, formato):
-            files = resolver.resolve(url, formato, transport)
+            files = resolver.resolve(url, formato, transport, policy=policy)
+            files = policy.filter(files, stage=type(resolver).__name__)
             if files:
                 return files
     return ()
@@ -262,8 +301,14 @@ class _DirectPassthroughResolver:
         return True
 
     def resolve(
-        self, url: str, formato: str | None, transport: ApiTransport
+        self,
+        url: str,
+        formato: str | None,
+        transport: ApiTransport,
+        *,
+        policy: RemoteLinkPolicy,
     ) -> Sequence[DiscoveredFile]:
+        del policy
         filename = _filename_from_url(url)
         fmt = _infer_format_name(filename, fallback=formato or "binary")
         return (DiscoveredFile(source_kind="remote", location=url, filename=filename, format=fmt),)
@@ -300,6 +345,8 @@ def _parse_propfind_response(
     base_url: str,
     share_token: str,
     formato: str | None,
+    *,
+    policy: RemoteLinkPolicy,
 ) -> list[DiscoveredFile]:
     try:
         root = ElementTree.fromstring(xml_body)
@@ -313,6 +360,12 @@ def _parse_propfind_response(
             continue
 
         href = href_el.text.strip()
+        resolved_href = urljoin(f"{base_url.rstrip('/')}/", href)
+        reason = policy.rejection_reason(resolved_href)
+        if reason is not None:
+            _log_link_dropped(resolved_href, reason, stage="NextcloudWebDavResolver")
+            continue
+
         filename = Path(unquote(href)).name.strip()
         if not filename:
             continue
@@ -355,11 +408,24 @@ def _nextcloud_public_file_url(base_url: str, share_token: str, href: str) -> st
     relative_path = href_path
     if href_path.startswith(_NEXTCLOUD_WEBDAV_PREFIX):
         relative_path = href_path.removeprefix(_NEXTCLOUD_WEBDAV_PREFIX)
-    relative_path = relative_path.lstrip("/")
+    relative_path = _normalize_relative_url_path(relative_path)
     if not relative_path:
         return f"{base_url}/public.php/dav/files/{share_token}"
     encoded_path = quote(relative_path, safe="/")
     return f"{base_url}/public.php/dav/files/{share_token}/{encoded_path}"
+
+
+def _normalize_relative_url_path(path: str) -> str:
+    parts: list[str] = []
+    for part in path.split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts)
 
 
 class _AnchorParser(HTMLParser):
@@ -375,12 +441,31 @@ class _AnchorParser(HTMLParser):
                 self.links.append(attr_value)
 
 
-def _extract_anchor_hrefs(html: str, base_url: str) -> list[str]:
+def _extract_anchor_hrefs(
+    html: str,
+    base_url: str,
+    *,
+    policy: RemoteLinkPolicy,
+) -> list[str]:
     parser = _AnchorParser()
     parser.feed(html)
     result = []
     for href in parser.links:
         if href.startswith(("#", "javascript:", "mailto:")):
             continue
-        result.append(urljoin(base_url, href))
+        resolved_href = urljoin(base_url, href)
+        reason = policy.rejection_reason(resolved_href)
+        if reason is not None:
+            _log_link_dropped(resolved_href, reason, stage="HtmlLinkResolver")
+            continue
+        result.append(resolved_href)
     return result
+
+
+def _log_link_dropped(href: str, reason: str, *, stage: str) -> None:
+    _LOGGER.debug(
+        "file_link_dropped href=%s reason=%s stage=%s",
+        redact_url(href),
+        reason,
+        stage,
+    )
