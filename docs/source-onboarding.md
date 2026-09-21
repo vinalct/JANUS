@@ -163,6 +163,8 @@ The registry contract is intentionally small. The most important current options
 - `access.pagination.total_count_field` is an optional dotted path to a total-record count, used to cap concurrent look-ahead exactly.
 - `access.rate_limit` carries `requests_per_minute`, optional `backoff_seconds`, and optional `concurrency`.
 - `access.rate_limit.concurrency` above `1` is an API-family capability with a validated precondition — see [Concurrent pagination](#concurrent-pagination).
+- `access.limits` sets per-source remote-content ceilings as plain integer counts: `max_payload_bytes` defaults to 32 GiB, `max_redirects` defaults to `5` (`0` disables redirects; maximum `20`), `max_archive_member_bytes` defaults to the resolved `max_payload_bytes`, `max_archive_total_bytes` defaults to 128 GiB, and `max_archive_ratio` defaults to `200`.
+- API and catalog sources should set `access.limits.max_payload_bytes` much lower than the file-oriented 32 GiB default because their response bodies remain in memory.
 - `access.params` is the home for static literal request parameters.
 - `access.request_inputs` is an optional API/catalog block for bounded runtime request contexts before pagination starts.
 - `access.parameter_bindings` is an optional API/catalog block for request parameters resolved from the current request input or checkpoint state.

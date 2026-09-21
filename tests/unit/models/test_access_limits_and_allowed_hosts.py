@@ -8,25 +8,27 @@ from typing import Any
 import pytest
 
 from janus.models import SourceConfig
+from janus.models.config.constants import (
+    DEFAULT_MAX_ARCHIVE_RATIO,
+    DEFAULT_MAX_ARCHIVE_TOTAL_BYTES,
+    DEFAULT_MAX_PAYLOAD_BYTES,
+    DEFAULT_MAX_REDIRECTS,
+    MAX_REDIRECTS_CEILING,
+)
 from janus.models.config.issues import SourceConfigValidationError, ValidationIssue
 from janus.registry import load_registry
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-RED_UNTIL_08 = pytest.mark.xfail(
-    strict=True, reason="red until: access.limits"
-)
-
 GIB = 1024**3
 
 EXPECTED_DEFAULTS = {
-    "max_payload_bytes": 32 * GIB,
-    "max_redirects": 5,
-    "max_archive_member_bytes": 32 * GIB,
-    "max_archive_total_bytes": 128 * GIB,
-    "max_archive_ratio": 200,
+    "max_payload_bytes": DEFAULT_MAX_PAYLOAD_BYTES,
+    "max_redirects": DEFAULT_MAX_REDIRECTS,
+    "max_archive_member_bytes": DEFAULT_MAX_PAYLOAD_BYTES,
+    "max_archive_total_bytes": DEFAULT_MAX_ARCHIVE_TOTAL_BYTES,
+    "max_archive_ratio": DEFAULT_MAX_ARCHIVE_RATIO,
 }
-MAX_REDIRECTS_CEILING = 20
 
 
 class SpyPolicy:
@@ -219,7 +221,6 @@ def test_allowed_hosts_issues_follow_the_link_resolver_issue(tmp_path):
 # access.limits
 
 
-@RED_UNTIL_08
 def test_limits_default_to_the_measured_ceilings(tmp_path):
     """Sized from the largest checked-in artifact family so a default cannot dead-letter it."""
     limits = _build(tmp_path).access.limits
@@ -227,7 +228,6 @@ def test_limits_default_to_the_measured_ceilings(tmp_path):
     assert {name: getattr(limits, name) for name in EXPECTED_DEFAULTS} == EXPECTED_DEFAULTS
 
 
-@RED_UNTIL_08
 def test_the_member_cap_follows_a_configured_payload_cap(tmp_path):
     """FR-5's default relationship: one knob moves both unless the operator splits them."""
     limits = _build(tmp_path, limits={"max_payload_bytes": 4 * GIB}).access.limits
@@ -237,7 +237,6 @@ def test_the_member_cap_follows_a_configured_payload_cap(tmp_path):
     assert limits.max_archive_total_bytes == EXPECTED_DEFAULTS["max_archive_total_bytes"]
 
 
-@RED_UNTIL_08
 def test_every_limit_round_trips(tmp_path):
     overrides = {
         "max_payload_bytes": 1024,
@@ -257,6 +256,7 @@ LIMIT_REJECTIONS = (
     ("negative", {"max_payload_bytes": -1}, "access.limits.max_payload_bytes"),
     ("human_readable", {"max_payload_bytes": "8GiB"}, "access.limits.max_payload_bytes"),
     ("float", {"max_payload_bytes": 1.5}, "access.limits.max_payload_bytes"),
+    ("null", {"max_payload_bytes": None}, "access.limits.max_payload_bytes"),
     ("negative_redirects", {"max_redirects": -1}, "access.limits.max_redirects"),
     (
         "over_the_redirect_ceiling",
@@ -273,7 +273,6 @@ LIMIT_REJECTIONS = (
 )
 
 
-@RED_UNTIL_08
 @pytest.mark.parametrize(
     ("label", "value", "expected_path"),
     LIMIT_REJECTIONS,
@@ -289,13 +288,24 @@ def test_each_malformed_limit_is_one_issue_at_its_own_path(
     assert paths == [expected_path], f"expected exactly one issue at {expected_path}, got {paths}"
 
 
-@RED_UNTIL_08
+def test_multiple_malformed_limits_are_collected_in_field_order(tmp_path):
+    """One invalid block reports every independent field problem at the load boundary."""
+    issues = _issues(
+        tmp_path,
+        limits={"max_payload_bytes": 0, "max_archive_ratio": "many"},
+    )
+
+    assert [issue.path for issue in issues] == [
+        "access.limits.max_payload_bytes",
+        "access.limits.max_archive_ratio",
+    ]
+
+
 def test_zero_redirects_is_a_valid_choice(tmp_path):
     """"Never follow a Location" is a legitimate contract for an API that must not redirect."""
     assert _build(tmp_path, limits={"max_redirects": 0}).access.limits.max_redirects == 0
 
 
-@RED_UNTIL_08
 def test_limits_config_fails_closed_at_construction(tmp_path):
     """Like ``DateWindowRequestInputsConfig``: no object rather than one carrying a bad cap."""
     del tmp_path
@@ -305,7 +315,6 @@ def test_limits_config_fails_closed_at_construction(tmp_path):
         LimitsConfig(max_payload_bytes=0)
 
 
-@RED_UNTIL_08
 def test_limits_issues_sit_between_the_rate_limit_and_link_resolver_issues(tmp_path):
     """Issue *ordering* is part of the contract (order-11), so the block's position is pinned."""
     issues = _issues(
@@ -351,7 +360,6 @@ def test_allowed_hosts_does_not_consult_the_validation_policy(tmp_path):
     ]
 
 
-@RED_UNTIL_08
 def test_limits_does_not_consult_the_validation_policy(tmp_path):
     """The policy owns product scope; payload limits are structural."""
     policy = SpyPolicy()
@@ -386,7 +394,6 @@ def test_every_checked_in_source_still_loads_and_takes_the_allowed_hosts_default
         assert source.access.allowed_hosts == (), source.source_id
 
 
-@RED_UNTIL_08
 def test_every_checked_in_source_still_loads_and_takes_the_limits_defaults():
     """AC-4's config half: no tracked YAML changes meaning when limits are added."""
     registry = load_registry(PROJECT_ROOT)

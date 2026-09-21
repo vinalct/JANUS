@@ -23,7 +23,12 @@ from janus.models.config.constants import (
     ALLOWED_HOST_PATTERN,
     CLIENT_ERROR_STATUS_MAX_EXCLUSIVE,
     CLIENT_ERROR_STATUS_MIN,
+    DEFAULT_MAX_ARCHIVE_RATIO,
+    DEFAULT_MAX_ARCHIVE_TOTAL_BYTES,
+    DEFAULT_MAX_PAYLOAD_BYTES,
+    DEFAULT_MAX_REDIRECTS,
     DEFAULT_PAST_END_STATUS_CODES,
+    MAX_REDIRECTS_CEILING,
     RETRYABLE_CLIENT_STATUS_CODES,
     SUPPORTED_AUTH_TYPES,
     SUPPORTED_DATA_FORMATS,
@@ -36,6 +41,7 @@ from janus.models.config.request_inputs import _build_request_inputs_config
 from janus.models.config.types import (
     AccessConfig,
     AuthConfig,
+    LimitsConfig,
     PaginationConfig,
     RateLimitConfig,
 )
@@ -91,6 +97,7 @@ def _build_access_config(
     auth = _build_auth_config(data.get("auth"), issues)
     pagination = _build_pagination_config(data.get("pagination"), issues)
     rate_limit = _build_rate_limit_config(data.get("rate_limit"), issues)
+    limits = _build_limits_config(data.get("limits"), issues)
 
     if params and parameter_bindings:
         duplicate_keys = sorted(set(params).intersection(parameter_bindings))
@@ -133,9 +140,96 @@ def _build_access_config(
         auth=auth,
         pagination=pagination,
         rate_limit=rate_limit,
+        limits=limits,
         request_inputs=request_inputs,
         link_resolver=link_resolver,
         allowed_hosts=allowed_hosts,
+    )
+
+
+def _build_limits_config(raw_value: Any, issues: list[ValidationIssue]) -> LimitsConfig:
+    """Validate per-source remote-content ceilings without consulting policy."""
+    if raw_value is None:
+        return LimitsConfig()
+
+    issue_count = len(issues)
+    data = _require_mapping(raw_value, "access.limits", issues)
+    if len(issues) != issue_count:
+        return LimitsConfig()
+
+    max_payload_bytes = _read_limit_int(
+        data, "max_payload_bytes", issues, DEFAULT_MAX_PAYLOAD_BYTES, minimum=1
+    )
+    max_redirects = _read_limit_int(
+        data, "max_redirects", issues, DEFAULT_MAX_REDIRECTS, minimum=0
+    )
+    max_archive_member_bytes = _read_limit_int(
+        data, "max_archive_member_bytes", issues, max_payload_bytes, minimum=1
+    )
+    max_archive_total_bytes = _read_limit_int(
+        data,
+        "max_archive_total_bytes",
+        issues,
+        DEFAULT_MAX_ARCHIVE_TOTAL_BYTES,
+        minimum=1,
+    )
+    max_archive_ratio = _read_limit_int(
+        data, "max_archive_ratio", issues, DEFAULT_MAX_ARCHIVE_RATIO, minimum=1
+    )
+
+    if max_redirects > MAX_REDIRECTS_CEILING:
+        issues.append(
+            ValidationIssue(
+                "access.limits.max_redirects",
+                f"must be at most {MAX_REDIRECTS_CEILING}",
+            )
+        )
+    if (
+        max_archive_member_bytes >= 1
+        and max_archive_total_bytes >= 1
+        and max_archive_member_bytes > max_archive_total_bytes
+    ):
+        issues.append(
+            ValidationIssue(
+                "access.limits.max_archive_member_bytes",
+                "must not exceed access.limits.max_archive_total_bytes",
+            )
+        )
+
+    if len(issues) != issue_count:
+        return LimitsConfig()
+
+    # Unknown keys are intentionally ignored, matching the other nested builders.
+    return LimitsConfig(
+        max_payload_bytes=max_payload_bytes,
+        max_redirects=max_redirects,
+        max_archive_member_bytes=max_archive_member_bytes,
+        max_archive_total_bytes=max_archive_total_bytes,
+        max_archive_ratio=max_archive_ratio,
+    )
+
+
+def _read_limit_int(
+    data: Any,
+    field_name: str,
+    issues: list[ValidationIssue],
+    default: int,
+    *,
+    minimum: int,
+) -> int:
+    """Read one limit, treating an explicit null as malformed rather than absent."""
+    if field_name in data and data[field_name] is None:
+        issues.append(
+            ValidationIssue(f"access.limits.{field_name}", "must be an integer")
+        )
+        return default
+    return _optional_int(
+        data,
+        field_name,
+        issues,
+        "access.limits",
+        default=default,
+        minimum=minimum,
     )
 
 
