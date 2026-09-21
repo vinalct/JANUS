@@ -150,6 +150,17 @@ def _render(relative: str, node: ast.AST) -> str:
     return f"{relative}:{getattr(node, 'lineno', '?')}: {ast.unparse(node).splitlines()[0]}"
 
 
+def _violations_outside_allowed_site(
+    sources: list[tuple[str, ast.Module]],
+) -> list[str]:
+    return [
+        _render(relative, node)
+        for relative, tree in sources
+        if relative != ALLOWED_SITE
+        for node in opener_violations(tree)
+    ]
+
+
 def test_sweep_actually_covers_the_http_speaking_packages():
     """A glob that silently matches nothing would pass every assertion below it."""
     swept = {relative for relative, _ in _http_speaking_sources()}
@@ -166,12 +177,7 @@ def test_sweep_actually_covers_the_http_speaking_packages():
 
 def test_only_the_shared_transport_builds_an_opener():
     """AC-8: no second opener, no second redirect handler, no direct ``urlopen``."""
-    violations = [
-        _render(relative, node)
-        for relative, tree in _http_speaking_sources()
-        for node in opener_violations(tree)
-        if relative != ALLOWED_SITE
-    ]
+    violations = _violations_outside_allowed_site(_http_speaking_sources())
 
     assert not violations, (
         "a module outside the shared transport opens URLs or adopts CPython's redirect "
@@ -238,6 +244,18 @@ def test_detector_flags_a_deliberate_violation(label, snippet):
     """The guardrail must fail on a violation, not merely pass on clean code."""
     del label
     assert opener_violations(ast.parse(snippet)), "the opener detector no longer detects anything"
+
+
+def test_sweep_diagnostic_names_the_offending_file_line_and_source():
+    """The planted-violation proof must remain readable when this guardrail fires."""
+    relative = "strategies/files/download.py"
+    tree = ast.parse("from urllib.request import urlopen\n")
+
+    violations = _violations_outside_allowed_site([(relative, tree)])
+
+    assert violations == [
+        "strategies/files/download.py:1: from urllib.request import urlopen"
+    ]
 
 
 @pytest.mark.parametrize(
