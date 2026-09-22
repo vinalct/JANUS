@@ -3,9 +3,10 @@
 This is the file family's equivalent of ``requests.py`` in the API and catalog families: the
 family-specific *composition* of the shared HTTP layer, never a second copy of it. The
 transport, the throttle and the retry loop all come from :mod:`janus.strategies.http` —
-``send_with_retries`` owns attempt counting, backoff and status classification, and
+``stream_with_retries`` owns attempt counting, backoff and status classification, and
 **nothing here reimplements retry or backoff**. A local file needs none of it and is read
-straight off disk.
+straight off disk. Small payloads stay inline so their persistence path is unchanged; large
+payloads are staged inside the raw zone and hashed while they are copied.
 
 Integrity is the other half. :func:`_validate_remote_payload` rejects an answer that is
 plainly not the file (an HTML error page served with 200, or zero bytes where discovery saw a
@@ -20,12 +21,13 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
+from io import BytesIO, RawIOBase
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, BinaryIO, cast
 
 from janus.models import ExecutionPlan
 from janus.strategies.common import _freeze_string_mapping
@@ -33,15 +35,24 @@ from janus.strategies.http import (
     ApiClient,
     ApiRequest,
     ApiResponse,
+    ApiResponseTooLargeError,
+    ApiStreamedResponse,
     ApiTransport,
     HttpRequestThrottle,
     RetryErrorPolicy,
     UrllibApiTransport,
     inject_auth,
     response_body_excerpt,
-    send_with_retries,
+    stream_with_retries,
 )
 from janus.utils.logging import StructuredLogger, redact_url
+from janus.writers import (
+    SPOOL_THRESHOLD_BYTES,
+    PersistedArtifact,
+    RawArtifactWriter,
+    RawWriteLimitError,
+    StagedWrite,
+)
 
 from .artifacts import _safe_filename
 from .core import FileDownloadError, FileIntegrityError
@@ -52,6 +63,9 @@ if TYPE_CHECKING:
 
 #: Checksum headers this family trusts, in preference order.
 CHECKSUM_HEADER_CANDIDATES = ("x-checksum-sha256", "x-amz-checksum-sha256")
+DOWNLOAD_READ_CHUNK_BYTES = 1024 * 1024
+
+FileResponse = ApiResponse | ApiStreamedResponse
 
 
 def _file_response_error(response: ApiResponse) -> FileDownloadError:
@@ -76,6 +90,119 @@ _RETRY_POLICY = RetryErrorPolicy(
     response_error_factory=_file_response_error,
     retry_log_event="file_retry_scheduled",
 )
+
+
+class _PrefixThenStream(RawIOBase):
+    """Read a bounded in-memory prefix before continuing with the response body."""
+
+    def __init__(self, prefix: BinaryIO, tail: BinaryIO) -> None:
+        self._prefix: BinaryIO | None = prefix
+        self._tail = tail
+
+    def readable(self) -> bool:
+        return True
+
+    def read(self, size: int | None = -1) -> bytes:
+        if size == 0:
+            return b""
+        amount = -1 if size is None else size
+        if self._prefix is not None:
+            chunk = self._prefix.read(amount)
+            if chunk:
+                return chunk
+            self._prefix = None
+        return self._tail.read(-1 if size is None else size)
+
+
+@dataclass(slots=True)
+class DownloadedPayload:
+    """One candidate's bytes, inline when small and disk-backed when large."""
+
+    size_bytes: int
+    sha256_hex: str
+    inline: bytes | None = None
+    staged: StagedWrite | None = None
+    _path: Path | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        representations = sum(
+            value is not None for value in (self.inline, self.staged, self._path)
+        )
+        if representations != 1:
+            raise ValueError("downloaded payload must have exactly one byte representation")
+
+    def open(self) -> BinaryIO:
+        """Open a seekable reader over the candidate without materializing it."""
+        if self.inline is not None:
+            return BytesIO(self.inline)
+        if self.staged is not None:
+            return self.staged.open()
+        if self._path is not None:
+            return self._path.open("rb")
+        raise RuntimeError("downloaded payload has no readable representation")
+
+    def materialize(self) -> bytes:
+        """Return the complete payload, primarily for the legacy hook/archive contracts."""
+        if self.inline is not None:
+            return self.inline
+        with self.open() as stream:
+            payload = stream.read(self.size_bytes + 1)
+        if len(payload) != self.size_bytes:
+            raise OSError(
+                "disk-backed payload changed after download: "
+                f"expected {self.size_bytes} bytes, read {len(payload)}"
+            )
+        return payload
+
+    def persist(
+        self,
+        raw_writer: RawArtifactWriter,
+        plan: ExecutionPlan,
+        relative_path: str | Path,
+        *,
+        metadata: Mapping[str, str] | None = None,
+    ) -> PersistedArtifact:
+        """Persist at the resolved path, preserving the existing inline write path."""
+        if self.inline is not None:
+            return raw_writer.write_bytes(plan, relative_path, self.inline, metadata=metadata)
+
+        if self.staged is not None:
+            persisted = self.staged.commit(relative_path, metadata=metadata)
+            self.staged = None
+            self._path = Path(persisted.artifact.path)
+            return persisted
+
+        if self._path is None:
+            raise RuntimeError("downloaded payload has no persistable representation")
+        with self._path.open("rb") as stream:
+            persisted = raw_writer.write_stream(
+                plan,
+                relative_path,
+                stream,
+                metadata=metadata,
+                max_bytes=self.size_bytes,
+            )
+        self._path = Path(persisted.artifact.path)
+        return persisted
+
+    def discard(self) -> None:
+        """Discard an uncommitted remote staging file; safe to call repeatedly."""
+        if self.staged is not None:
+            self.staged.discard()
+
+    @classmethod
+    def from_local_path(cls, path: Path) -> DownloadedPayload:
+        """Load a small local file inline, or hash a large one without materializing it."""
+        if path.stat().st_size <= SPOOL_THRESHOLD_BYTES:
+            payload = path.read_bytes()
+            return cls(
+                size_bytes=len(payload),
+                sha256_hex=sha256(payload).hexdigest(),
+                inline=payload,
+            )
+
+        size_bytes, sha256_hex = _hash_local_path(path)
+        return cls(size_bytes=size_bytes, sha256_hex=sha256_hex, _path=path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,10 +235,11 @@ class FileDownloader:
         client: ApiClient,
         throttle: HttpRequestThrottle,
         logger: StructuredLogger | None,
-    ) -> tuple[bytes, ApiResponse | None, int]:
-        """Return one candidate's bytes, its response (``None`` locally) and attempts used."""
+        raw_writer: RawArtifactWriter,
+    ) -> tuple[DownloadedPayload, ApiStreamedResponse | None, int]:
+        """Return one candidate's bounded payload, response metadata and attempts used."""
         if discovered_file.source_kind == "local":
-            return Path(discovered_file.location).read_bytes(), None, 1
+            return DownloadedPayload.from_local_path(Path(discovered_file.location)), None, 1
 
         request = ApiRequest(
             method=plan.source_config.access.method,
@@ -127,7 +255,7 @@ class FileDownloader:
             plan.source_config.access.auth,
             env_reader=self.resolve_env_var,
         )
-        response, _payload, attempts_used = send_with_retries(
+        streamed, attempts_used = stream_with_retries(
             plan,
             client,
             request,
@@ -136,7 +264,25 @@ class FileDownloader:
             policy=_RETRY_POLICY,
             sleeper=self.sleeper,
         )
-        return response.body, response, attempts_used
+        try:
+            payload = _load_streamed_payload(
+                plan,
+                request,
+                streamed,
+                raw_writer=raw_writer,
+            )
+        except ApiResponseTooLargeError as exc:
+            raise FileDownloadError(str(exc)) from exc
+        except RawWriteLimitError as exc:
+            error = ApiResponseTooLargeError(
+                request.full_url(),
+                limit_bytes=exc.max_bytes,
+                bytes_seen=exc.bytes_seen,
+            )
+            raise FileDownloadError(str(error)) from exc
+        finally:
+            streamed.close()
+        return payload, streamed, attempts_used
 
     def resolve_env_var(self, name: str) -> str | None:
         value = self.env_reader(name)
@@ -145,10 +291,97 @@ class FileDownloader:
         return os.getenv(name)
 
 
+def _load_streamed_payload(
+    plan: ExecutionPlan,
+    request: ApiRequest,
+    streamed: ApiStreamedResponse,
+    *,
+    raw_writer: RawArtifactWriter,
+) -> DownloadedPayload:
+    with BytesIO() as buffered:
+        buffered_size = 0
+        while buffered_size <= SPOOL_THRESHOLD_BYTES:
+            remaining = SPOOL_THRESHOLD_BYTES + 1 - buffered_size
+            chunk = streamed.body.read(min(DOWNLOAD_READ_CHUNK_BYTES, remaining))
+            if not chunk:
+                inline = buffered.getvalue()
+                return DownloadedPayload(
+                    size_bytes=len(inline),
+                    sha256_hex=sha256(inline).hexdigest(),
+                    inline=inline,
+                )
+            buffered.write(chunk)
+            buffered_size += len(chunk)
+
+        buffered.seek(0)
+        staged = raw_writer.begin_staged_write(
+            plan,
+            max_bytes=request.max_payload_bytes,
+        )
+        staged.write_from(
+            cast(
+                BinaryIO,
+                _PrefixThenStream(buffered, cast(BinaryIO, streamed.body)),
+            )
+        )
+    return DownloadedPayload(
+        size_bytes=staged.bytes_written,
+        sha256_hex=staged.sha256_hex,
+        staged=staged,
+    )
+
+
+def _payload_from_bytes(
+    payload: bytes,
+    plan: ExecutionPlan,
+    raw_writer: RawArtifactWriter,
+    *,
+    max_bytes: int,
+) -> DownloadedPayload:
+    """Wrap hook output, staging it when it no longer fits the inline path."""
+    size_bytes = len(payload)
+    if size_bytes > max_bytes:
+        raise FileDownloadError(
+            "Prepared file payload exceeds "
+            f"access.limits.max_payload_bytes={max_bytes}: {size_bytes} bytes seen"
+        )
+    if size_bytes <= SPOOL_THRESHOLD_BYTES:
+        return DownloadedPayload(
+            size_bytes=size_bytes,
+            sha256_hex=sha256(payload).hexdigest(),
+            inline=payload,
+        )
+
+    staged = raw_writer.begin_staged_write(plan, max_bytes=max_bytes)
+    try:
+        staged.write_from(BytesIO(payload))
+    except RawWriteLimitError as exc:
+        raise FileDownloadError(
+            "Prepared file payload exceeds "
+            f"access.limits.max_payload_bytes={exc.max_bytes}: "
+            f"{exc.bytes_seen} bytes seen"
+        ) from exc
+    return DownloadedPayload(
+        size_bytes=staged.bytes_written,
+        sha256_hex=staged.sha256_hex,
+        staged=staged,
+    )
+
+
+def _hash_local_path(path: Path) -> tuple[int, str]:
+    digest = sha256()
+    size_bytes = 0
+    with path.open("rb") as stream:
+        while chunk := stream.read(DOWNLOAD_READ_CHUNK_BYTES):
+            size_bytes += len(chunk)
+            digest.update(chunk)
+    return size_bytes, digest.hexdigest()
+
+
 def _validate_remote_payload(
     discovered_file: DiscoveredFile,
-    payload: bytes,
-    response: ApiResponse | None,
+    payload: DownloadedPayload,
+    response: FileResponse | None,
 ) -> None:
     if discovered_file.source_kind != "remote" or response is None:
         return
@@ -163,7 +396,7 @@ def _validate_remote_payload(
         )
 
     if (
-        not payload
+        payload.size_bytes == 0
         and discovered_file.size_bytes is not None
         and discovered_file.size_bytes > 0
     ):
@@ -173,7 +406,7 @@ def _validate_remote_payload(
         )
 
 
-def _resolved_filename(filename: str, response: ApiResponse | None) -> str:
+def _resolved_filename(filename: str, response: FileResponse | None) -> str:
     if response is None:
         return _safe_filename(filename)
 
@@ -188,8 +421,8 @@ def _resolved_filename(filename: str, response: ApiResponse | None) -> str:
 def _resolve_version(
     plan: ExecutionPlan,
     discovered_file: DiscoveredFile,
-    payload: bytes,
-    response: ApiResponse | None,
+    payload: DownloadedPayload,
+    response: FileResponse | None,
     file_hook: FileHook | None,
 ) -> str:
     if file_hook is not None:
@@ -215,14 +448,14 @@ def _resolve_version(
 
     if plan.source.strategy_variant == "static_file":
         return "current"
-    return sha256(payload).hexdigest()
+    return payload.sha256_hex
 
 
 def _expected_checksum(
     plan: ExecutionPlan,
     discovered_file: DiscoveredFile,
     *,
-    response: ApiResponse | None,
+    response: FileResponse | None,
     file_hook: FileHook | None,
 ) -> str | None:
     if file_hook is not None:

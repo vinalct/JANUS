@@ -3,25 +3,36 @@
 from __future__ import annotations
 
 import io
+import json
 import tarfile
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha256
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import janus.strategies.files.download as download_module
+import janus.strategies.files.download_loop as download_loop_module
+from janus.checkpoints import CheckpointStore
 from janus.models import ExecutionPlan, RunContext, SourceConfig
 from janus.strategies.api import ApiResponse
-from janus.strategies.files import ArchiveExtractionError, FileDownloadError, FileStrategy
+from janus.strategies.files import (
+    ArchiveExtractionError,
+    FileDownloadError,
+    FileHook,
+    FileIntegrityError,
+    FileStrategy,
+)
+from janus.utils.logging import build_structured_logger
 from janus.utils.storage import StorageLayout
+from janus.writers import RawArtifactWriter
 from tests.support.memory_probe import max_rss_bytes, measure_download_peak_rss
 
-RED_UNTIL_11 = pytest.mark.xfail(
-    strict=True, reason="red until: the file family's streaming download path"
-)
 RED_UNTIL_12 = pytest.mark.xfail(
     strict=True, reason="red until: archive caps before decompression"
 )
@@ -97,8 +108,12 @@ def _build_source_config(
     access_url: str | None = None,
     access_format: str = "csv",
     file_pattern: str | None = None,
+    link_resolver: str | None = None,
     limits: dict[str, int] | None = None,
     dead_letter_max_items: int = 0,
+    extraction_mode: str = "full_refresh",
+    checkpoint_field: str | None = None,
+    checkpoint_strategy: str = "none",
 ) -> SourceConfig:
     access: dict[str, Any] = {
         "method": "GET",
@@ -114,6 +129,8 @@ def _build_source_config(
         access["url"] = access_url
     if file_pattern is not None:
         access["file_pattern"] = file_pattern
+    if link_resolver is not None:
+        access["link_resolver"] = link_resolver
     if limits is not None:
         access["limits"] = dict(limits)
 
@@ -131,8 +148,9 @@ def _build_source_config(
             "public_access": True,
             "access": access,
             "extraction": {
-                "mode": "full_refresh",
-                "checkpoint_strategy": "none",
+                "mode": extraction_mode,
+                "checkpoint_field": checkpoint_field,
+                "checkpoint_strategy": checkpoint_strategy,
                 "dead_letter_max_items": dead_letter_max_items,
                 "retry": {"max_attempts": 1, "backoff_strategy": "fixed", "backoff_seconds": 1},
             },
@@ -143,7 +161,10 @@ def _build_source_config(
                 "bronze": {"path": f"data/bronze/example/{source_id}", "format": "iceberg"},
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
-            "quality": {"allow_schema_evolution": True},
+            "quality": {
+                "allow_schema_evolution": True,
+                **({"unique_fields": ["id"]} if extraction_mode == "incremental" else {}),
+            },
         },
         tmp_path / "conf" / "sources" / f"{source_id}.yaml",
     )
@@ -331,7 +352,7 @@ def test_an_over_ratio_archive_is_refused(tmp_path, kind, build):
 
 @RED_UNTIL_12
 def test_the_caps_are_checked_over_the_selection_not_the_whole_archive(tmp_path):
-    """An unselected member is never opened, so it cannot cost anything — but a selected one does."""
+    """An unselected member is never opened, but a selected member costs its full size."""
     members = {"big.csv": _csv_bytes(4 * MIB), "small.csv": b"id,name\n1,alpha\n"}
     caps = {
         "max_archive_member_bytes": MIB,
@@ -429,7 +450,6 @@ def test_a_lying_member_header_is_still_capped_by_the_copy(tmp_path, monkeypatch
 # FR-4 — the download cap
 
 
-@RED_UNTIL_11
 def test_a_download_over_the_payload_cap_is_that_candidates_dead_letter(tmp_path):
     """AC-3's shape: a named failure the loop dead-letters, never an OOM and never a run abort."""
     body = b"y" * 4096
@@ -453,16 +473,14 @@ def test_a_download_over_the_payload_cap_is_that_candidates_dead_letter(tmp_path
     assert "bytes" in message
 
 
-@RED_UNTIL_11
 def test_a_capped_candidate_is_dead_lettered_and_the_run_continues(tmp_path):
     """One oversized part must not cost the other 411 parts of a CNPJ run."""
-    import json
-
     plan = _build_plan(
         tmp_path,
         source_id="download_cap_continues",
         access_url="https://example.gov.br/dados/",
         access_format="csv",
+        link_resolver="html_links",
         limits={"max_payload_bytes": 1024},
         dead_letter_max_items=1,
     )
@@ -499,11 +517,7 @@ def test_a_capped_candidate_is_dead_lettered_and_the_run_continues(tmp_path):
 # NFR-6 — bounded memory
 
 
-@RED_UNTIL_11
 def test_a_large_download_costs_one_spool_threshold_of_rss_not_twice_the_payload():
-
-    import tempfile
-
     with tempfile.TemporaryDirectory(prefix="janus-order-17-rss-") as scratch:
         baseline = max_rss_bytes()
         result = measure_download_peak_rss(Path(scratch), RSS_PROBE_PAYLOAD_BYTES)
@@ -522,7 +536,7 @@ def test_a_large_download_costs_one_spool_threshold_of_rss_not_twice_the_payload
 # AC-4 — the small-file path does not change (green on arrival)
 
 
-def test_a_small_remote_payload_is_persisted_exactly_as_it_is_today(tmp_path):
+def test_a_small_remote_payload_is_persisted_exactly_as_it_is_today(tmp_path, monkeypatch):
     """Green on arrival: a pin, not a red test.
 
     Below the spool threshold the payload stays inline and ``write_bytes`` stays the
@@ -539,6 +553,14 @@ def test_a_small_remote_payload_is_persisted_exactly_as_it_is_today(tmp_path):
     strategy, _transport = _build_strategy(
         tmp_path, [ResponseSpec(200, payload, {"Content-Type": "text/csv"})]
     )
+    write_bytes_calls: list[int] = []
+    original_write_bytes = RawArtifactWriter.write_bytes
+
+    def _record_write_bytes(self, plan, relative_path, body, **kwargs):
+        write_bytes_calls.append(len(body))
+        return original_write_bytes(self, plan, relative_path, body, **kwargs)
+
+    monkeypatch.setattr(RawArtifactWriter, "write_bytes", _record_write_bytes)
 
     result = strategy.extract(plan)
 
@@ -552,3 +574,193 @@ def test_a_small_remote_payload_is_persisted_exactly_as_it_is_today(tmp_path):
     assert "downloads" in relative_parts, relative_parts
     sidecar = path.with_name(path.name + ".sha256")
     assert sidecar.read_text(encoding="utf-8") == f"{artifact.checksum}\n"
+    assert write_bytes_calls == [len(payload)]
+
+
+def _set_small_spool_threshold(monkeypatch, threshold: int = 1024) -> None:
+    monkeypatch.setattr(download_module, "SPOOL_THRESHOLD_BYTES", threshold)
+    monkeypatch.setattr(download_loop_module, "SPOOL_THRESHOLD_BYTES", threshold)
+
+
+def _staging_entries(tmp_path: Path, plan: ExecutionPlan) -> list[Path]:
+    raw_root = _raw_root(tmp_path, plan)
+    return [path for path in raw_root.rglob("*") if ".staging" in path.parts]
+
+
+def test_a_staged_payload_is_discarded_after_a_candidate_failure(tmp_path, monkeypatch):
+    _set_small_spool_threshold(monkeypatch)
+    payload = b"x" * 4096
+    plan = _build_plan(
+        tmp_path,
+        source_id="staged_checksum_failure",
+        access_url="https://example.gov.br/data.csv",
+        access_format="csv",
+    )
+    strategy, _transport = _build_strategy(
+        tmp_path,
+        [ResponseSpec(200, payload, {"X-Checksum-Sha256": "deadbeef"})],
+    )
+
+    with pytest.raises(FileIntegrityError, match="Checksum mismatch"):
+        strategy.extract(plan)
+
+    assert _staging_entries(tmp_path, plan) == []
+    assert _downloaded_files(_raw_root(tmp_path, plan)) == []
+
+
+def test_a_large_local_file_persists_through_write_stream(tmp_path, monkeypatch):
+    _set_small_spool_threshold(monkeypatch)
+    payload = b"x" * 4096
+    source = tmp_path / "fixtures" / "local.csv"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(payload)
+    plan = _build_plan(
+        tmp_path,
+        source_id="large_local_stream",
+        access_path=source,
+        access_format="csv",
+    )
+    write_stream_calls: list[int | None] = []
+    original_write_stream = RawArtifactWriter.write_stream
+
+    def _record_write_stream(self, plan, relative_path, stream, **kwargs):
+        write_stream_calls.append(kwargs.get("max_bytes"))
+        return original_write_stream(self, plan, relative_path, stream, **kwargs)
+
+    monkeypatch.setattr(RawArtifactWriter, "write_stream", _record_write_stream)
+    strategy, _transport = _build_strategy(tmp_path)
+
+    result = strategy.extract(plan)
+
+    artifact = result.artifacts[0]
+    assert Path(artifact.path).read_bytes() == payload
+    assert artifact.checksum == sha256(payload).hexdigest()
+    assert write_stream_calls == [len(payload)]
+
+
+def test_a_committed_staged_archive_remains_openable_for_expansion(tmp_path, monkeypatch):
+    _set_small_spool_threshold(monkeypatch)
+    archive = io.BytesIO()
+    member_payload = b"id,name\n" + b"1,alpha\n" * 512
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("nested/records.csv", member_payload)
+    archive_payload = archive.getvalue()
+    assert len(archive_payload) > 1024
+
+    plan = _build_plan(
+        tmp_path,
+        source_id="staged_archive",
+        variant="archive_package",
+        access_url="https://example.gov.br/package.zip",
+        access_format="binary",
+    )
+    strategy, _transport = _build_strategy(tmp_path, [ResponseSpec(200, archive_payload)])
+
+    result = strategy.extract(plan)
+
+    by_name = {Path(artifact.path).name: artifact for artifact in result.artifacts}
+    assert Path(by_name["package.zip"].path).read_bytes() == archive_payload
+    assert Path(by_name["records.csv"].path).read_bytes() == member_payload
+    assert _staging_entries(tmp_path, plan) == []
+
+
+def test_a_checkpoint_skip_discards_its_staged_payload(tmp_path, monkeypatch):
+    _set_small_spool_threshold(monkeypatch)
+
+    class _FixedVersionHook(FileHook):
+        def resolve_version(self, plan, discovered_file):
+            del plan
+            del discovered_file
+            return "2026-01"
+
+    plan = _build_plan(
+        tmp_path,
+        source_id="staged_checkpoint_skip",
+        variant="versioned_file",
+        access_url="https://example.gov.br/data.csv",
+        extraction_mode="incremental",
+        checkpoint_field="publication_version",
+        checkpoint_strategy="max_value",
+    )
+    CheckpointStore().save(plan, "2026-01")
+    strategy, _transport = _build_strategy(
+        tmp_path,
+        [ResponseSpec(200, b"x" * 4096, {"Content-Type": "text/csv"})],
+    )
+
+    result = strategy.extract(plan, hook=_FixedVersionHook())
+
+    assert result.artifacts == ()
+    assert result.metadata_as_dict()["skipped_file_count"] == "1"
+    assert _staging_entries(tmp_path, plan) == []
+
+
+def test_an_overridden_hook_materializes_once_and_restages_its_result(tmp_path, monkeypatch):
+    _set_small_spool_threshold(monkeypatch)
+    source_payload = b"x" * 4096
+    transformed_payload = b"id,name\n" + source_payload
+    stream = StringIO()
+    logger = build_structured_logger("janus.tests.file.materialized_hook", stream=stream)
+
+    class _TransformingHook(FileHook):
+        received: bytes | None = None
+
+        def prepare_download(self, plan, discovered_file, payload, *, response=None):
+            del plan
+            del discovered_file
+            del response
+            self.received = payload
+            return transformed_payload
+
+    hook = _TransformingHook()
+    plan = _build_plan(
+        tmp_path,
+        source_id="staged_hook",
+        access_url="https://example.gov.br/data.csv",
+        access_format="csv",
+    )
+    strategy, _transport = _build_strategy(
+        tmp_path,
+        [ResponseSpec(200, source_payload, {"Content-Type": "text/csv"})],
+    )
+    strategy.logger = logger
+
+    result = strategy.extract(plan, hook=hook)
+
+    assert hook.received == source_payload
+    assert Path(result.artifacts[0].path).read_bytes() == transformed_payload
+    warnings = [
+        json.loads(line)
+        for line in stream.getvalue().splitlines()
+        if json.loads(line)["event"] == "file_payload_materialized_for_hook"
+    ]
+    assert len(warnings) == 1
+    fields = warnings[0]["fields"]
+    assert fields["hook"] == "_TransformingHook"
+    assert fields["size_bytes"] == len(source_payload)
+    assert fields["spool_threshold_bytes"] == 1024
+    assert _staging_entries(tmp_path, plan) == []
+
+
+def test_the_default_hook_is_not_called(tmp_path):
+    hook = FileHook()
+
+    def _unexpected_call(*args, **kwargs):
+        del args
+        del kwargs
+        raise AssertionError("the default prepare_download hook was called")
+
+    hook.prepare_download = _unexpected_call
+    plan = _build_plan(
+        tmp_path,
+        source_id="default_hook",
+        access_url="https://example.gov.br/data.csv",
+    )
+    strategy, _transport = _build_strategy(
+        tmp_path,
+        [ResponseSpec(200, b"id,name\n1,alpha\n", {"Content-Type": "text/csv"})],
+    )
+
+    result = strategy.extract(plan, hook=hook)
+
+    assert len(result.artifacts) == 1

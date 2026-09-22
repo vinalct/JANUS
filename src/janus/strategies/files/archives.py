@@ -1,8 +1,9 @@
 """Expand one archive safely, and persist what came out of it.
 
-ZIP and ``tar.gz`` payloads are read fully in memory, filtered against
+ZIP and ``tar.gz`` payloads are currently materialized for expansion, filtered against
 ``access.file_pattern`` (and then the hook's ``archive_members``), and written to the raw
-zone as individual member artifacts.
+zone as individual member artifacts. Archive detection itself reads through the payload's
+seekable file object, so a large download is not materialized merely to identify its format.
 
 Every member name passes through :func:`_safe_archive_member_path` before it is used as a
 key or a path — that is the Zip-Slip guard, and it lives in ``artifacts.py`` because the
@@ -33,18 +34,19 @@ from .formats import ARCHIVE_FILE_SUFFIXES, _infer_format_name, _is_tarball_file
 
 if TYPE_CHECKING:
     from .core import FileHook
+    from .download import DownloadedPayload
 
 
 def _extract_archive(
     plan: ExecutionPlan,
     raw_writer: RawArtifactWriter,
     archive_file: DiscoveredFile,
-    payload: bytes,
+    payload: DownloadedPayload,
     *,
     version: str,
     file_hook: FileHook | None,
 ) -> tuple[ExtractedArtifact, ...]:
-    member_payloads = _archive_member_payloads(payload, archive_file.filename)
+    member_payloads = _archive_member_payloads(payload.materialize(), archive_file.filename)
     members = tuple(
         DiscoveredFile(
             source_kind="archive",
@@ -132,14 +134,18 @@ def _filter_members(
 def _is_archive_file(
     plan: ExecutionPlan,
     discovered_file: DiscoveredFile,
-    payload: bytes,
+    payload: DownloadedPayload,
 ) -> bool:
     if plan.source.strategy_variant == "archive_package":
         return True
     if _is_tarball_filename(discovered_file.filename):
         try:
-            return tarfile.is_tarfile(BytesIO(payload))
+            with payload.open() as stream:
+                return tarfile.is_tarfile(stream)
         except (OSError, tarfile.TarError):
             return False
     suffix = Path(discovered_file.filename).suffix.lower()
-    return suffix in ARCHIVE_FILE_SUFFIXES and zipfile.is_zipfile(BytesIO(payload))
+    if suffix not in ARCHIVE_FILE_SUFFIXES:
+        return False
+    with payload.open() as stream:
+        return zipfile.is_zipfile(stream)

@@ -36,6 +36,7 @@ from janus.strategies.common import _default_storage_layout
 from janus.strategies.files.formats import SUPPORTED_FILE_INPUT_FORMATS
 from janus.strategies.http import (
     ApiResponse,
+    ApiStreamedResponse,
     ApiTransport,
     HttpStrategyError,
     UrllibApiTransport,
@@ -148,8 +149,15 @@ class FileHook(SourceHook):
         discovered_file: DiscoveredFile,
         payload: bytes,
         *,
-        response: ApiResponse | None = None,
+        response: ApiResponse | ApiStreamedResponse | None = None,
     ) -> bytes:
+        """Transform downloaded bytes before versioning and persistence.
+
+        The file loop calls this method only when a subclass overrides it. Payloads larger
+        than the spool threshold normally stay on disk; an override keeps this byte-oriented
+        contract for compatibility, but forces materialization and emits the
+        ``file_payload_materialized_for_hook`` warning before the hook runs.
+        """
         del plan
         del discovered_file
         del response
