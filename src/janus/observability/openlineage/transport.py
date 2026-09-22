@@ -32,6 +32,7 @@ EVENT_TIME_KEY = "eventTime"
 JSON_CONTENT_TYPE = "application/json"
 HTTP_SUCCESS_MIN = 200
 HTTP_SUCCESS_MAX = 299
+OPENLINEAGE_RESPONSE_LIMIT_BYTES = 1024**2
 _ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}")
 _LOG = logging.getLogger(__name__)
 
@@ -223,6 +224,7 @@ class HttpOpenLineageTransport:
             timeout_seconds=timeout,
             headers=self._headers(),
             body=payload,
+            max_payload_bytes=OPENLINEAGE_RESPONSE_LIMIT_BYTES,
         )
         transport = UrllibApiTransport()
         try:

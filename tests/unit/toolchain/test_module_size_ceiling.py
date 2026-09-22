@@ -20,6 +20,9 @@ SOFT_CEILING_ALLOWANCES: dict[str, str] = {
         "662 LOC; neither a strategy core nor a config module, so outside"
         "scope. Cohesive: one validator class per quality rule."
     ),
+    "strategies/http/transport.py": (
+        "AC-8 pins the opener, the redirect handler and the byte cap to this one module"
+    ),
 }
 
 #: Root of the package under measurement, resolved through the import system rather than a

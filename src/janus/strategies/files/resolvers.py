@@ -30,6 +30,8 @@ from janus.strategies.files.link_policy import RemoteLinkPolicy
 from janus.strategies.http import HTTP_STATUS_CLIENT_ERROR, HTTP_STATUS_SUCCESS
 from janus.utils.logging import redact_url
 
+LISTING_MAX_PAYLOAD_BYTES = 64 * 1024**2
+
 _NEXTCLOUD_SHARE_PATTERN = re.compile(r"/index\.php/s/([^/?#]+)")
 _CONTENT_TYPE_FORMAT_MAP: dict[str, str] = {
     "text/csv": "csv",
@@ -99,7 +101,12 @@ class RedirectResolver:
         policy: RemoteLinkPolicy,
     ) -> Sequence[DiscoveredFile]:
         del policy
-        request = ApiRequest(method="HEAD", url=url, timeout_seconds=30)
+        request = ApiRequest(
+            method="HEAD",
+            url=url,
+            timeout_seconds=30,
+            max_payload_bytes=LISTING_MAX_PAYLOAD_BYTES,
+        )
         try:
             response = transport.send(request)
         except _TRANSPORT_EXCEPTIONS as exc:
@@ -175,6 +182,7 @@ class NextcloudWebDavResolver:
             url=webdav_url,
             timeout_seconds=30,
             headers=(("Authorization", auth_value), ("Depth", _NEXTCLOUD_RECURSIVE_DEPTH)),
+            max_payload_bytes=LISTING_MAX_PAYLOAD_BYTES,
             sensitive_headers=("Authorization",),
         )
         try:
@@ -220,7 +228,12 @@ class HtmlLinkResolver:
         *,
         policy: RemoteLinkPolicy,
     ) -> Sequence[DiscoveredFile]:
-        request = ApiRequest(method="GET", url=url, timeout_seconds=60)
+        request = ApiRequest(
+            method="GET",
+            url=url,
+            timeout_seconds=60,
+            max_payload_bytes=LISTING_MAX_PAYLOAD_BYTES,
+        )
         try:
             response = transport.send(request)
         except _TRANSPORT_EXCEPTIONS as exc:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 from janus.models import ExecutionPlan
 from janus.models.config.constants import DEFAULT_RETRYABLE_STATUS_CODES
@@ -20,8 +20,10 @@ from janus.strategies.http.transport import (
     HTTP_STATUS_REDIRECT,
     HTTP_STATUS_SUCCESS,
     ApiClient,
+    ApiNonRetryableTransportError,
     ApiRequest,
     ApiResponse,
+    ApiStreamedResponse,
     ApiTransportError,
     AuthResolutionError,
 )
@@ -30,6 +32,9 @@ from janus.utils.logging import StructuredLogger
 #: The statuses re-sent when a source declares no ``extraction.retry.retryable_status_codes``.
 #: The tuple is owned by the config layer so the loop and the validator cannot drift apart.
 RETRYABLE_STATUS_CODES = frozenset(DEFAULT_RETRYABLE_STATUS_CODES)
+ERROR_BODY_READ_LIMIT = 64 * 1024
+
+_ResponseT = TypeVar("_ResponseT", ApiResponse, ApiStreamedResponse)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +96,74 @@ def send_with_retries(
     with an unusual client error can end a whole run on one response unless the source
     declares it.
     """
+
+    def _success(response: ApiResponse) -> Any | None:
+        if decode is None:
+            return None
+        return decode(response)
+
+    response, payload, attempts = _attempt_loop(
+        plan,
+        request,
+        throttle,
+        logger,
+        policy=policy,
+        sleeper=sleeper,
+        sender=client.send,
+        success_handler=_success,
+        payload_error_types=payload_error_types,
+        terminal_status_codes=terminal_status_codes,
+        response_error_handler=lambda response: response,
+        close_before_retry=lambda _response: None,
+    )
+    return response, payload, attempts
+
+
+def stream_with_retries(
+    plan: ExecutionPlan,
+    client: ApiClient,
+    request: ApiRequest,
+    throttle: HttpRequestThrottle,
+    logger: StructuredLogger | None,
+    *,
+    policy: RetryErrorPolicy,
+    sleeper: Callable[[float], None],
+    terminal_status_codes: frozenset[int] = frozenset(),
+) -> tuple[ApiStreamedResponse, int]:
+    """Open a streamed response with the shared retry/throttle/backoff policy."""
+    response, _payload, attempts = _attempt_loop(
+        plan,
+        request,
+        throttle,
+        logger,
+        policy=policy,
+        sleeper=sleeper,
+        sender=client.stream,
+        success_handler=lambda _response: None,
+        payload_error_types=(),
+        terminal_status_codes=terminal_status_codes,
+        response_error_handler=lambda response: response.materialize(limit=ERROR_BODY_READ_LIMIT),
+        close_before_retry=ApiStreamedResponse.close,
+    )
+    return response, attempts
+
+
+def _attempt_loop(
+    plan: ExecutionPlan,
+    request: ApiRequest,
+    throttle: HttpRequestThrottle,
+    logger: StructuredLogger | None,
+    *,
+    policy: RetryErrorPolicy,
+    sleeper: Callable[[float], None],
+    sender: Callable[[ApiRequest], _ResponseT],
+    success_handler: Callable[[_ResponseT], Any],
+    payload_error_types: tuple[type[Exception], ...],
+    terminal_status_codes: frozenset[int],
+    response_error_handler: Callable[[_ResponseT], ApiResponse],
+    close_before_retry: Callable[[_ResponseT], None],
+) -> tuple[_ResponseT, Any | None, int]:
+    """Run the one sanctioned HTTP attempt loop for materialized and streamed calls."""
     retry_config = plan.source_config.extraction.retry
     retryable_status_codes = frozenset(retry_config.retryable_status_codes)
     last_transport_error: Exception | None = None
@@ -98,7 +171,9 @@ def send_with_retries(
     for attempt in range(1, retry_config.max_attempts + 1):
         throttle.wait_for_turn()
         try:
-            response = client.send(request)
+            response = sender(request)
+        except ApiNonRetryableTransportError as exc:
+            raise policy.transport_error_factory(str(exc)) from exc
         except (ApiTransportError, AuthResolutionError) as exc:
             last_transport_error = exc
             if attempt == retry_config.max_attempts:
@@ -109,15 +184,19 @@ def send_with_retries(
             continue
 
         if HTTP_STATUS_SUCCESS <= response.status_code < HTTP_STATUS_REDIRECT:
-            if decode is None:
-                return response, None, attempt
             try:
-                payload = decode(response)
+                payload = success_handler(response)
             except payload_error_types:
                 if attempt == retry_config.max_attempts:
                     raise
+                close_before_retry(response)
                 _sleep_for_retry(
-                    plan, attempt, response=response, logger=logger, policy=policy, sleeper=sleeper
+                    plan,
+                    attempt,
+                    response=response,
+                    logger=logger,
+                    policy=policy,
+                    sleeper=sleeper,
                 )
                 continue
             return response, payload, attempt
@@ -135,8 +214,13 @@ def send_with_retries(
             response.status_code not in retryable_status_codes
             or attempt == retry_config.max_attempts
         ):
-            raise policy.response_error_factory(response)
+            try:
+                error_response = response_error_handler(response)
+            except ApiNonRetryableTransportError as exc:
+                raise policy.transport_error_factory(str(exc)) from exc
+            raise policy.response_error_factory(error_response)
 
+        close_before_retry(response)
         _sleep_for_retry(
             plan, attempt, response=response, logger=logger, policy=policy, sleeper=sleeper
         )
@@ -150,7 +234,7 @@ def _sleep_for_retry(
     plan: ExecutionPlan,
     attempt: int,
     *,
-    response: ApiResponse | None,
+    response: ApiResponse | ApiStreamedResponse | None,
     logger: StructuredLogger | None,
     policy: RetryErrorPolicy,
     sleeper: Callable[[float], None],

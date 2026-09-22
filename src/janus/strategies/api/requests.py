@@ -157,6 +157,8 @@ class ApiRequestExecutor:
             timeout_seconds=source_access.timeout_seconds,
             headers=_freeze_string_mapping(source_access.headers or {}),
             params=(),
+            max_payload_bytes=source_access.limits.max_payload_bytes,
+            max_redirects=source_access.limits.max_redirects,
         )
         request = inject_auth(request, source_access.auth, env_reader=self.resolve_env_var)
 

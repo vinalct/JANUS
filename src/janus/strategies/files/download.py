@@ -119,6 +119,8 @@ class FileDownloader:
             timeout_seconds=plan.source_config.access.timeout_seconds,
             headers=_freeze_string_mapping(plan.source_config.access.headers or {}),
             params=_freeze_string_mapping(plan.source_config.access.params or {}),
+            max_payload_bytes=plan.source_config.access.limits.max_payload_bytes,
+            max_redirects=plan.source_config.access.limits.max_redirects,
         )
         request = inject_auth(
             request,

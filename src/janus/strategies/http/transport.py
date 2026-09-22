@@ -10,14 +10,15 @@ alongside in janus.strategies.http.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import ssl
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, BinaryIO, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import (
@@ -32,7 +33,11 @@ from urllib.request import (
 )
 
 from janus.models import AuthConfig
-from janus.models.config.constants import DEFAULT_MAX_REDIRECTS, MAX_REDIRECTS_CEILING
+from janus.models.config.constants import (
+    DEFAULT_MAX_PAYLOAD_BYTES,
+    DEFAULT_MAX_REDIRECTS,
+    MAX_REDIRECTS_CEILING,
+)
 from janus.strategies.common import _freeze_string_mapping, _stringify_mapping
 from janus.utils.logging import redact_url
 
@@ -43,6 +48,7 @@ HTTP_STATUS_CLIENT_ERROR = 400
 SUPPORTED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https"})
 HTTP_DEFAULT_PORT = 80
 HTTPS_DEFAULT_PORT = 443
+READ_CHUNK_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +63,7 @@ class ApiRequest:
     body: bytes | None = None
     sensitive_headers: tuple[str, ...] = ()
     sensitive_params: tuple[str, ...] = ()
+    max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
     max_redirects: int = DEFAULT_MAX_REDIRECTS
 
     def __post_init__(self) -> None:
@@ -66,6 +73,8 @@ class ApiRequest:
             raise ValueError("url must not be empty")
         if self.timeout_seconds < 1:
             raise ValueError("timeout_seconds must be greater than zero")
+        if self.max_payload_bytes < 1:
+            raise ValueError("max_payload_bytes must be greater than zero")
 
     def headers_as_dict(self) -> dict[str, str]:
         return dict(self.headers)
@@ -141,6 +150,37 @@ class ApiResponse:
 
 class ApiTransportError(RuntimeError):
     """Raised when the transport could not reach the remote API."""
+
+
+class ApiNonRetryableTransportError(ApiTransportError):
+    """A transport failure that another attempt cannot change."""
+
+
+class ApiResponseTooLargeError(ApiNonRetryableTransportError):
+    """Raised when a response exceeds its request's payload ceiling."""
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        limit_bytes: int,
+        bytes_seen: int | None = None,
+        declared_length: int | None = None,
+    ) -> None:
+        self.url = url
+        self.limit_bytes = limit_bytes
+        self.bytes_seen = bytes_seen
+        self.declared_length = declared_length
+
+        message = (
+            f"Response for {redact_url(url)!r} exceeds "
+            f"access.limits.max_payload_bytes={limit_bytes}"
+        )
+        if declared_length is not None:
+            message = f"{message}: declared Content-Length {declared_length}"
+        elif bytes_seen is not None:
+            message = f"{message}: {bytes_seen} bytes seen"
+        super().__init__(message)
 
 
 class AuthResolutionError(RuntimeError):
@@ -274,6 +314,122 @@ class ApiTransport(Protocol):
     def send(self, request: ApiRequest) -> ApiResponse: ...
 
 
+class CappedReader:
+    """A binary response reader that aborts once its cumulative cap is crossed."""
+
+    def __init__(self, stream: BinaryIO, *, url: str, limit_bytes: int) -> None:
+        self._stream = stream
+        self._url = url
+        self._limit_bytes = limit_bytes
+        self.bytes_read = 0
+        self._closed = False
+
+    def read(self, size: int | None = -1) -> bytes:
+        """Read at most ``size`` bytes while enforcing the cumulative limit."""
+        if self._closed:
+            raise ValueError("I/O operation on closed response body")
+        if size == 0:
+            return b""
+
+        read_to_end = size is None or size < 0
+        remaining_requested = None if read_to_end else size
+        payload = bytearray()
+
+        while remaining_requested is None or remaining_requested > 0:
+            remaining_cap = self._limit_bytes - self.bytes_read
+            amount = min(READ_CHUNK_BYTES, remaining_cap + 1)
+            if remaining_requested is not None:
+                amount = min(amount, remaining_requested)
+
+            chunk = self._stream.read(amount)
+            if not chunk:
+                break
+            self.bytes_read += len(chunk)
+            if self.bytes_read > self._limit_bytes:
+                self.close()
+                raise ApiResponseTooLargeError(
+                    self._url,
+                    limit_bytes=self._limit_bytes,
+                    bytes_seen=self.bytes_read,
+                )
+            payload.extend(chunk)
+            if remaining_requested is not None:
+                remaining_requested -= len(chunk)
+
+        return bytes(payload)
+
+    def __iter__(self) -> Iterator[bytes]:
+        while chunk := self.read(READ_CHUNK_BYTES):
+            yield chunk
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stream.close()
+
+
+@dataclass(slots=True)
+class ApiStreamedResponse:
+    """HTTP response metadata plus a capped, caller-owned response stream."""
+
+    request: ApiRequest
+    status_code: int
+    headers: tuple[tuple[str, str], ...]
+    body: CappedReader
+    declared_length: int | None
+    received_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+
+    def __post_init__(self) -> None:
+        if self.status_code < HTTP_STATUS_MIN:
+            raise ValueError("status_code must be a valid HTTP status")
+        if self.received_at.tzinfo is None or self.received_at.utcoffset() is None:
+            raise ValueError("received_at must be timezone-aware")
+
+    def headers_as_dict(self) -> dict[str, str]:
+        return dict(self.headers)
+
+    def close(self) -> None:
+        self.body.close()
+
+    def __enter__(self) -> ApiStreamedResponse:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        del exc_type
+        del exc
+        del tb
+        self.close()
+
+    def materialize(self, *, limit: int | None = None) -> ApiResponse:
+        """Read the remaining body, optionally truncating it to a diagnostic limit."""
+        if limit is not None and limit < 0:
+            raise ValueError("limit must not be negative")
+        try:
+            body = self.body.read() if limit is None else self.body.read(limit)
+            if limit is not None and len(body) > limit:
+                body = body[:limit]
+        finally:
+            self.close()
+        return ApiResponse(
+            request=self.request,
+            status_code=self.status_code,
+            body=body,
+            headers=self.headers,
+            received_at=self.received_at,
+        )
+
+
+class StreamingApiTransport(ApiTransport, Protocol):
+    """Transport contract for callers that consume a response incrementally."""
+
+    def stream(self, request: ApiRequest) -> ApiStreamedResponse: ...
+
+
 def _require_supported_scheme(url: str) -> None:
     scheme = urlsplit(url).scheme.lower()
     if scheme not in SUPPORTED_URL_SCHEMES:
@@ -319,7 +475,9 @@ class UrllibApiTransport:
     def close(self) -> None:
         self.opener = None
 
-    def send(self, request: ApiRequest) -> ApiResponse:
+    def _open_response(
+        self, request: ApiRequest
+    ) -> tuple[int, tuple[tuple[str, str], ...], BinaryIO]:
         self.open()
         full_url = request.full_url()
         _require_supported_scheme(full_url)
@@ -343,29 +501,63 @@ class UrllibApiTransport:
         urllib_request.janus_redirect_hops = 0
 
         try:
-            with self.opener.open(urllib_request, timeout=request.timeout_seconds) as stream:
-                return ApiResponse(
-                    request=request,
-                    status_code=stream.getcode(),
-                    body=stream.read(),
-                    headers=_freeze_string_mapping(dict(stream.headers.items())),
-                )
+            stream = self.opener.open(urllib_request, timeout=request.timeout_seconds)
         except HTTPError as exc:
             headers = dict(exc.headers.items()) if exc.headers is not None else {}
-            return ApiResponse(
-                request=request,
-                status_code=exc.code,
-                body=exc.read(),
-                headers=_freeze_string_mapping(headers),
+            return exc.code, _freeze_string_mapping(headers), cast(BinaryIO, exc)
+        except (RedirectRefused, RedirectLimitExceeded) as exc:
+            message = (
+                f"Request failed for {redact_url(request.full_url())!r}: "
+                f"{type(exc).__name__}: {exc.reason}"
             )
+            raise ApiNonRetryableTransportError(message) from exc
         except (URLError, OSError) as exc:
             message = (
                 f"Request failed for {redact_url(request.full_url())!r}: "
                 f"{type(exc).__name__}"
             )
-            if isinstance(exc, RedirectRefused | RedirectLimitExceeded):
-                message = f"{message}: {exc.reason}"
             raise ApiTransportError(message) from exc
+        return (
+            stream.getcode(),
+            _freeze_string_mapping(dict(stream.headers.items())),
+            stream,
+        )
+
+    def send(self, request: ApiRequest) -> ApiResponse:
+        status_code, headers, stream = self._open_response(request)
+        declared_length = _declared_length(headers)
+        _reject_declared_length(request, stream, declared_length)
+        reader = CappedReader(
+            stream,
+            url=request.full_url(),
+            limit_bytes=request.max_payload_bytes,
+        )
+        try:
+            body = reader.read()
+        finally:
+            reader.close()
+        return ApiResponse(
+            request=request,
+            status_code=status_code,
+            body=body,
+            headers=headers,
+        )
+
+    def stream(self, request: ApiRequest) -> ApiStreamedResponse:
+        status_code, headers, stream = self._open_response(request)
+        declared_length = _declared_length(headers)
+        _reject_declared_length(request, stream, declared_length)
+        return ApiStreamedResponse(
+            request=request,
+            status_code=status_code,
+            headers=headers,
+            body=CappedReader(
+                stream,
+                url=request.full_url(),
+                limit_bytes=request.max_payload_bytes,
+            ),
+            declared_length=declared_length,
+        )
 
 
 @dataclass(slots=True)
@@ -386,6 +578,53 @@ class ApiClient:
 
     def send(self, request: ApiRequest) -> ApiResponse:
         return self.transport.send(request)
+
+    def stream(self, request: ApiRequest) -> ApiStreamedResponse:
+        stream = getattr(self.transport, "stream", None)
+        if callable(stream):
+            return stream(request)
+
+        response = self.transport.send(request)
+        declared_length = _declared_length(response.headers)
+        return ApiStreamedResponse(
+            request=response.request,
+            status_code=response.status_code,
+            headers=response.headers,
+            body=CappedReader(
+                io.BytesIO(response.body),
+                url=request.full_url(),
+                limit_bytes=request.max_payload_bytes,
+            ),
+            declared_length=declared_length,
+            received_at=response.received_at,
+        )
+
+
+def _declared_length(headers: tuple[tuple[str, str], ...]) -> int | None:
+    for name, value in headers:
+        if name.lower() != "content-length":
+            continue
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            return None
+        return parsed if parsed >= 0 else None
+    return None
+
+
+def _reject_declared_length(
+    request: ApiRequest,
+    stream: BinaryIO,
+    declared_length: int | None,
+) -> None:
+    if declared_length is None or declared_length <= request.max_payload_bytes:
+        return
+    stream.close()
+    raise ApiResponseTooLargeError(
+        request.full_url(),
+        limit_bytes=request.max_payload_bytes,
+        declared_length=declared_length,
+    )
 
 
 def _build_ssl_context(ca_bundle_path: str | None = None) -> ssl.SSLContext:

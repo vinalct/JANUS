@@ -27,6 +27,7 @@ from janus.strategies.http.retry import (
     RETRYABLE_STATUS_CODES,
     RetryErrorPolicy,
     send_with_retries,
+    stream_with_retries,
 )
 from janus.strategies.http.throttle import HttpRequestThrottle
 from janus.strategies.http.transport import (
@@ -36,8 +37,11 @@ from janus.strategies.http.transport import (
     HTTP_STATUS_SUCCESS,
     SUPPORTED_URL_SCHEMES,
     ApiClient,
+    ApiNonRetryableTransportError,
     ApiRequest,
     ApiResponse,
+    ApiResponseTooLargeError,
+    ApiStreamedResponse,
     ApiTransport,
     ApiTransportError,
     AuthResolutionError,
@@ -45,6 +49,7 @@ from janus.strategies.http.transport import (
     RedirectLimitExceeded,
     RedirectPolicy,
     RedirectRefused,
+    StreamingApiTransport,
     UrllibApiTransport,
     inject_auth,
 )
@@ -59,8 +64,11 @@ __all__ = [
     "RETRYABLE_STATUS_CODES",
     "SUPPORTED_URL_SCHEMES",
     "ApiClient",
+    "ApiNonRetryableTransportError",
     "ApiRequest",
     "ApiResponse",
+    "ApiResponseTooLargeError",
+    "ApiStreamedResponse",
     "ApiTransport",
     "ApiTransportError",
     "AuthResolutionError",
@@ -72,6 +80,7 @@ __all__ = [
     "RedirectPolicy",
     "RedirectRefused",
     "RetryErrorPolicy",
+    "StreamingApiTransport",
     "UrllibApiTransport",
     "checkpoint_request_value",
     "decode_payload",
@@ -81,4 +90,5 @@ __all__ = [
     "response_body_excerpt",
     "send_with_retries",
     "split_path_and_query_params",
+    "stream_with_retries",
 ]

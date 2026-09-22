@@ -17,6 +17,7 @@ from janus.models import AuthConfig
 from janus.strategies.http import (
     ApiClient,
     ApiRequest,
+    ApiResponseTooLargeError,
     ApiTransportError,
     JanusRedirectHandler,
     RedirectLimitExceeded,
@@ -27,13 +28,17 @@ from janus.strategies.http import (
     send_with_retries,
 )
 
-from .conftest import CountingThrottle, FakeTransport, build_plan, make_client, recording_logger
+from .conftest import (
+    CountingThrottle,
+    FakeTransport,
+    ResponseSpec,
+    build_plan,
+    make_client,
+    recording_logger,
+)
 
 REDIRECT_POLICY_ATTR = "janus_redirect_policy"
 REDIRECT_HOPS_ATTR = "janus_redirect_hops"
-
-# Reasons, spelled once so the -ra summary reads as a task list.
-RED_UNTIL_09 = "red until: transport byte cap and stream()"
 
 UNSUPPORTED_URLS = (
     "file:///etc/hostname",
@@ -489,11 +494,8 @@ def test_inject_auth_records_what_it_injected_by_name_only(
 # FR-4 — the byte cap
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_09)
 def test_a_declared_content_length_over_the_cap_is_refused_before_the_body_is_read():
     """The preflight is the whole point: an 8 GiB declaration must cost zero bytes of RAM."""
-    from janus.strategies.http import ApiResponseTooLargeError
-
     response = FakeUrllibResponse(headers={"Content-Length": "10"}, chunks=[b"0123456789"])
     transport = UrllibApiTransport(opener=SpyOpener(response))
 
@@ -513,11 +515,8 @@ def test_a_declared_content_length_over_the_cap_is_refused_before_the_body_is_re
     assert "10" in message
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_09)
 def test_a_chunked_body_is_aborted_the_moment_it_passes_the_cap():
     """No ``Content-Length`` is not a licence to read forever; the counter is the backstop."""
-    from janus.strategies.http import ApiResponseTooLargeError
-
     response = FakeUrllibResponse(chunks=[b"aaaa", b"bbbb", b"cccc"])
     transport = UrllibApiTransport(opener=SpyOpener(response))
 
@@ -536,7 +535,6 @@ def test_a_chunked_body_is_aborted_the_moment_it_passes_the_cap():
     assert "12" in message, f"the message must name the bytes seen; got {message!r}"
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_09)
 def test_a_body_exactly_at_the_cap_is_allowed():
     """The cap is a ceiling, not a strict bound — an off-by-one here dead-letters a valid run."""
     response = FakeUrllibResponse(
@@ -556,12 +554,9 @@ def test_a_body_exactly_at_the_cap_is_allowed():
     assert result.body == b"aaaabbbb"
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_09)
 def test_an_http_error_body_is_capped_too():
     """``exc.read()`` is the second unbounded read in ``send`` — a 404 can carry 2 MiB."""
     from urllib.error import HTTPError
-
-    from janus.strategies.http import ApiResponseTooLargeError
 
     headers = email.message.Message()
     headers["Content-Type"] = "text/html"
@@ -591,11 +586,8 @@ def test_an_http_error_body_is_capped_too():
         )
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_09)
 def test_stream_hands_back_a_reader_that_refuses_to_pass_the_cap():
     """``stream()`` is what lets the file family never hold a payload in memory (FR-4)."""
-    from janus.strategies.http import ApiResponseTooLargeError
-
     response = FakeUrllibResponse(chunks=[b"aaaa", b"bbbb", b"cccc"])
     transport = UrllibApiTransport(opener=SpyOpener(response))
 
@@ -614,11 +606,28 @@ def test_stream_hands_back_a_reader_that_refuses_to_pass_the_cap():
         streamed.close()
 
 
-@pytest.mark.xfail(strict=True, reason=RED_UNTIL_09)
+def test_api_client_stream_adapts_a_send_only_transport():
+    """Existing send-only fakes remain valid for streaming file callers."""
+    request = ApiRequest(
+        method="GET",
+        url="https://api.example.gov.br/v1/a",
+        timeout_seconds=5,
+        max_payload_bytes=6,
+    )
+    transport = FakeTransport(
+        [ResponseSpec(status_code=200, body=b"abcdef", headers=(("Content-Length", "6"),))]
+    )
+
+    with ApiClient(transport).stream(request) as streamed:
+        assert streamed.body.read() == b"abcdef"
+        assert streamed.declared_length == 6
+
+    assert transport.requests == [request]
+
+
 def test_an_over_cap_response_is_not_retried(tmp_path):
     """Re-downloading cannot shrink a payload: one attempt, no sleep."""
     import janus.strategies.api.requests as api_requests
-    from janus.strategies.http import ApiResponseTooLargeError
 
     plan = build_plan("api", tmp_path, source_id="cap_not_retried", retry_max_attempts=3)
     client, transport = make_client(
