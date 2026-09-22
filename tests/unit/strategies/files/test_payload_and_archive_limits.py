@@ -33,10 +33,6 @@ from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 from tests.support.memory_probe import max_rss_bytes, measure_download_peak_rss
 
-RED_UNTIL_12 = pytest.mark.xfail(
-    strict=True, reason="red until: archive caps before decompression"
-)
-
 MIB = 1024 * 1024
 
 #: NFR-6's bound: the writer spools at 64 MiB, so a download's peak RSS must be the spool
@@ -199,17 +195,19 @@ def _raw_root(tmp_path: Path, plan: ExecutionPlan) -> Path:
 
 
 def _extracted_files(raw_root: Path) -> list[Path]:
-    extracted = raw_root / "extracted"
-    if not extracted.exists():
-        return []
-    return [path for path in extracted.rglob("*") if path.is_file()]
+    return _files_below_raw_subdirectory(raw_root, "extracted")
 
 
 def _downloaded_files(raw_root: Path) -> list[Path]:
-    downloads = raw_root / "downloads"
-    if not downloads.exists():
-        return []
-    return [path for path in downloads.rglob("*") if path.is_file()]
+    return _files_below_raw_subdirectory(raw_root, "downloads")
+
+
+def _files_below_raw_subdirectory(raw_root: Path, directory_name: str) -> list[Path]:
+    return [
+        path
+        for path in raw_root.rglob("*")
+        if path.is_file() and directory_name in path.relative_to(raw_root).parts
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +247,6 @@ def _csv_bytes(size: int) -> bytes:
 ARCHIVE_BUILDERS = (("zip", _zip_archive), ("targz", _targz_archive))
 
 
-@RED_UNTIL_12
 @pytest.mark.parametrize(
     ("kind", "build"), ARCHIVE_BUILDERS, ids=[row[0] for row in ARCHIVE_BUILDERS]
 )
@@ -286,7 +283,6 @@ def test_a_member_over_the_member_cap_is_refused_before_decompression(tmp_path, 
     )
 
 
-@RED_UNTIL_12
 @pytest.mark.parametrize(
     ("kind", "build"), ARCHIVE_BUILDERS, ids=[row[0] for row in ARCHIVE_BUILDERS]
 )
@@ -319,7 +315,6 @@ def test_the_selected_total_over_the_total_cap_is_refused(tmp_path, kind, build)
     assert _extracted_files(_raw_root(tmp_path, plan)) == []
 
 
-@RED_UNTIL_12
 @pytest.mark.parametrize(
     ("kind", "build"), ARCHIVE_BUILDERS, ids=[row[0] for row in ARCHIVE_BUILDERS]
 )
@@ -350,7 +345,6 @@ def test_an_over_ratio_archive_is_refused(tmp_path, kind, build):
     assert _extracted_files(_raw_root(tmp_path, plan)) == []
 
 
-@RED_UNTIL_12
 def test_the_caps_are_checked_over_the_selection_not_the_whole_archive(tmp_path):
     """An unselected member is never opened, but a selected member costs its full size."""
     members = {"big.csv": _csv_bytes(4 * MIB), "small.csv": b"id,name\n1,alpha\n"}
@@ -414,7 +408,6 @@ def test_archive_members_are_byte_identical_with_matching_checksums(tmp_path):
         assert artifact.checksum == sha256(payload).hexdigest()
 
 
-@RED_UNTIL_12
 def test_a_lying_member_header_is_still_capped_by_the_copy(tmp_path, monkeypatch):
     """A header is a claim. The writer's ``max_bytes`` is what turns it into a guarantee."""
     archive = _zip_archive(
