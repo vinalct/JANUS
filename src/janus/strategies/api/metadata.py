@@ -72,7 +72,7 @@ def _request_input_dead_letter_metadata(
     metadata = {
         "request_input_index": str(request_input_index),
         "request_input_count": str(request_input_count),
-        "request_url": request.full_url(),
+        "request_url": request.redacted_url(),
     }
     field_names = _request_input_field_names(request_input)
     if field_names:

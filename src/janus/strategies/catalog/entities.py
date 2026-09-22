@@ -153,7 +153,7 @@ def _normalize_catalog_record(
         "parent_entity_id": parent.entity_id if parent is not None else None,
         "catalog_collection_path": collection_path,
         "catalog_record_path": record_path,
-        "catalog_request_url": request.full_url(),
+        "catalog_request_url": request.redacted_url(),
         "catalog_request_index": pagination_state.request_index,
         "catalog_page_number": pagination_state.page_number,
         "catalog_offset": pagination_state.offset,

@@ -39,6 +39,7 @@ from janus.models.config.constants import (
     MAX_REDIRECTS_CEILING,
 )
 from janus.strategies.common import _freeze_string_mapping, _stringify_mapping
+from janus.strategies.http.scrubber import SecretScrubber
 from janus.utils.logging import redact_url
 
 HTTP_STATUS_MIN = 100
@@ -65,6 +66,7 @@ class ApiRequest:
     sensitive_params: tuple[str, ...] = ()
     max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
     max_redirects: int = DEFAULT_MAX_REDIRECTS
+    scrubber: SecretScrubber | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.method.strip():
@@ -118,6 +120,10 @@ class ApiRequest:
         if not existing_params:
             return self.url
         return urlunsplit(parsed._replace(query=urlencode(existing_params)))
+
+    def redacted_url(self) -> str:
+        """Render this request URL without any configured credential parameter."""
+        return redact_url(self.full_url(), extra_params=self.sensitive_params)
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,13 +436,15 @@ class StreamingApiTransport(ApiTransport, Protocol):
     def stream(self, request: ApiRequest) -> ApiStreamedResponse: ...
 
 
-def _require_supported_scheme(url: str) -> None:
+def _require_supported_scheme(url: str, *, display_url: str | None = None) -> None:
     scheme = urlsplit(url).scheme.lower()
-    if scheme not in SUPPORTED_URL_SCHEMES:
-        raise ApiTransportError(
-            f"Refusing to open {redact_url(url)!r}: scheme "
-            f"{scheme or '<none>'!r} is not http or https"
-        )
+    if scheme in SUPPORTED_URL_SCHEMES:
+        return
+    rendered_url = redact_url(url) if display_url is None else display_url
+    raise ApiTransportError(
+        f"Refusing to open {rendered_url!r}: scheme "
+        f"{scheme or '<none>'!r} is not http or https"
+    )
 
 
 def _build_opener(
@@ -480,7 +488,7 @@ class UrllibApiTransport:
     ) -> tuple[int, tuple[tuple[str, str], ...], BinaryIO]:
         self.open()
         full_url = request.full_url()
-        _require_supported_scheme(full_url)
+        _require_supported_scheme(full_url, display_url=request.redacted_url())
         if self.opener is None:
             raise ApiTransportError("API transport failed to initialize urllib opener")
 
@@ -507,13 +515,13 @@ class UrllibApiTransport:
             return exc.code, _freeze_string_mapping(headers), cast(BinaryIO, exc)
         except (RedirectRefused, RedirectLimitExceeded) as exc:
             message = (
-                f"Request failed for {redact_url(request.full_url())!r}: "
+                f"Request failed for {request.redacted_url()!r}: "
                 f"{type(exc).__name__}: {exc.reason}"
             )
             raise ApiNonRetryableTransportError(message) from exc
         except (URLError, OSError) as exc:
             message = (
-                f"Request failed for {redact_url(request.full_url())!r}: "
+                f"Request failed for {request.redacted_url()!r}: "
                 f"{type(exc).__name__}"
             )
             raise ApiTransportError(message) from exc
@@ -529,7 +537,7 @@ class UrllibApiTransport:
         _reject_declared_length(request, stream, declared_length)
         reader = CappedReader(
             stream,
-            url=request.full_url(),
+            url=request.redacted_url(),
             limit_bytes=request.max_payload_bytes,
         )
         try:
@@ -553,7 +561,7 @@ class UrllibApiTransport:
             headers=headers,
             body=CappedReader(
                 stream,
-                url=request.full_url(),
+                url=request.redacted_url(),
                 limit_bytes=request.max_payload_bytes,
             ),
             declared_length=declared_length,
@@ -592,7 +600,7 @@ class ApiClient:
             headers=response.headers,
             body=CappedReader(
                 io.BytesIO(response.body),
-                url=request.full_url(),
+                url=request.redacted_url(),
                 limit_bytes=request.max_payload_bytes,
             ),
             declared_length=declared_length,
@@ -621,7 +629,7 @@ def _reject_declared_length(
         return
     stream.close()
     raise ApiResponseTooLargeError(
-        request.full_url(),
+        request.redacted_url(),
         limit_bytes=request.max_payload_bytes,
         declared_length=declared_length,
     )
@@ -697,8 +705,15 @@ def inject_auth(
     if auth.type == "basic":
         username = _require_secret(auth.username_env_var, env_reader)
         password = _require_secret(auth.password_env_var, env_reader)
-        token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
-        return request.with_sensitive_header("Authorization", f"Basic {token}")
+        pair = f"{username}:{password}"
+        token = base64.b64encode(pair.encode()).decode("ascii")
+        rendered_token = f"Basic {token}"
+        scrubber = SecretScrubber()
+        scrubber.register(username, password, pair, token, rendered_token)
+        return replace(
+            request.with_sensitive_header("Authorization", rendered_token),
+            scrubber=scrubber,
+        )
 
     token = _require_secret(auth.env_var, env_reader)
     rendered_token = _render_token(auth.token_prefix, token)
@@ -706,17 +721,31 @@ def inject_auth(
     if auth.type == "bearer_token":
         header_name = auth.header_name or "Authorization"
         token_prefix = auth.token_prefix or "Bearer"
-        return request.with_sensitive_header(
-            header_name, _render_token(token_prefix, token)
+        rendered_token = _render_token(token_prefix, token)
+        scrubber = SecretScrubber()
+        scrubber.register(token, rendered_token)
+        return replace(
+            request.with_sensitive_header(header_name, rendered_token),
+            scrubber=scrubber,
         )
 
     if auth.type == "header_token":
         header_name = auth.header_name or "Authorization"
-        return request.with_sensitive_header(header_name, rendered_token)
+        scrubber = SecretScrubber()
+        scrubber.register(token, rendered_token)
+        return replace(
+            request.with_sensitive_header(header_name, rendered_token),
+            scrubber=scrubber,
+        )
 
     if auth.type == "query_token":
         query_param = auth.query_param or "token"
-        return request.with_sensitive_param(query_param, rendered_token)
+        scrubber = SecretScrubber()
+        scrubber.register(token, rendered_token)
+        return replace(
+            request.with_sensitive_param(query_param, rendered_token),
+            scrubber=scrubber,
+        )
 
     raise ValueError(f"Unsupported auth type: {auth.type}")
 

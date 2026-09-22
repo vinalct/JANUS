@@ -123,7 +123,7 @@ class CatalogExtractionContext:
         plan = self.plan
         self.logger.info(
             "catalog_extraction_started",
-            request_url=self.base_request.full_url(),
+            request_url=self.base_request.redacted_url(),
             method=self.base_request.method,
             pagination_type=plan.source_config.access.pagination.type,
             page_size=plan.source_config.access.pagination.page_size,

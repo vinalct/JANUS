@@ -7,7 +7,6 @@ strategy façade — which imports them. Mirrors ``strategies/api/errors.py``.
 from __future__ import annotations
 
 from janus.strategies.http import ApiResponse, HttpStrategyError, response_body_excerpt
-from janus.utils.logging import redact_url
 
 
 class CatalogStrategyError(HttpStrategyError):
@@ -26,7 +25,7 @@ class CatalogResponseError(CatalogStrategyError):
         self.body_excerpt = response_body_excerpt(response)
         message = (
             f"Catalog request failed with status {response.status_code} for "
-            f"{redact_url(response.request.full_url())}"
+            f"{response.request.redacted_url()}"
         )
         if self.body_excerpt is not None:
             message = f"{message}: {self.body_excerpt}"

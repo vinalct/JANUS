@@ -45,7 +45,7 @@ from janus.strategies.http import (
     response_body_excerpt,
     stream_with_retries,
 )
-from janus.utils.logging import StructuredLogger, redact_url
+from janus.utils.logging import StructuredLogger
 from janus.writers import (
     SPOOL_THRESHOLD_BYTES,
     PersistedArtifact,
@@ -76,7 +76,7 @@ def _file_response_error(response: ApiResponse) -> FileDownloadError:
     """
     message = (
         "File request failed with status "
-        f"{response.status_code} for {redact_url(response.request.full_url())}"
+        f"{response.status_code} for {response.request.redacted_url()}"
     )
     excerpt = response_body_excerpt(response)
     if excerpt is not None:
@@ -275,7 +275,7 @@ class FileDownloader:
             raise FileDownloadError(str(exc)) from exc
         except RawWriteLimitError as exc:
             error = ApiResponseTooLargeError(
-                request.full_url(),
+                request.redacted_url(),
                 limit_bytes=exc.max_bytes,
                 bytes_seen=exc.bytes_seen,
             )
@@ -392,7 +392,7 @@ def _validate_remote_payload(
         raise FileDownloadError(
             f"Expected a file payload for {discovered_file.filename!r} but received "
             f"{normalized_content_type or 'HTML'} from "
-            f"{redact_url(response.request.full_url())}"
+            f"{response.request.redacted_url()}"
         )
 
     if (

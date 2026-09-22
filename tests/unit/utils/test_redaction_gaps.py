@@ -12,15 +12,10 @@ from typing import Any
 import pytest
 
 from janus.models import ExecutionPlan, RunContext, SourceConfig
-from janus.strategies.api import ApiResponse, ApiStrategy
+from janus.strategies.api import ApiResponse, ApiStrategy, ApiStrategyError
 from janus.utils.logging import REDACTED_VALUE, build_structured_logger, redact_url
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
-
-RED_UNTIL_13 = pytest.mark.xfail(
-    strict=True,
-    reason="red until: redact_url(extra_params), redacted_url(), SecretScrubber",
-)
 
 SECRET = "S3CRET-portal-key"
 QUERY_PARAM = "chave"
@@ -185,7 +180,6 @@ def token_env(monkeypatch):
 # FR-6 — redact_url learns the names the configuration chose
 
 
-@RED_UNTIL_13
 def test_redact_url_redacts_a_configured_query_parameter():
     """``chave`` is not in anybody's default list, which is the whole finding."""
     redacted = redact_url(
@@ -198,7 +192,6 @@ def test_redact_url_redacts_a_configured_query_parameter():
     assert "pagina=1" in redacted
 
 
-@RED_UNTIL_13
 def test_extra_params_compare_case_insensitively():
     """A YAML that writes ``Chave`` and a server that echoes ``chave`` are the same secret."""
     redacted = redact_url(
@@ -208,7 +201,6 @@ def test_extra_params_compare_case_insensitively():
     assert SECRET not in redacted
 
 
-@RED_UNTIL_13
 def test_a_request_carries_the_names_needed_to_redact_its_own_url(token_env):
     """``redacted_url()`` is what makes the ~20 call sites impossible to get wrong."""
     from janus.models import AuthConfig
@@ -242,7 +234,6 @@ def test_redact_url_returns_a_url_with_nothing_sensitive_unchanged():
 # AC-5 — every site that renders a request URL
 
 
-@RED_UNTIL_13
 def test_the_structured_request_log_shows_no_configured_secret(tmp_path, token_env):
     """``api_request_started`` renders ``request_url``; the formatter's name-based net misses it."""
     stream = StringIO()
@@ -261,7 +252,6 @@ def test_the_structured_request_log_shows_no_configured_secret(tmp_path, token_e
     assert REDACTED_VALUE in rendered
 
 
-@RED_UNTIL_13
 def test_the_raw_artifact_metadata_shows_no_configured_secret(tmp_path, token_env, monkeypatch):
     """``request_url`` in the raw write metadata reaches the run-metadata JSON verbatim."""
     captured: list[dict[str, str]] = []
@@ -288,7 +278,6 @@ def test_the_raw_artifact_metadata_shows_no_configured_secret(tmp_path, token_en
     assert any(REDACTED_VALUE in metadata.get("request_url", "") for metadata in captured)
 
 
-@RED_UNTIL_13
 def test_the_normalized_catalog_record_shows_no_configured_secret(token_env):
     """``catalog_request_url`` reaches **bronze**. A bronze column must never hold a credential.
 
@@ -326,7 +315,6 @@ def test_the_normalized_catalog_record_shows_no_configured_secret(token_env):
     assert REDACTED_VALUE in record["catalog_request_url"]
 
 
-@RED_UNTIL_13
 def test_the_dead_letter_record_shows_neither_the_url_nor_the_echoed_secret(tmp_path, token_env):
     """The dead letter is where a failed run's evidence is *persisted*, so it is the worst leak.
 
@@ -346,7 +334,7 @@ def test_the_dead_letter_record_shows_neither_the_url_nor_the_echoed_secret(tmp_
         [ResponseSpec(500, body=json.dumps({"error": f"bad key {SECRET}"}).encode("utf-8"))],
     )
 
-    with pytest.raises(Exception): 
+    with pytest.raises(ApiStrategyError):
         strategy.extract(plan)
 
     persisted = strategy.dead_letter_store.path(plan).read_text(encoding="utf-8")
@@ -358,7 +346,6 @@ def test_the_dead_letter_record_shows_neither_the_url_nor_the_echoed_secret(tmp_
     )
 
 
-@RED_UNTIL_13
 def test_a_basic_credential_is_scrubbed_in_both_its_forms(tmp_path, monkeypatch):
     """A body excerpt can echo ``user:pass`` or the base64 the header carried. Both are secrets."""
     import base64
@@ -384,7 +371,7 @@ def test_a_basic_credential_is_scrubbed_in_both_its_forms(tmp_path, monkeypatch)
         [ResponseSpec(500, body=f'{{"echo":"{pair}","header":"Basic {encoded}"}}'.encode())],
     )
 
-    with pytest.raises(Exception): 
+    with pytest.raises(ApiStrategyError):
         strategy.extract(plan)
 
     persisted = strategy.dead_letter_store.path(plan).read_text(encoding="utf-8")
@@ -402,7 +389,6 @@ def _scrubber():
     return SecretScrubber()
 
 
-@RED_UNTIL_13
 def test_the_scrubber_replaces_the_longest_match_first():
     """``Bearer abc`` and ``abc`` overlap; replacing the short one first strands the prefix."""
     scrubber = _scrubber()
@@ -414,7 +400,6 @@ def test_the_scrubber_replaces_the_longest_match_first():
     assert b"***REDACTED***" in scrubbed
 
 
-@RED_UNTIL_13
 def test_the_scrubber_refuses_to_register_a_value_too_short_to_be_a_secret():
     """A two-character "secret" would mangle every diagnostic body it touched."""
     scrubber = _scrubber()
@@ -424,7 +409,6 @@ def test_the_scrubber_refuses_to_register_a_value_too_short_to_be_a_secret():
     assert scrubber.scrub_bytes(b"1234567 is not a key") == b"1234567 is not a key"
 
 
-@RED_UNTIL_13
 def test_the_scrubber_never_renders_a_value():
     """It holds credentials; its ``repr`` is the one place they would escape by accident."""
     import pickle
@@ -439,7 +423,6 @@ def test_the_scrubber_never_renders_a_value():
         pickle.dumps(scrubber)
 
 
-@RED_UNTIL_13
 def test_a_body_with_no_secret_comes_back_unchanged():
     """The scrub runs on every raise path; the no-op case must cost and change nothing."""
     scrubber = _scrubber()
@@ -449,7 +432,6 @@ def test_a_body_with_no_secret_comes_back_unchanged():
     assert scrubber.scrub_bytes(body) == body
 
 
-@RED_UNTIL_13
 def test_a_request_without_auth_carries_no_scrubber(tmp_path):
     """``auth.type: none`` resolves no values, so there is nothing to hold and nothing to scrub.
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Self
@@ -155,7 +155,7 @@ def _sanitize_string(value: str, *, field_name: str | None = None) -> str:
     return redact_url(value)
 
 
-def redact_url(url: str) -> str:
+def redact_url(url: str, *, extra_params: Iterable[str] = ()) -> str:
     """Redact sensitive query parameters from URLs while leaving the rest readable."""
     parsed = urlsplit(url)
     if not parsed.scheme or not parsed.netloc:
@@ -164,10 +164,18 @@ def redact_url(url: str) -> str:
     redacted_path = _redact_sensitive_path(parsed.path)
     query_pairs = parse_qsl(parsed.query, keep_blank_values=True) if parsed.query else []
 
+    configured_sensitive_params = {
+        parameter.strip().lower() for parameter in extra_params if parameter.strip()
+    }
     redacted_pairs = []
     changed = False
     for key, value in query_pairs:
-        if is_sensitive_field(key) or key.strip().lower() in DEFAULT_SENSITIVE_QUERY_PARAMS:
+        normalized_key = key.strip().lower()
+        if (
+            is_sensitive_field(key)
+            or normalized_key in DEFAULT_SENSITIVE_QUERY_PARAMS
+            or normalized_key in configured_sensitive_params
+        ):
             redacted_pairs.append((key, REDACTED_VALUE))
             changed = True
         else:

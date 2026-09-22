@@ -9,12 +9,13 @@ the copies become explicit parameters, never a silent fork.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, TypeVar
 
 from janus.models import ExecutionPlan
 from janus.models.config.constants import DEFAULT_RETRYABLE_STATUS_CODES
 from janus.strategies.common import _retry_delay_seconds
+from janus.strategies.http.scrubber import SecretScrubber
 from janus.strategies.http.throttle import HttpRequestThrottle
 from janus.strategies.http.transport import (
     HTTP_STATUS_REDIRECT,
@@ -218,7 +219,9 @@ def _attempt_loop(
                 error_response = response_error_handler(response)
             except ApiNonRetryableTransportError as exc:
                 raise policy.transport_error_factory(str(exc)) from exc
-            raise policy.response_error_factory(error_response)
+            raise policy.response_error_factory(
+                _scrubbed(error_response, request.scrubber)
+            )
 
         close_before_retry(response)
         _sleep_for_retry(
@@ -228,6 +231,16 @@ def _attempt_loop(
     if last_transport_error is not None:
         raise policy.transport_error_factory(str(last_transport_error)) from last_transport_error
     raise policy.transport_error_factory("Retry loop exited without a response or error")
+
+
+def _scrubbed(response: ApiResponse, scrubber: SecretScrubber | None) -> ApiResponse:
+    """Return a response safe to render in a persisted or logged family error."""
+    if scrubber is None:
+        return response
+    body = scrubber.scrub_bytes(response.body)
+    if body is response.body:
+        return response
+    return replace(response, body=body)
 
 
 def _sleep_for_retry(

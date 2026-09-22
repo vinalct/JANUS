@@ -29,6 +29,7 @@ from janus.strategies.http.retry import (
     send_with_retries,
     stream_with_retries,
 )
+from janus.strategies.http.scrubber import SecretScrubber
 from janus.strategies.http.throttle import HttpRequestThrottle
 from janus.strategies.http.transport import (
     HTTP_STATUS_CLIENT_ERROR,
@@ -80,6 +81,7 @@ __all__ = [
     "RedirectPolicy",
     "RedirectRefused",
     "RetryErrorPolicy",
+    "SecretScrubber",
     "StreamingApiTransport",
     "UrllibApiTransport",
     "checkpoint_request_value",

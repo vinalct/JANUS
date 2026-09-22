@@ -200,7 +200,7 @@ class ApiRequestExecutor:
                 page_number=pagination_state.page_number,
                 offset=pagination_state.offset,
                 cursor=pagination_state.cursor,
-                request_url=request.full_url(),
+                request_url=request.redacted_url(),
             )
         return request
 
@@ -388,7 +388,7 @@ class ApiRequestExecutor:
             request_input_count=request_input_count,
         )
         metadata = {
-            "request_url": response.request.full_url(),
+            "request_url": response.request.redacted_url(),
             "status_code": str(response.status_code),
             "request_index": str(pagination_state.request_index),
             "request_input_index": str(request_input_index),
