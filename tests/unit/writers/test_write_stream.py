@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from io import BytesIO
@@ -11,17 +12,18 @@ import pytest
 
 from janus.models import ExecutionPlan, RunContext
 from janus.registry import load_registry
+from janus.scripts.raw_to_bronze import _rediscover_raw_artifacts
 from janus.utils.storage import StorageLayout
-from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter
+from janus.writers import (
+    PARTIAL_SUFFIX_MARKER,
+    SIDECAR_SUFFIX,
+    STAGING_DIRNAME,
+    RawArtifactWriter,
+    RawWriteLimitError,
+)
 from janus.writers.raw import _write_bytes
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-
-RED_UNTIL_10 = pytest.mark.xfail(
-    strict=True,
-    reason="red until: RawArtifactWriter.write_stream and hash-on-write",
-)
-
 
 CHUNK = 1024 * 1024
 PAYLOAD_SIZES = (0, 1024, 3 * CHUNK + 1)
@@ -73,8 +75,6 @@ def _sidecar_of(path: Path) -> Path:
 
 
 def _partials_under(directory: Path) -> list[Path]:
-    from janus.writers import PARTIAL_SUFFIX_MARKER
-
     return [path for path in directory.rglob("*") if PARTIAL_SUFFIX_MARKER in path.name]
 
 
@@ -82,7 +82,6 @@ def _partials_under(directory: Path) -> list[Path]:
 # AC-4 — identical path, bytes, sidecar and checksum
 
 
-@RED_UNTIL_10
 @pytest.mark.parametrize("size", PAYLOAD_SIZES, ids=[f"{size}B" for size in PAYLOAD_SIZES])
 def test_write_stream_matches_write_bytes_for_the_same_payload(tmp_path, size):
     """The differential AC-4 actually asks for: same path, same bytes, same digest."""
@@ -115,7 +114,6 @@ def test_write_stream_matches_write_bytes_for_the_same_payload(tmp_path, size):
 # FR-4 — the temp file lives in the target directory, and never survives a failure
 
 
-@RED_UNTIL_10
 def test_the_staging_file_sits_in_the_target_directory(tmp_path):
     """Same directory means same filesystem, so ``os.replace`` is atomic - and never ``/tmp``.
 
@@ -145,7 +143,6 @@ def test_the_staging_file_sits_in_the_target_directory(tmp_path):
     assert Path(persisted.artifact.path).is_file()
 
 
-@RED_UNTIL_10
 def test_an_interrupted_copy_leaves_no_artifact_no_sidecar_and_no_partial(tmp_path):
     """A half-written artifact that replay can find is worse than no artifact at all."""
     plan = _plan(tmp_path)
@@ -171,11 +168,8 @@ def test_an_interrupted_copy_leaves_no_artifact_no_sidecar_and_no_partial(tmp_pa
     assert _partials_under(target_dir) == []
 
 
-@RED_UNTIL_10
 def test_max_bytes_is_enforced_while_copying_and_leaves_nothing(tmp_path):
     """The writer's cap is what a lying archive header cannot talk its way past (FR-5)."""
-    from janus.writers import RawWriteLimitError
-
     plan = _plan(tmp_path)
     writer = _writer(tmp_path)
     target_dir = Path(writer.storage_layout.resolve_output(plan, "raw").resolved_path)
@@ -196,7 +190,6 @@ def test_max_bytes_is_enforced_while_copying_and_leaves_nothing(tmp_path):
 # FR-4 — modes
 
 
-@RED_UNTIL_10
 def test_ignore_mode_returns_the_existing_digest_without_consuming_the_stream(tmp_path):
     """``ignore`` means "already here": re-downloading it would defeat the mode."""
     plan = _plan(tmp_path)
@@ -213,7 +206,6 @@ def test_ignore_mode_returns_the_existing_digest_without_consuming_the_stream(tm
     assert Path(second.artifact.path).read_bytes() == b"original bytes"
 
 
-@RED_UNTIL_10
 def test_append_mode_is_refused_for_a_streamed_artifact(tmp_path):
     """Appending a stream has no digest contract worth defining; ``write_json`` says so too."""
     plan = _plan(tmp_path)
@@ -226,7 +218,6 @@ def test_append_mode_is_refused_for_a_streamed_artifact(tmp_path):
 # FR-4 — the two-phase staged write 
 
 
-@RED_UNTIL_10
 def test_a_staged_write_commits_to_the_same_artifact_write_bytes_would_have_produced(tmp_path):
     """The file loop resolves ``downloads/<version>/`` only *after* the body is in hand."""
     payload = _deterministic_payload(3 * CHUNK + 1)
@@ -252,7 +243,6 @@ def test_a_staged_write_commits_to_the_same_artifact_write_bytes_would_have_prod
     assert committed.write_result.metadata_as_dict() == reference.write_result.metadata_as_dict()
 
 
-@RED_UNTIL_10
 def test_a_staged_write_that_is_never_committed_leaves_nothing_behind(tmp_path):
     """A checkpoint skip and a dead letter both exit this way; the raw zone must not notice."""
     plan = _plan(tmp_path)
@@ -267,7 +257,6 @@ def test_a_staged_write_that_is_never_committed_leaves_nothing_behind(tmp_path):
     assert [path for path in raw_root.rglob("*") if path.is_file()] == []
 
 
-@RED_UNTIL_10
 def test_a_staged_write_commits_into_a_directory_that_does_not_exist_yet(tmp_path):
     """``downloads/<version>/`` is created by the commit, as ``write_bytes`` creates it today."""
     plan = _plan(tmp_path)
@@ -284,20 +273,14 @@ def test_a_staged_write_commits_into_a_directory_that_does_not_exist_yet(tmp_pat
 # FR-4 — replay never picks up staged or partial files
 
 
-@RED_UNTIL_10
 def test_replay_discovery_ignores_staged_and_partial_files(tmp_path):
     """A crashed run's leftovers are attributable, and never mistaken for another run's data."""
-    from dataclasses import replace as dataclass_replace
-
-    from janus.scripts.raw_to_bronze import _rediscover_raw_artifacts
-    from janus.writers import PARTIAL_SUFFIX_MARKER, STAGING_DIRNAME
-
     source_config = load_registry(PROJECT_ROOT).get_source("federal_open_data_example")
-    source_config = dataclass_replace(
+    source_config = replace(
         source_config,
-        outputs=dataclass_replace(
+        outputs=replace(
             source_config.outputs,
-            raw=dataclass_replace(source_config.outputs.raw, path=str(tmp_path / "raw")),
+            raw=replace(source_config.outputs.raw, path=str(tmp_path / "raw")),
         ),
     )
     plan = ExecutionPlan.from_source_config(
@@ -330,7 +313,7 @@ def test_replay_discovery_ignores_staged_and_partial_files(tmp_path):
 @pytest.mark.parametrize("size", PAYLOAD_SIZES, ids=[f"{size}B" for size in PAYLOAD_SIZES])
 def test_write_bytes_digest_equals_sha256_of_the_file_on_disk(tmp_path, mode, size):
     """Green on arrival: a pin, not a red test."""
-    
+
     payload = _deterministic_payload(size)
     path = tmp_path / "artifact.bin"
     if mode in {"ignore", "append"}:
