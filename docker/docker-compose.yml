@@ -17,6 +17,10 @@ x-janus-service: &janus-service
     - ${JANUS_PROJECT_ROOT:-..}/conf:/workspace/conf:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/docs:/workspace/docs:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/.github:/workspace/.github:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/docker:/workspace/docker:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/.env.example:/workspace/.env.example:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/.gitignore:/workspace/.gitignore:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/.dockerignore:/workspace/.dockerignore:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/data:/workspace/data:z
     - ${JANUS_PROJECT_ROOT:-..}/pyproject.toml:/workspace/pyproject.toml:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/requirements.txt:/workspace/requirements.txt:ro,z

@@ -228,3 +228,26 @@ def test_the_sweep_reads_the_files_it_claims_to_check():
         f"none of the swept infrastructure files is visible here: {visible}. Run this module "
         "on the host."
     )
+
+
+def test_the_test_container_mounts_every_infrastructure_sweep_input():
+    """The Spark job runs the full suite in Compose, so repository sweeps must stay visible."""
+    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    template = compose.get("x-janus-service") or {}
+    volumes = template.get("volumes") or []
+    destinations = {
+        entry.rsplit(":", 2)[1]
+        for entry in volumes
+        if isinstance(entry, str) and len(entry.rsplit(":", 2)) == 3
+    }
+    required = {
+        "/workspace/docker",
+        "/workspace/.env.example",
+        "/workspace/.gitignore",
+        "/workspace/.dockerignore",
+    }
+
+    assert destinations >= required, (
+        "the full-suite container hides infrastructure guardrail inputs: "
+        f"{sorted(required - destinations)}"
+    )

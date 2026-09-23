@@ -41,6 +41,19 @@ FAST_OBSERVABILITY_CLASSES := \
 	tests.unit.observability.test_pyiceberg_append_sink \
 	tests.unit.observability.test_run_record_projection \
 	tests.unit.observability.test_runs_table_contract
+GUARDRAIL_CLASSES := \
+	tests.unit.strategies.http.test_transport_boundary \
+	tests.unit.strategies.http.test_no_second_opener \
+	tests.unit.strategies.http.test_secret_scrubber \
+	tests.unit.strategies.files.test_hostile_listing \
+	tests.unit.strategies.files.test_payload_and_archive_limits \
+	tests.unit.writers.test_write_stream \
+	tests.unit.utils.test_redaction_gaps \
+	tests.unit.utils.test_runtime_fallback \
+	tests.unit.checkpoints.test_progress_prefix_containment \
+	tests.unit.models.test_access_limits_and_allowed_hosts \
+	tests.unit.toolchain.test_container_hardening \
+	tests.unit.toolchain.test_ci_supply_chain
 SPARK_ORCHESTRATION_CLASS := tests.integration.orchestration.test_dependency_execution
 QUERYABLE_CLASS := tests.integration.catalog_commits.test_queryable_observability
 RUNS_SINK_CLASS := tests.integration.catalog_commits.test_runs_table_append_sink
@@ -196,6 +209,10 @@ test-fast:
 	@mkdir -p "$(dir $(FAST_TEST_REPORT))"
 	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --junitxml="$(FAST_TEST_REPORT)"
 	@for class_name in $(FAST_OBSERVABILITY_CLASSES); do \
+		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
+			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
+	done
+	@for class_name in $(GUARDRAIL_CLASSES); do \
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done

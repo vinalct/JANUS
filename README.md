@@ -136,7 +136,13 @@ Notes:
   ([choosing a catalog](docs/reproducibility.md#choosing-the-catalog-jdbc-or-rest)).
 - Host-local execution is also possible if you match the pinned toolchain; see [reproducibility](docs/reproducibility.md).
 
-#### Secrets
+#### Container identity and secrets
+
+The runtime image runs as uid/gid `1000:1000` by default. The Make targets select your host
+uid/gid for writable bind mounts: Podman maps it with `keep-id`, while Docker resolves a non-default
+uid through `nss_wrapper` without editing `/etc/passwd`. See the
+[reproducibility guide](docs/reproducibility.md#start-the-development-container) for the direct
+Compose contract.
 
 Live Portal da Transparência sources need `TRANSPARENCIA_API_TOKEN`, obtained from the [API registration page](https://portaldatransparencia.gov.br/api-de-dados/cadastrar-email), and the dados.gov.br catalog sources need `DADOS_GOV_BR_API_TOKEN`, obtained after signing in through the [consumer profile instructions](https://dados.gov.br/dados/conteudo/como-acessar-a-api-do-portal-de-dados-abertos-com-o-perfil-de-consumidor).
 Copy `.env.example` to `.env`, fill in the values, and run `chmod 600 .env`.

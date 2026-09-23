@@ -258,7 +258,7 @@ def _fallback_runtime_root() -> Path:
         return Path(xdg_runtime_dir) / "janus"
 
     # All warehouse fallbacks in this process must share the same generated root.
-    global _PROCESS_FALLBACK_ROOT 
+    global _PROCESS_FALLBACK_ROOT  # noqa: PLW0603 - intentional process singleton
     if _PROCESS_FALLBACK_ROOT is None:
         _PROCESS_FALLBACK_ROOT = Path(tempfile.mkdtemp(prefix="janus-runtime-"))
     return _PROCESS_FALLBACK_ROOT

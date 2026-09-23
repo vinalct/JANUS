@@ -163,7 +163,7 @@ The registry contract is intentionally small. The most important current options
 - `access.pagination.total_count_field` is an optional dotted path to a total-record count, used to cap concurrent look-ahead exactly.
 - `access.rate_limit` carries `requests_per_minute`, optional `backoff_seconds`, and optional `concurrency`.
 - `access.rate_limit.concurrency` above `1` is an API-family capability with a validated precondition — see [Concurrent pagination](#concurrent-pagination).
-- `access.limits` sets per-source remote-content ceilings as plain integer counts: `max_payload_bytes` defaults to 32 GiB, `max_redirects` defaults to `5` (`0` disables redirects; maximum `20`), `max_archive_member_bytes` defaults to the resolved `max_payload_bytes`, `max_archive_total_bytes` defaults to 128 GiB, and `max_archive_ratio` defaults to `200`.
+- `access.limits` sets five structural, per-source remote-content ceilings: `max_payload_bytes` defaults to 32 GiB (bytes), `max_redirects` defaults to `5` (hops; `0` disables redirects; maximum `20`), `max_archive_member_bytes` defaults to the resolved `max_payload_bytes` (bytes), `max_archive_total_bytes` defaults to 128 GiB (bytes), and `max_archive_ratio` defaults to `200` (dimensionless). Every value is a positive integer except `max_redirects`, which may be zero; all five are overridable per source and do not involve `ValidationPolicy`.
 - API and catalog sources should set `access.limits.max_payload_bytes` much lower than the file-oriented 32 GiB default because their response bodies remain in memory.
 - `access.params` is the home for static literal request parameters.
 - `access.request_inputs` is an optional API/catalog block for bounded runtime request contexts before pagination starts.
@@ -172,6 +172,32 @@ The registry contract is intentionally small. The most important current options
 - `access.allowed_hosts` lets a file source admit discovered links on explicitly named hosts; the default admits only the configured URL's origin, and a leading `*.` admits subdomains (use ASCII/punycode hostnames, without schemes, ports, or paths).
 - `access.remote_file_pattern` filters files discovered from a remote URL before download.
 - `access.file_pattern` filters local file discovery and archive members before Spark handoff.
+
+#### Remote-content boundary
+
+Discovered file links stay on the configured URL's origin by default. An origin is the normalized
+scheme, hostname, and effective port. Add the smallest necessary exact hostname or `*.subdomain`
+entry to `access.allowed_hosts` when a listing legitimately points at a CDN; the transport still
+rejects every scheme except `http` and `https`.
+
+Redirect credentials follow a narrower rule. A redirect on the same scheme, hostname, and port
+keeps configured auth headers and query parameters. `http` to `https` on the same hostname and
+default ports also keeps them. A hostname or port change strips them, and `https` to `http` is
+refused. Redirect refusal and payload-cap failures are non-retryable because another attempt cannot
+make either condition safe.
+
+When a file response exceeds its source limit, only that candidate fails. The dead-letter entry's
+`error_message` names the configured cap and either the declared size or the bytes observed, for
+example:
+
+```text
+Response for 'https://files.example.test/data.zip' exceeds access.limits.max_payload_bytes=1024: 1280 bytes seen
+```
+
+The file family normally keeps payloads larger than 64 MiB on disk. An overridden
+`FileHook.prepare_download` retains its byte-oriented compatibility contract, so it deliberately
+materializes the complete payload and logs `file_payload_materialized_for_hook` before calling the
+hook. Avoid that override for large files; use the streaming family path whenever possible.
 
 ### API and Catalog Request Shaping
 
@@ -639,6 +665,11 @@ A good hook is:
 - small enough to explain in a paragraph;
 - named after the source, not after a vague generic behavior;
 - covered by focused tests.
+
+For file hooks, overriding `prepare_download` opts out of bounded-memory streaming for the hook
+call: a spooled payload is materialized to `bytes` and the run emits
+`file_payload_materialized_for_hook`. Do not override it unless the source-specific transform truly
+requires the complete body in memory.
 
 A bad hook is:
 
