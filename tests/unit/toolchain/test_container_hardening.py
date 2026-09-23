@@ -18,10 +18,6 @@ GITIGNORE = PROJECT_ROOT / ".gitignore"
 DOCKERIGNORE = PROJECT_ROOT / ".dockerignore"
 SOURCES_DIR = PROJECT_ROOT / "conf" / "sources"
 
-RED_UNTIL_19 = pytest.mark.xfail(
-    strict=True, reason="red until: .env.example lists every token"
-)
-
 CLUSTER_SERVICES = ("minio", "postgres", "nessie")
 
 BIND_PREFIX = "${JANUS_CLUSTER_BIND_ADDRESS:-127.0.0.1}:"
@@ -179,7 +175,6 @@ def test_the_janus_service_publishes_nothing():
 # FR-12 — secrets on disk
 
 
-@RED_UNTIL_19
 def test_env_example_lists_every_token_the_checked_in_sources_need():
     """A contributor should learn a token exists from the example file, not from a failed run."""
     text = _read(ENV_EXAMPLE, why="the dev container does not mount .env.example")
@@ -193,7 +188,6 @@ def test_env_example_lists_every_token_the_checked_in_sources_need():
     assert missing == [], f".env.example does not list: {missing}"
 
 
-@RED_UNTIL_19
 def test_env_example_says_how_to_protect_the_real_file_and_ends_with_a_newline():
     """SEC-10 is a developer's ``.env`` at mode 0644; the remedy belongs where they copy from."""
     text = _read(ENV_EXAMPLE, why="the dev container does not mount .env.example")
@@ -202,7 +196,6 @@ def test_env_example_says_how_to_protect_the_real_file_and_ends_with_a_newline()
     assert text.endswith("\n")
 
 
-@RED_UNTIL_19
 def test_the_secrets_files_are_ignored_by_both_git_and_docker():
     """Green-looking today, pinned here because FR-12 edits both files' neighbourhood."""
     gitignore = _read(GITIGNORE, why="not visible here")

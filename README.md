@@ -130,12 +130,17 @@ This runs planning, extraction, Spark normalization, bronze writing, validation,
 
 Notes:
 
-- Token-backed sources need their env vars available at runtime.
 - `--include-disabled` is required for the checked-in live sources because they are disabled by default for safer development.
 - The `local` and `cluster` profiles live in `conf/environments/`; `cluster` serves both
   the JDBC and the REST catalog variants, selected by an env overlay
   ([choosing a catalog](docs/reproducibility.md#choosing-the-catalog-jdbc-or-rest)).
 - Host-local execution is also possible if you match the pinned toolchain; see [reproducibility](docs/reproducibility.md).
+
+#### Secrets
+
+Live Portal da Transparência sources need `TRANSPARENCIA_API_TOKEN`, obtained from the [API registration page](https://portaldatransparencia.gov.br/api-de-dados/cadastrar-email), and the dados.gov.br catalog sources need `DADOS_GOV_BR_API_TOKEN`, obtained after signing in through the [consumer profile instructions](https://dados.gov.br/dados/conteudo/como-acessar-a-api-do-portal-de-dados-abertos-com-o-perfil-de-consumidor).
+Copy `.env.example` to `.env`, fill in the values, and run `chmod 600 .env`.
+The `.env` file is ignored by both Git and Docker, and `make up` warns if group or other users can read it; see [reproducibility](docs/reproducibility.md) for the complete runtime workflow.
 
 ### 7. Run many sources in dependency order
 
