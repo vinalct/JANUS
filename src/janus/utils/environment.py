@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import tempfile
@@ -66,11 +67,9 @@ from janus.utils.catalog_options import (
 
 ENV_PATTERN = re.compile(r"\$\{(?P<name>[A-Z0-9_]+)(?::-(?P<default>[^}]*))?\}")
 RUNTIME_SCRATCH_DIR_ENV = "JANUS_RUNTIME_SCRATCH_DIR"
-DEFAULT_RUNTIME_SCRATCH_DIR = "/tmp/janus/runtime"
-FALLBACK_RUNTIME_PATH_KEYS = frozenset(
-    {"warehouse_dir", "ivy_dir", ICEBERG_WAREHOUSE_PATH_KEY}
-)
+FALLBACK_RUNTIME_PATH_KEYS = frozenset({"warehouse_dir", ICEBERG_WAREHOUSE_PATH_KEY})
 RUNTIME_FILE_PATH_KEYS = frozenset({ICEBERG_CATALOG_DB_PATH_KEY})
+_PROCESS_FALLBACK_ROOT: Path | None = None
 _RUNTIME_PATH_CONFIG_LOCATIONS = {
     "root_dir": ("storage", "root_dir"),
     "raw_dir": ("storage", "raw_dir"),
@@ -240,9 +239,47 @@ def _ensure_writable_directory(path: Path) -> None:
 
 
 def _fallback_runtime_path(project_root: Path, key: str) -> Path:
-    scratch_root = Path(os.getenv(RUNTIME_SCRATCH_DIR_ENV, DEFAULT_RUNTIME_SCRATCH_DIR))
+    scratch_root = _fallback_runtime_root()
+    scratch_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _assert_private_directory(scratch_root)
     project_segment = _safe_path_segment(project_root.resolve().name or "project")
     return scratch_root / project_segment / key
+
+
+def _fallback_runtime_root() -> Path:
+    """Choose an explicit, user-runtime, or process-private fallback root."""
+
+    configured_root = os.getenv(RUNTIME_SCRATCH_DIR_ENV)
+    if configured_root:
+        return Path(configured_root)
+
+    xdg_runtime_dir = os.getenv("XDG_RUNTIME_DIR")
+    if xdg_runtime_dir:
+        return Path(xdg_runtime_dir) / "janus"
+
+    # All warehouse fallbacks in this process must share the same generated root.
+    global _PROCESS_FALLBACK_ROOT 
+    if _PROCESS_FALLBACK_ROOT is None:
+        _PROCESS_FALLBACK_ROOT = Path(tempfile.mkdtemp(prefix="janus-runtime-"))
+    return _PROCESS_FALLBACK_ROOT
+
+
+def _assert_private_directory(path: Path) -> None:
+    """Refuse a fallback root another user owns or can modify."""
+
+    directory_stat = path.stat()
+    if directory_stat.st_uid != os.getuid():
+        raise PermissionError(
+            errno.EPERM,
+            "runtime fallback directory is not owned by the current user",
+            str(path),
+        )
+    if directory_stat.st_mode & 0o022:
+        raise PermissionError(
+            errno.EPERM,
+            "runtime fallback directory is writable by group or other",
+            str(path),
+        )
 
 
 def _safe_path_segment(value: str) -> str:

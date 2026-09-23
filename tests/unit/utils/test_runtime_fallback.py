@@ -11,12 +11,8 @@ from pathlib import Path
 import pytest
 
 import janus.utils.environment as environment
+from janus.cli.common import format_runtime_permission_error
 from janus.utils.environment import FALLBACK_RUNTIME_PATH_KEYS, prepare_runtime
-
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    reason="red until: user-private runtime fallback, no ivy_dir relocation",
-)
 
 WAREHOUSE_DIR_VALUE = "data/metadata/spark-warehouse"
 IVY_DIR_VALUE = "data/metadata/ivy"
@@ -107,7 +103,8 @@ def test_a_fallback_root_owned_by_another_user_is_refused(tmp_path, monkeypatch)
     monkeypatch.setenv(environment.RUNTIME_SCRATCH_DIR_ENV, str(scratch))
     _reset_process_root(monkeypatch)
     _deny(monkeypatch, WAREHOUSE_DIR_VALUE)
-    monkeypatch.setattr(os, "getuid", lambda: os.getuid() + 1)
+    current_uid = os.getuid()
+    monkeypatch.setattr(os, "getuid", lambda: current_uid + 1)
 
     project_root = tmp_path / "project"
     project_root.mkdir()
@@ -158,8 +155,6 @@ def test_an_unwritable_ivy_dir_fails_the_run_instead_of_moving_the_cache(tmp_pat
 
 def test_the_cli_message_names_the_variable_that_moves_the_jar_cache():
     """An error that states the failure without stating the remedy just relocates the problem."""
-    from janus.cli.common import format_runtime_permission_error
-
     message = format_runtime_permission_error(
         PermissionError(13, "Permission denied", "/read-only/data/metadata/ivy")
     )

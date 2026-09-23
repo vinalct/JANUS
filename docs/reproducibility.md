@@ -100,6 +100,16 @@ That means:
 - local and cluster-shaped environments can relocate the physical storage roots;
 - the execution code does not need hardcoded machine paths.
 
+If the configured Spark warehouse or local Iceberg warehouse is not writable, JANUS relocates
+that warehouse under a user-private fallback root. An explicit `JANUS_RUNTIME_SCRATCH_DIR` takes
+precedence; otherwise JANUS uses `$XDG_RUNTIME_DIR/janus`, or a unique `janus-runtime-*` temporary
+directory created once per process when `XDG_RUNTIME_DIR` is unset. JANUS refuses a fallback root
+that is owned by another user or writable by group or other.
+
+The Ivy jar cache is never relocated automatically because Spark loads executable code from it.
+Set `JANUS_SPARK_IVY_DIR` to an explicitly chosen writable location if the configured cache cannot
+be created. This is the only supported way to move the jar cache.
+
 ## Recommended workflow: containerized local mode
 
 The repository is set up to make containerized local mode the default reproducible path.

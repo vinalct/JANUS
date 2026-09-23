@@ -186,13 +186,14 @@ def test_a_warehouse_uri_never_falls_back_to_the_scratch_directory(tmp_path, mon
 
     paths = prepare_runtime(_config(OBJECT_STORE_WAREHOUSE), project_root)
 
-    assert (scratch / "workspace" / "ivy_dir").is_dir()
+    assert not (scratch / "workspace" / "ivy_dir").exists()
     assert (scratch / "workspace" / "warehouse_dir").is_dir()
+    assert paths["ivy_dir"] == project_root / "data" / "metadata" / "ivy"
     assert not (scratch / "workspace" / ICEBERG_WAREHOUSE_PATH_KEY).exists()
     assert paths[ICEBERG_WAREHOUSE_PATH_KEY] == OBJECT_STORE_WAREHOUSE
 
 
-SPARK_SCRATCH_DIRECTORY_NAMES = frozenset({"spark-warehouse", "ivy"})
+SPARK_SCRATCH_DIRECTORY_NAMES = frozenset({"spark-warehouse"})
 
 
 def _refuse_the_spark_scratch_paths():
