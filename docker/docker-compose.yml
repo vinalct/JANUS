@@ -53,8 +53,8 @@ services:
       MINIO_ROOT_USER: ${JANUS_CLUSTER_S3_ACCESS_KEY:-janus}
       MINIO_ROOT_PASSWORD: ${JANUS_CLUSTER_S3_SECRET_KEY:-}
     ports:
-      - "${JANUS_CLUSTER_MINIO_PORT:-9000}:9000"
-      - "${JANUS_CLUSTER_MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${JANUS_CLUSTER_BIND_ADDRESS:-127.0.0.1}:${JANUS_CLUSTER_MINIO_PORT:-9000}:9000"
+      - "${JANUS_CLUSTER_BIND_ADDRESS:-127.0.0.1}:${JANUS_CLUSTER_MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - janus-minio-data:/data
 
@@ -96,7 +96,7 @@ services:
       POSTGRES_PASSWORD: ${JANUS_CLUSTER_POSTGRES_PASSWORD:-}
       POSTGRES_DB: ${JANUS_CLUSTER_POSTGRES_DB:-iceberg}
     ports:
-      - "${JANUS_CLUSTER_POSTGRES_PORT:-5432}:5432"
+      - "${JANUS_CLUSTER_BIND_ADDRESS:-127.0.0.1}:${JANUS_CLUSTER_POSTGRES_PORT:-5432}:5432"
     volumes:
       - janus-postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -112,7 +112,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "${JANUS_CLUSTER_NESSIE_PORT:-19120}:19120"
+      - "${JANUS_CLUSTER_BIND_ADDRESS:-127.0.0.1}:${JANUS_CLUSTER_NESSIE_PORT:-19120}:19120"
     environment:
       NESSIE_VERSION_STORE_TYPE: JDBC2
       NESSIE_VERSION_STORE_PERSIST_JDBC_DATASOURCE: postgresql

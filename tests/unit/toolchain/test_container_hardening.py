@@ -18,9 +18,6 @@ GITIGNORE = PROJECT_ROOT / ".gitignore"
 DOCKERIGNORE = PROJECT_ROOT / ".dockerignore"
 SOURCES_DIR = PROJECT_ROOT / "conf" / "sources"
 
-RED_UNTIL_16 = pytest.mark.xfail(
-    strict=True, reason="red until: cluster ports bound to loopback"
-)
 RED_UNTIL_18 = pytest.mark.xfail(
     strict=True, reason="red until: base image pinned by digest"
 )
@@ -151,7 +148,6 @@ def _published_port_entries() -> list[tuple[str, str]]:
     return entries
 
 
-@RED_UNTIL_16
 def test_every_published_cluster_port_binds_to_loopback_by_default():
     """A dev laptop on a shared network must not expose an object store and a database."""
     entries = _published_port_entries()

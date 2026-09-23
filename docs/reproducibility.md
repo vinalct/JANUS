@@ -275,6 +275,11 @@ For reproducible cluster work:
 The repository ships the cluster profile's dependencies as an **opt-in** compose profile, so
 `make up` stays a one-container experience and nothing below runs unless you ask for it.
 
+All published cluster ports bind to loopback by default; the MinIO console is available at
+`http://127.0.0.1:9001`. To expose the stack on another interface, set the host-side Compose
+variable explicitly, for example `JANUS_CLUSTER_BIND_ADDRESS=0.0.0.0 make up-cluster` (or
+`make up-cluster-rest`).
+
 ```bash
 make up-cluster                                        # MinIO + Postgres + the janus service
 make run-cluster RUN_ARGS="--source-id <id> --execute" # a real run against object storage
