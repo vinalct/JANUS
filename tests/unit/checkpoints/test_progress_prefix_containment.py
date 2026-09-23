@@ -10,15 +10,18 @@ from typing import Any
 import pytest
 
 from janus.checkpoints import ExtractionProgressStore
+from janus.checkpoints.progress import ProgressRecordError
 from janus.models import ExecutionPlan, RunContext, SourceConfig
 from janus.strategies.api import ApiResponse, ApiStrategy
+from janus.strategies.api.artifacts import _pages_dir, _rediscover_raw_artifacts
+from janus.strategies.catalog import CatalogStrategy
 from janus.strategies.common import _raw_run_path_prefix
-from janus.utils.storage import StorageLayout
-from janus.writers import RawArtifactWriter
-
-RED_UNTIL_14 = pytest.mark.xfail(
-    strict=True, reason="red until: progress-prefix containment"
+from janus.utils.storage import (
+    StorageLayout,
+    _normalize_relative_path,
+    normalize_relative_path,
 )
+from janus.writers import RawArtifactWriter
 
 TAMPERED_PREFIXES = ("/etc", "../../x", "runs/../..", " ")
 
@@ -200,12 +203,9 @@ def _progress_mapping(raw_path_prefix: str) -> dict[str, Any]:
 # FR-7 — the resolver itself
 
 
-@RED_UNTIL_14
 @pytest.mark.parametrize("prefix", TAMPERED_PREFIXES, ids=[repr(p) for p in TAMPERED_PREFIXES])
 def test_a_tampered_prefix_is_refused_by_the_resolver(tmp_path, prefix):
     """The one function every consumer goes through, so the rule cannot be applied in only some."""
-    from janus.checkpoints.progress import ProgressRecordError
-
     plan = _plan(
         tmp_path,
         _api_source_config(tmp_path, source_id="prefix_resolver"),
@@ -259,12 +259,9 @@ def test_a_record_without_the_field_still_resolves_the_legacy_flat_layout(tmp_pa
 # FR-7 — refuse to resume, and leave the record alone
 
 
-@RED_UNTIL_14
 @pytest.mark.parametrize("prefix", TAMPERED_PREFIXES, ids=[repr(p) for p in TAMPERED_PREFIXES])
 def test_an_api_run_refuses_to_resume_and_leaves_the_record_in_place(tmp_path, prefix):
     """Refusing beats starting over: the position a 9,686-page run reached must survive."""
-    from janus.checkpoints.progress import ProgressRecordError
-
     source_config = _api_source_config(tmp_path, source_id="api_refuses_resume")
     seed_plan = _plan(tmp_path, source_config, run_id="run-interrupted", resume=False)
     progress_path = _seed_progress(seed_plan, prefix)
@@ -287,15 +284,11 @@ def test_an_api_run_refuses_to_resume_and_leaves_the_record_in_place(tmp_path, p
     assert not raw_root.exists() or not any(path.is_file() for path in raw_root.rglob("*"))
 
 
-@RED_UNTIL_14
 def test_a_catalog_run_refuses_to_resume_too(tmp_path):
     """The rule lives in ``strategies/common.py``, so both families inherit it.
 
     Proven rather than assumed: the api case above and this one are the two call sites.
     """
-    from janus.checkpoints.progress import ProgressRecordError
-    from janus.strategies.catalog import CatalogStrategy
-
     source_config = _catalog_source_config(tmp_path, source_id="catalog_refuses_resume")
     seed_plan = _plan(tmp_path, source_config, run_id="run-interrupted", resume=False)
     _seed_progress(seed_plan, "/etc")
@@ -312,12 +305,8 @@ def test_a_catalog_run_refuses_to_resume_too(tmp_path):
         strategy.extract(resume_plan)
 
 
-@RED_UNTIL_14
 def test_rediscovery_never_globs_outside_the_raw_zone(tmp_path):
     """The escape with teeth: a flat-layout raw zone rehydrated into an unrelated run."""
-    from janus.checkpoints.progress import ProgressRecordError
-    from janus.strategies.api.artifacts import _rediscover_raw_artifacts
-
     source_config = _api_source_config(tmp_path, source_id="rediscovery_contained")
     plan = _plan(tmp_path, source_config, run_id="run-resume", resume=True)
 
@@ -337,7 +326,6 @@ def test_rediscovery_never_globs_outside_the_raw_zone(tmp_path):
 # FR-7 — defence in depth: no caller can bypass the rule
 
 
-@RED_UNTIL_14
 @pytest.mark.parametrize("prefix", ("/abs", "../x"))
 def test_the_raw_writer_refuses_an_uncontained_prefix(tmp_path, prefix):
     """A future caller constructing the writer directly must not reopen the hole."""
@@ -345,12 +333,9 @@ def test_the_raw_writer_refuses_an_uncontained_prefix(tmp_path, prefix):
         RawArtifactWriter(_storage_layout(tmp_path), raw_path_prefix=prefix)
 
 
-@RED_UNTIL_14
 @pytest.mark.parametrize("prefix", ("/abs", "../x"))
 def test_the_pages_directory_refuses_an_uncontained_prefix(tmp_path, prefix):
     """Same rule at the read side: ``_pages_dir`` is where rediscovery resolves its directory."""
-    from janus.strategies.api.artifacts import _pages_dir
-
     plan = _plan(
         tmp_path,
         _api_source_config(tmp_path, source_id="pages_dir_contained"),
@@ -362,11 +347,8 @@ def test_the_pages_directory_refuses_an_uncontained_prefix(tmp_path, prefix):
         _pages_dir(plan, _storage_layout(tmp_path), 1, 1, Path(prefix))
 
 
-@RED_UNTIL_14
 def test_normalize_relative_path_is_the_one_public_spelling():
     """FR-7 promotes the private helper; the alias stays for one order and is documented as such."""
-    from janus.utils.storage import _normalize_relative_path, normalize_relative_path
-
     assert normalize_relative_path is _normalize_relative_path
     assert normalize_relative_path("runs/ingestion_date=2026-09-20") == Path(
         "runs/ingestion_date=2026-09-20"

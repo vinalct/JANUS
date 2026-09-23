@@ -38,7 +38,7 @@ class ResolvedOutputTarget:
             raise ValueError("resolved_path must be absolute")
 
     def child(self, relative_path: str | Path) -> Path:
-        return self.resolved_path / _normalize_relative_path(relative_path)
+        return self.resolved_path / normalize_relative_path(relative_path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +190,7 @@ def _output_target_for_zone(plan: ExecutionPlan, zone: str) -> OutputTarget:
 
 
 def _relative_zone_suffix(zone: str, configured_path: Path) -> Path:
-    normalized = _normalize_relative_path(configured_path, allow_empty=True)
+    normalized = normalize_relative_path(configured_path, allow_empty=True)
     canonical_prefix = _CANONICAL_ZONE_PREFIXES[zone]
     if normalized == canonical_prefix:
         return Path()
@@ -205,11 +205,16 @@ def _relative_zone_suffix(zone: str, configured_path: Path) -> Path:
     return normalized
 
 
-def _normalize_relative_path(
+def normalize_relative_path(
     value: str | Path,
     *,
     allow_empty: bool = False,
 ) -> Path:
+    """Return a contained relative path.
+
+    The path must not be absolute, must not contain a ``..`` segment, and must not
+    be empty unless ``allow_empty`` is true.
+    """
     path = Path(value)
     if path.is_absolute():
         raise ValueError("relative paths must not be absolute")
@@ -220,6 +225,10 @@ def _normalize_relative_path(
     if allow_empty and str(path).strip() in {"", "."}:
         return Path()
     return path
+
+
+# Transitional compatibility alias; remove after one order.
+_normalize_relative_path = normalize_relative_path
 
 
 def _require_non_empty_string(payload: Mapping[str, Any], field_name: str) -> str:

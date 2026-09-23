@@ -11,7 +11,7 @@ from typing import Any, BinaryIO
 from uuid import uuid4
 
 from janus.models import ExecutionPlan, ExtractedArtifact, WriteResult
-from janus.utils.storage import StorageLayout
+from janus.utils.storage import StorageLayout, normalize_relative_path
 
 SUPPORTED_RAW_ARTIFACT_FORMATS = frozenset({"binary", "json", "jsonl", "text"})
 SUPPORTED_FILE_OUTPUT_ZONES = frozenset({"metadata", "raw"})
@@ -55,7 +55,9 @@ class RawArtifactWriter:
         raw_path_prefix: str | Path | None = None,
     ) -> None:
         self.storage_layout = storage_layout
-        self._raw_path_prefix = Path(raw_path_prefix) if raw_path_prefix is not None else None
+        self._raw_path_prefix = (
+            normalize_relative_path(raw_path_prefix) if raw_path_prefix is not None else None
+        )
 
     @property
     def raw_path_prefix(self) -> Path | None:

@@ -8,9 +8,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from janus.checkpoints.progress import ProgressRecordError
 from janus.models import ExecutionPlan
 from janus.utils.environment import load_environment_config, prepare_runtime
-from janus.utils.storage import StorageLayout
+from janus.utils.storage import StorageLayout, normalize_relative_path
 
 RAW_PROGRESS_PATH_PREFIX_FIELD = "raw_path_prefix"
 
@@ -163,10 +164,18 @@ def _raw_run_path_prefix(
     progress: Mapping[str, Any] | None = None,
 ) -> Path | None:
     if progress is not None:
-        raw_path_prefix = progress.get(RAW_PROGRESS_PATH_PREFIX_FIELD)
-        if isinstance(raw_path_prefix, str) and raw_path_prefix.strip():
-            return Path(raw_path_prefix)
-        return None
+        if RAW_PROGRESS_PATH_PREFIX_FIELD not in progress:
+            return None
+        raw_path_prefix = progress[RAW_PROGRESS_PATH_PREFIX_FIELD]
+        try:
+            return normalize_relative_path(raw_path_prefix)
+        except (TypeError, ValueError) as exc:
+            raise ProgressRecordError(
+                plan,
+                field_name=RAW_PROGRESS_PATH_PREFIX_FIELD,
+                value=raw_path_prefix,
+                reason=str(exc),
+            ) from exc
 
     ingestion_date = plan.run_context.started_at.astimezone(UTC).date().isoformat()
     return (

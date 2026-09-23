@@ -9,6 +9,26 @@ from janus.lineage.persistence import MetadataZonePaths, read_json_mapping, writ
 from janus.models import ExecutionPlan
 
 
+class ProgressRecordError(ValueError):
+    """Raised when persisted extraction progress is unsafe to resume."""
+
+    def __init__(
+        self,
+        plan: ExecutionPlan,
+        *,
+        field_name: str,
+        value: Any,
+        reason: str,
+    ) -> None:
+        path = _progress_path(plan)
+        source_id = plan.source.source_id
+        super().__init__(
+            f"extraction_progress.json for {source_id} carries an unusable "
+            f"{field_name} {value!r}: {reason}. "
+            f"Inspect or remove {path} before resuming."
+        )
+
+
 @dataclass(slots=True)
 class ExtractionProgressStore:
     """Track per-page extraction progress so failed runs can resume where they stopped."""
