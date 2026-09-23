@@ -1,0 +1,451 @@
+{
+  "case": "ibge_agro_abacaxi_pronaf",
+  "inferred_struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "aggregate_id",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_attribute_count",
+        "nullable": true,
+        "type": "long"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_attributes",
+        "nullable": true,
+        "type": {
+          "containsNull": true,
+          "elementType": {
+            "fields": [
+              {
+                "metadata": {},
+                "name": "key",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "label",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "value",
+                "nullable": true,
+                "type": "string"
+              }
+            ],
+            "type": "struct"
+          },
+          "type": "array"
+        }
+      },
+      {
+        "metadata": {},
+        "name": "sidra_dimension_count",
+        "nullable": true,
+        "type": "long"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_dimensions",
+        "nullable": true,
+        "type": {
+          "containsNull": true,
+          "elementType": {
+            "fields": [
+              {
+                "metadata": {},
+                "name": "code",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "code_label",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "id",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "label",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "name",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "position",
+                "nullable": true,
+                "type": "long"
+              }
+            ],
+            "type": "struct"
+          },
+          "type": "array"
+        }
+      },
+      {
+        "metadata": {},
+        "name": "sidra_period_code",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_period_name",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_value_label",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_variable_code",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_variable_name",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "value",
+        "nullable": true,
+        "type": "string"
+      }
+    ],
+    "type": "struct"
+  },
+  "lineage_keys": [
+    "artifacts",
+    "checkpoint_field",
+    "checkpoint_strategy",
+    "checkpoint_value",
+    "config_version",
+    "configured_outputs",
+    "emitted_at",
+    "environment",
+    "extraction_metadata",
+    "extraction_mode",
+    "materialized_outputs",
+    "metadata",
+    "plan_notes",
+    "records_extracted",
+    "run_attributes",
+    "run_id",
+    "source_config_path",
+    "source_hook",
+    "source_id",
+    "source_name",
+    "status",
+    "strategy_family",
+    "strategy_variant"
+  ],
+  "quality_report": {
+    "checks": [
+      {
+        "name": "quality_contract",
+        "outcome": "passed"
+      },
+      {
+        "name": "schema_contract_mode",
+        "outcome": "passed"
+      },
+      {
+        "name": "required_fields",
+        "outcome": "passed"
+      },
+      {
+        "name": "unique_fields",
+        "outcome": "passed"
+      },
+      {
+        "name": "schema_expectations",
+        "outcome": "skipped"
+      },
+      {
+        "name": "output_columns",
+        "outcome": "passed"
+      },
+      {
+        "name": "materialized_outputs",
+        "outcome": "passed"
+      },
+      {
+        "name": "bronze_key_uniqueness",
+        "outcome": "passed"
+      }
+    ],
+    "schema_expectation_source": ""
+  },
+  "read_schema_source": "inferred",
+  "read_struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "aggregate_id",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_attribute_count",
+        "nullable": true,
+        "type": "long"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_attributes",
+        "nullable": true,
+        "type": {
+          "containsNull": true,
+          "elementType": {
+            "fields": [
+              {
+                "metadata": {},
+                "name": "key",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "label",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "value",
+                "nullable": true,
+                "type": "string"
+              }
+            ],
+            "type": "struct"
+          },
+          "type": "array"
+        }
+      },
+      {
+        "metadata": {},
+        "name": "sidra_dimension_count",
+        "nullable": true,
+        "type": "long"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_dimensions",
+        "nullable": true,
+        "type": {
+          "containsNull": true,
+          "elementType": {
+            "fields": [
+              {
+                "metadata": {},
+                "name": "code",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "code_label",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "id",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "label",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "name",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "metadata": {},
+                "name": "position",
+                "nullable": true,
+                "type": "long"
+              }
+            ],
+            "type": "struct"
+          },
+          "type": "array"
+        }
+      },
+      {
+        "metadata": {},
+        "name": "sidra_period_code",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_period_name",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_value_label",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_variable_code",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "sidra_variable_name",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "value",
+        "nullable": true,
+        "type": "string"
+      }
+    ],
+    "type": "struct"
+  },
+  "row_count": 1,
+  "row_digest": "04fba0e4b5412d6a1545a409a36c35cbc6c080472df18e13ac955e27fed5cb3e",
+  "row_digest_algorithm": "sha256(canonical-json-array(sorted(canonical-json-row)))",
+  "schema": [
+    {
+      "name": "janus_run_id",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_source_id",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_source_name",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_environment",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_strategy_family",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_strategy_variant",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "ingestion_timestamp",
+      "nullable": true,
+      "type": "timestamp"
+    },
+    {
+      "name": "ingestion_date",
+      "nullable": true,
+      "type": "date"
+    },
+    {
+      "name": "aggregate_id",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "sidra_attribute_count",
+      "nullable": true,
+      "type": "bigint"
+    },
+    {
+      "name": "sidra_attributes",
+      "nullable": true,
+      "type": "array<struct<key:string,label:string,value:string>>"
+    },
+    {
+      "name": "sidra_dimension_count",
+      "nullable": true,
+      "type": "bigint"
+    },
+    {
+      "name": "sidra_dimensions",
+      "nullable": true,
+      "type": "array<struct<code:string,code_label:string,id:string,label:string,name:string,position:bigint>>"
+    },
+    {
+      "name": "sidra_period_code",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "sidra_period_name",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "sidra_value_label",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "sidra_variable_code",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "sidra_variable_name",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "value",
+      "nullable": true,
+      "type": "string"
+    }
+  ],
+  "source_id": "ibge_agro_abacaxi_pronaf",
+  "spark_session_timezone": "UTC",
+  "table_identifier": "bronze.ibge__agro_abacaxi_pronaf"
+}

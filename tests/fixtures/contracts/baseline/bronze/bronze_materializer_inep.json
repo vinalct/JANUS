@@ -1,0 +1,238 @@
+{
+  "case": "bronze_materializer_inep",
+  "lineage_keys": [
+    "artifacts",
+    "checkpoint_strategy",
+    "checkpoint_value",
+    "config_version",
+    "configured_outputs",
+    "emitted_at",
+    "environment",
+    "extraction_metadata",
+    "extraction_mode",
+    "materialized_outputs",
+    "metadata",
+    "plan_notes",
+    "records_extracted",
+    "run_attributes",
+    "run_id",
+    "source_config_path",
+    "source_id",
+    "source_name",
+    "status",
+    "strategy_family",
+    "strategy_variant"
+  ],
+  "quality_report": {
+    "checks": [
+      {
+        "name": "quality_contract",
+        "outcome": "passed"
+      },
+      {
+        "name": "schema_contract_mode",
+        "outcome": "passed"
+      },
+      {
+        "name": "required_fields",
+        "outcome": "passed"
+      },
+      {
+        "name": "unique_fields",
+        "outcome": "skipped"
+      },
+      {
+        "name": "schema_expectations",
+        "outcome": "passed"
+      },
+      {
+        "name": "output_columns",
+        "outcome": "passed"
+      },
+      {
+        "name": "materialized_outputs",
+        "outcome": "passed"
+      },
+      {
+        "name": "bronze_key_uniqueness",
+        "outcome": "skipped"
+      }
+    ],
+    "schema_expectation_source": "<PROJECT>/conf/schemas/inep/censo_escolar_microdados_schema.json"
+  },
+  "read_schema_source": "explicit",
+  "read_struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "NU_ANO_CENSO",
+        "nullable": false,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "CO_ENTIDADE",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "NO_ENTIDADE",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "CO_UF",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "SG_UF",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "CO_MUNICIPIO",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "NO_MUNICIPIO",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "TP_DEPENDENCIA",
+        "nullable": false,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "TP_LOCALIZACAO",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "TP_SITUACAO_FUNCIONAMENTO",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "QT_MAT_BAS",
+        "nullable": true,
+        "type": "integer"
+      }
+    ],
+    "type": "struct"
+  },
+  "row_count": 12,
+  "row_digest": "eb269768c906584db511b24bb1ce23b465938784f5afd3466092f94e26d2ecce",
+  "row_digest_algorithm": "sha256(canonical-json-array(sorted(canonical-json-row)))",
+  "schema": [
+    {
+      "name": "janus_run_id",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_source_id",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_source_name",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_environment",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_strategy_family",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_strategy_variant",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "ingestion_timestamp",
+      "nullable": true,
+      "type": "timestamp"
+    },
+    {
+      "name": "ingestion_date",
+      "nullable": true,
+      "type": "date"
+    },
+    {
+      "name": "NU_ANO_CENSO",
+      "nullable": true,
+      "type": "int"
+    },
+    {
+      "name": "CO_ENTIDADE",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "NO_ENTIDADE",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "CO_UF",
+      "nullable": true,
+      "type": "int"
+    },
+    {
+      "name": "SG_UF",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "CO_MUNICIPIO",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "NO_MUNICIPIO",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "TP_DEPENDENCIA",
+      "nullable": true,
+      "type": "int"
+    },
+    {
+      "name": "TP_LOCALIZACAO",
+      "nullable": true,
+      "type": "int"
+    },
+    {
+      "name": "TP_SITUACAO_FUNCIONAMENTO",
+      "nullable": true,
+      "type": "int"
+    },
+    {
+      "name": "QT_MAT_BAS",
+      "nullable": true,
+      "type": "int"
+    }
+  ],
+  "source_id": "inep_censo_escolar_microdados",
+  "spark_session_timezone": "UTC",
+  "table_identifier": "bronze_inep.censo_escolar_microdados"
+}

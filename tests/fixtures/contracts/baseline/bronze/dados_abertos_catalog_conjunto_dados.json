@@ -1,0 +1,292 @@
+{
+  "case": "dados_abertos_catalog_conjunto_dados",
+  "lineage_keys": [
+    "artifacts",
+    "checkpoint_strategy",
+    "config_version",
+    "configured_outputs",
+    "emitted_at",
+    "environment",
+    "extraction_metadata",
+    "extraction_mode",
+    "materialized_outputs",
+    "metadata",
+    "plan_notes",
+    "records_extracted",
+    "run_attributes",
+    "run_id",
+    "source_config_path",
+    "source_id",
+    "source_name",
+    "status",
+    "strategy_family",
+    "strategy_variant"
+  ],
+  "quality_report": {
+    "checks": [
+      {
+        "name": "quality_contract",
+        "outcome": "passed"
+      },
+      {
+        "name": "schema_contract_mode",
+        "outcome": "passed"
+      },
+      {
+        "name": "required_fields",
+        "outcome": "passed"
+      },
+      {
+        "name": "unique_fields",
+        "outcome": "skipped"
+      },
+      {
+        "name": "schema_expectations",
+        "outcome": "passed"
+      },
+      {
+        "name": "output_columns",
+        "outcome": "passed"
+      },
+      {
+        "name": "materialized_outputs",
+        "outcome": "passed"
+      },
+      {
+        "name": "bronze_key_uniqueness",
+        "outcome": "skipped"
+      }
+    ],
+    "schema_expectation_source": "<PROJECT>/conf/schemas/dados_abertos_catalog/catalog_metadata_schema.json"
+  },
+  "read_schema_source": "explicit",
+  "read_struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "entity_type",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "entity_key",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "entity_id",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "parent_entity_type",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "parent_entity_key",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "parent_entity_id",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "catalog_collection_path",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "catalog_record_path",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "catalog_request_url",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "catalog_request_index",
+        "nullable": false,
+        "type": "long"
+      },
+      {
+        "metadata": {},
+        "name": "catalog_page_number",
+        "nullable": true,
+        "type": "long"
+      },
+      {
+        "metadata": {},
+        "name": "catalog_offset",
+        "nullable": true,
+        "type": "long"
+      },
+      {
+        "metadata": {},
+        "name": "catalog_cursor",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "catalog_received_at",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "catalog_raw_artifact_path",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "payload",
+        "nullable": true,
+        "type": "string"
+      }
+    ],
+    "type": "struct"
+  },
+  "row_count": 12,
+  "row_digest": "ad9a368fb29dbdddb2655ab9ea6d5b477578585ce77a40b6487894c64525d5f4",
+  "row_digest_algorithm": "sha256(canonical-json-array(sorted(canonical-json-row)))",
+  "schema": [
+    {
+      "name": "janus_run_id",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_source_id",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_source_name",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_environment",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_strategy_family",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_strategy_variant",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "ingestion_timestamp",
+      "nullable": true,
+      "type": "timestamp"
+    },
+    {
+      "name": "ingestion_date",
+      "nullable": true,
+      "type": "date"
+    },
+    {
+      "name": "entity_type",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "entity_key",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "entity_id",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "parent_entity_type",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "parent_entity_key",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "parent_entity_id",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "catalog_collection_path",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "catalog_record_path",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "catalog_request_url",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "catalog_request_index",
+      "nullable": true,
+      "type": "bigint"
+    },
+    {
+      "name": "catalog_page_number",
+      "nullable": true,
+      "type": "bigint"
+    },
+    {
+      "name": "catalog_offset",
+      "nullable": true,
+      "type": "bigint"
+    },
+    {
+      "name": "catalog_cursor",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "catalog_received_at",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "catalog_raw_artifact_path",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "payload",
+      "nullable": true,
+      "type": "string"
+    }
+  ],
+  "source_id": "dados_abertos_catalog__conjunto_dados__full_refresh",
+  "spark_session_timezone": "UTC",
+  "table_identifier": "bronze__dados_abertos_catalog.conjuntos_dados"
+}
