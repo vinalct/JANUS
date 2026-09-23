@@ -18,9 +18,6 @@ GITIGNORE = PROJECT_ROOT / ".gitignore"
 DOCKERIGNORE = PROJECT_ROOT / ".dockerignore"
 SOURCES_DIR = PROJECT_ROOT / "conf" / "sources"
 
-RED_UNTIL_15 = pytest.mark.xfail(
-    strict=True, reason="red until: non-root image, no /etc/passwd edit"
-)
 RED_UNTIL_16 = pytest.mark.xfail(
     strict=True, reason="red until: cluster ports bound to loopback"
 )
@@ -84,7 +81,6 @@ def _declared_env_var_names() -> set[str]:
 # FR-8 — the image
 
 
-@RED_UNTIL_15
 def test_the_image_declares_a_non_root_user_after_its_last_build_step():
     """``USER`` must come after the last ``RUN``, or the build steps would run unprivileged."""
     text = _read(DOCKERFILE, why="the dev container does not mount docker/")
@@ -100,7 +96,6 @@ def test_the_image_declares_a_non_root_user_after_its_last_build_step():
     )
 
 
-@RED_UNTIL_15
 def test_the_image_never_makes_etc_passwd_world_writable():
     """Any process in the container could otherwise add or alter an account entry."""
     text = _read(DOCKERFILE, why="the dev container does not mount docker/")
@@ -110,7 +105,6 @@ def test_the_image_never_makes_etc_passwd_world_writable():
     assert offenders == [], f"the image relaxes permissions on /etc/passwd: {offenders}"
 
 
-@RED_UNTIL_15
 def test_the_entrypoint_never_writes_to_etc_passwd():
     """FR-8 replaces the append with ``nss_wrapper``: a per-process view, not a system file edit."""
     text = _read(ENTRYPOINT, why="the dev container does not mount docker/")
@@ -118,6 +112,16 @@ def test_the_entrypoint_never_writes_to_etc_passwd():
     offenders = [line.strip() for line in text.splitlines() if PASSWD_WRITE_PATTERN.search(line)]
 
     assert offenders == [], f"the entrypoint still edits /etc/passwd: {offenders}"
+
+
+def test_the_image_resolves_an_arbitrary_uid_without_editing_system_accounts():
+    """Docker uid overrides use a per-process NSS view that is inherited by child processes."""
+    dockerfile = _read(DOCKERFILE, why="the dev container does not mount docker/")
+    entrypoint = _read(ENTRYPOINT, why="the dev container does not mount docker/")
+
+    assert "libnss-wrapper" in dockerfile
+    for marker in ("NSS_WRAPPER_PASSWD", "NSS_WRAPPER_GROUP", "LD_PRELOAD"):
+        assert marker in entrypoint, f"the entrypoint does not configure {marker}"
 
 
 @RED_UNTIL_18

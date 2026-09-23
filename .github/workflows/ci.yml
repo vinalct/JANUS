@@ -120,6 +120,10 @@ jobs:
           set -euo pipefail
           docker compose -f docker/docker-compose.yml run --rm -T janus \
             sh -lc "ls -1 data/metadata/ivy/jars/${IVY_JAR} data/metadata/ivy/jars/${SQLITE_JAR} data/metadata/ivy/jars/${POSTGRES_JAR}"
+      - name: Container runs non-root, /etc/passwd is not world-writable, unknown uid resolves
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus sh -lc 'test "$(id -u)" != 0 && test "$(stat -c %a /etc/passwd)" = 644 && whoami'
+          JANUS_CONTAINER_USER=4242:4242 docker compose -f docker/docker-compose.yml run --rm -T janus sh -lc 'whoami && python -c "import os,pwd; print(pwd.getpwuid(os.getuid()).pw_name)"'
       - name: Type check with PySpark installed
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \

@@ -127,6 +127,13 @@ This builds the `janus` image defined by `docker/docker-compose.yml`.
 make up
 ```
 
+The image runs as uid/gid `1000:1000` by default. The Make targets set
+`JANUS_CONTAINER_USER` to your host uid/gid so writable bind mounts retain host ownership.
+Podman maps that identity through `keep-id`; Docker uses `nss_wrapper` when the selected uid has
+no account in the image, giving the process and its children a user lookup without modifying
+`/etc/passwd`. Set `JANUS_CONTAINER_USER=<uid>:<gid>` explicitly when invoking Compose directly
+with Docker and a non-default identity.
+
 The compose service mounts:
 
 - `src/`
