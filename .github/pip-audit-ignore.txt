@@ -1,0 +1,1 @@
+# <advisory ID> <expiry YYYY-MM-DD> <reason>

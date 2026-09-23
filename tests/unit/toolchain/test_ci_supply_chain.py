@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.support.pip_audit_ignores import render_ignore_flags
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 WORKFLOWS_DIR = PROJECT_ROOT / ".github" / "workflows"
@@ -17,14 +19,7 @@ AUDIT_IGNORE = PROJECT_ROOT / ".github" / "pip-audit-ignore.txt"
 DOCKERFILE = PROJECT_ROOT / "docker" / "Dockerfile"
 
 
-RED_UNTIL_18 = pytest.mark.xfail(
-    strict=True,
-    reason="red until: SHA-pinned actions, pip-audit, Dependabot, image digest",
-)
-
-PINNED_USES = re.compile(
-    r"^[\w.-]+/[\w.-]+(?:/[\w./-]+)?@[0-9a-f]{40}\s*#\s*v\S+$"
-)
+PINNED_USES = re.compile(r"^[\w.-]+/[\w.-]+(?:/[\w./-]+)?@[0-9a-f]{40}\s*#\s*v\S+$")
 USES_LINE = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<ref>.+?)\s*$")
 
 #: ``<ID> <YYYY-MM-DD> <reason…>`` — an entry without a date is a lint failure, not a debate.
@@ -78,7 +73,6 @@ def test_the_sweep_actually_reads_the_workflows():
     )
 
 
-@RED_UNTIL_18
 def test_every_action_is_pinned_to_a_full_commit_sha():
     """A tag is a moving target that runs with the repository's token."""
     unpinned = [
@@ -95,7 +89,6 @@ def test_every_action_is_pinned_to_a_full_commit_sha():
     )
 
 
-@RED_UNTIL_18
 def test_the_fast_job_audits_its_dependencies():
     """The gate that would have named a CVE before a release note did."""
     fast = _jobs().get("fast")
@@ -109,13 +102,11 @@ def test_the_fast_job_audits_its_dependencies():
     assert audit_steps, "the fast job runs no pip-audit step"
 
 
-@RED_UNTIL_18
 def test_dependabot_covers_pip_actions_and_docker():
     """Pinning without a bot to move the pins is how a pin becomes a stale dependency."""
     if not DEPENDABOT.is_file():
         raise AssertionError(
-            ".github/dependabot.yml does not exist; the SHA pins have nothing keeping them "
-            "current"
+            ".github/dependabot.yml does not exist; the SHA pins have nothing keeping them current"
         )
     config = yaml.safe_load(DEPENDABOT.read_text(encoding="utf-8")) or {}
 
@@ -130,7 +121,6 @@ def test_dependabot_covers_pip_actions_and_docker():
     )
 
 
-@RED_UNTIL_18
 def test_every_audit_allowlist_entry_carries_a_reason_and_an_unexpired_date():
     """risk 6: an advisory with no fix is acceptable for a while, never forever."""
     if not AUDIT_IGNORE.is_file():
@@ -157,7 +147,6 @@ def test_every_audit_allowlist_entry_carries_a_reason_and_an_unexpired_date():
     assert expired == [], f"allowlist entries have outlived their reason: {expired}"
 
 
-@RED_UNTIL_18
 def test_the_base_image_is_pinned_by_digest():
     """Asserted from the CI side too: Dependabot's ``docker`` ecosystem is what moves it."""
     if not DOCKERFILE.is_file():
@@ -166,11 +155,8 @@ def test_the_base_image_is_pinned_by_digest():
     assert DIGEST_PATTERN.search(DOCKERFILE.read_text(encoding="utf-8"))
 
 
-@RED_UNTIL_18
-def test_the_allowlist_helper_prints_flags_and_refuses_an_expired_entry(tmp_path):
+def test_the_allowlist_helper_prints_flags_and_refuses_an_expired_entry(tmp_path, capsys):
     """The helper is what makes the expiry rule fail CI by itself rather than by review."""
-    from tests.support.pip_audit_ignores import render_ignore_flags
-
     good = tmp_path / "good.txt"
     good.write_text(
         "# accepted advisories\nGHSA-aaaa-bbbb-cccc 2099-01-01 no fix upstream yet\n",
@@ -182,8 +168,10 @@ def test_the_allowlist_helper_prints_flags_and_refuses_an_expired_entry(tmp_path
     expired.write_text("GHSA-dddd-eeee-ffff 2020-01-01 stale\n", encoding="utf-8")
     with pytest.raises(SystemExit):
         render_ignore_flags(expired)
+    assert "GHSA-dddd-eeee-ffff" in capsys.readouterr().err
 
     malformed = tmp_path / "malformed.txt"
     malformed.write_text("GHSA-gggg-hhhh-iiii no-date-here\n", encoding="utf-8")
     with pytest.raises(SystemExit):
         render_ignore_flags(malformed)
+    assert "expected `<ID> <YYYY-MM-DD> <reason>`" in capsys.readouterr().err

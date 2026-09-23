@@ -18,9 +18,6 @@ GITIGNORE = PROJECT_ROOT / ".gitignore"
 DOCKERIGNORE = PROJECT_ROOT / ".dockerignore"
 SOURCES_DIR = PROJECT_ROOT / "conf" / "sources"
 
-RED_UNTIL_18 = pytest.mark.xfail(
-    strict=True, reason="red until: base image pinned by digest"
-)
 RED_UNTIL_19 = pytest.mark.xfail(
     strict=True, reason="red until: .env.example lists every token"
 )
@@ -121,7 +118,6 @@ def test_the_image_resolves_an_arbitrary_uid_without_editing_system_accounts():
         assert marker in entrypoint, f"the entrypoint does not configure {marker}"
 
 
-@RED_UNTIL_18
 def test_the_base_image_is_pinned_by_digest():
     """A tag moves. Shared with ``test_ci_supply_chain.py``, which pins it from the CI side."""
     text = _read(DOCKERFILE, why="the dev container does not mount docker/")

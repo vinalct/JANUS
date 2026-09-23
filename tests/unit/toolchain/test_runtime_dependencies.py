@@ -12,6 +12,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 REQUIREMENTS = PROJECT_ROOT / "requirements.txt"
 EXPECTED_RUNTIME_DEPENDENCIES = ("PyYAML", "certifi", "pyspark", "pyiceberg")
+EXPECTED_DEV_DEPENDENCIES = (
+    "jsonschema",
+    "mypy",
+    "pip-audit",
+    "pytest",
+    "pytest-cov",
+    "ruff",
+)
+CI_ONLY_DEV_DEPENDENCIES = {"pip-audit"}
+
 PYICEBERG_RUNTIME_REQUIREMENT = (
     "pyiceberg[pyarrow,pyiceberg-core,sql-postgres,sql-sqlite,s3fs]==0.12.0"
 )
@@ -52,6 +62,10 @@ def test_the_runtime_dependencies_are_the_four_the_project_ships():
     )
 
 
+def test_the_dev_dependencies_include_the_ci_auditor():
+    assert tuple(_distribution(item) for item in _dev()) == EXPECTED_DEV_DEPENDENCIES
+
+
 def test_order_15_deliberately_promotes_pyiceberg_to_runtime():
     """Overrule the old prohibition in the order authorized to pay its runtime cost."""
 
@@ -73,8 +87,8 @@ def test_every_runtime_dependency_is_declared_once_and_pinned_exactly():
     )
 
 
-def test_the_declared_pins_and_the_images_requirements_agree():
-    """Two files declare the same pins, and a dependency must be added to both."""
+def test_the_declared_pins_and_the_image_requirements_agree():
+    """The image installs all declared pins except tooling that exists only for CI."""
 
     if not REQUIREMENTS.exists():
         pytest.skip("requirements.txt is not readable from here")
@@ -84,10 +98,19 @@ def test_the_declared_pins_and_the_images_requirements_agree():
         for line in REQUIREMENTS.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     }
-    missing = sorted(set(_runtime() + _dev()) - installed)
+    image_requirements = {
+        item for item in _runtime() + _dev() if _distribution(item) not in CI_ONLY_DEV_DEPENDENCIES
+    }
+    missing = sorted(image_requirements - installed)
+    ci_only_installed = sorted(
+        item for item in installed if _distribution(item) in CI_ONLY_DEV_DEPENDENCIES
+    )
 
     assert not missing, (
-        "requirements.txt does not install every pin pyproject.toml declares: "
+        "requirements.txt does not install every image pin pyproject.toml declares: "
         f"{missing}. Add each to requirements.txt too — the image installs that file, so a "
         "pin missing from it is a dependency the container never gets."
+    )
+    assert not ci_only_installed, (
+        f"CI-only dependencies leaked into the runtime image: {ci_only_installed}"
     )
