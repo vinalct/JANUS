@@ -124,9 +124,13 @@ MODELS_ALL: tuple[str, ...] = (
     "BronzeWriteIntent",
     "CONCURRENT_PAGINATION_TYPES",
     "CombinedRequestInputsConfig",
+    "ContractProperty",
+    "ContractSchema",
+    "ContractValidationError",
     "DEFAULT_PAST_END_STATUS_CODES",
     "DEFAULT_RETRYABLE_STATUS_CODES",
     "DEFAULT_VALIDATION_POLICY",
+    "DataContract",
     "DateWindowRequestInputsConfig",
     "ExecutionPlan",
     "ExtractedArtifact",
@@ -134,6 +138,7 @@ MODELS_ALL: tuple[str, ...] = (
     "ExtractionResult",
     "IcebergInputReference",
     "IcebergRowsRequestInputsConfig",
+    "JanusContractOptions",
     "LimitsConfig",
     "OutputTarget",
     "OutputsConfig",
@@ -147,6 +152,9 @@ MODELS_ALL: tuple[str, ...] = (
     "RequestInputsConfig",
     "RetryConfig",
     "RunContext",
+    "SUPPORTED_COMPATIBILITY_MODES",
+    "SUPPORTED_CONTRACT_STATUSES",
+    "SUPPORTED_ENFORCEMENT_MODES",
     "SUPPORTED_OUTPUT_ZONES",
     "SchemaConfig",
     "SourceConfig",
@@ -159,8 +167,10 @@ MODELS_ALL: tuple[str, ...] = (
     "ValidationIssue",
     "ValidationPolicy",
     "WriteResult",
+    "compute_schema_version",
     "find_dependency_cycles",
     "iter_iceberg_input_references",
+    "load_data_contract",
     "render_dependency_cycle",
     "resolve_bronze_write_intent",
 )
@@ -228,14 +238,19 @@ def _upward_imports(tree: ast.Module) -> list[tuple[str, int]]:
     """Return imports of the modules that sit *above* the config package."""
     above: list[tuple[str, int]] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module in {
-            "janus.models",
-            "janus.models.source_config",
-        }:
+        if isinstance(node, ast.ImportFrom) and (
+            node.module in {"janus.models", "janus.models.source_config"}
+            or (
+                node.module is not None
+                and node.module.startswith("janus.models.data_contracts")
+            )
+        ):
             above.append((node.module, node.lineno))
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name in {"janus.models", "janus.models.source_config"}:
+                if alias.name in {"janus.models", "janus.models.source_config"} or (
+                    alias.name.startswith("janus.models.data_contracts")
+                ):
                     above.append((alias.name, node.lineno))
     return above
 
