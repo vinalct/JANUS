@@ -42,6 +42,8 @@ jobs:
           python -I -c "import importlib.util; assert all(importlib.util.find_spec(name) is None for name in ('dagster', 'pyspark', 'pyiceberg', 'pyarrow'))"
           python -I -c "import sys, janus, janus.main; assert not any(name == 'dagster' or name.startswith('dagster.') for name in sys.modules)"
           python -I -m janus.main --help >/dev/null
+      - name: Validate every checked-in data contract against the pinned ODCS schema
+        run: make test-contract-schema PYTHON=python
       - name: Assert required jobs configure no HTTP lineage destination
         run: python -m pytest -q tests/unit/observability/test_architecture_guardrails.py::test_required_ci_jobs_do_not_configure_http_openlineage
       - name: Lint (ruff, pinned 0.11.6)

@@ -1,0 +1,30 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: example.two_schemas
+name: Two schemas
+version: 1.0.0
+status: draft
+domain: example
+description:
+  purpose: Hostile JANUS fixture that remains valid under the general ODCS schema.
+team:
+  - username: janus-tests
+    role: owner
+schema:
+  - name: first_table
+    physicalType: table
+    properties:
+      - name: id
+        logicalType: string
+        physicalType: string
+  - name: second_table
+    physicalType: table
+    properties:
+      - name: id
+        logicalType: string
+        physicalType: string
+customProperties:
+  - property: janus.compatibility
+    value: additive
+  - property: janus.enforcement
+    value: lenient

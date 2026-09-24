@@ -28,6 +28,10 @@ DAGSTER_TESTS := tests/unit/adapters/test_dagster_adapter.py \
 FAST_TEST_ARGS := tests/unit \
 	--ignore=tests/unit/adapters/test_dagster_adapter.py \
 	--deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
+CONTRACT_SCHEMA_TESTS := \
+	tests/unit/models/data_contracts/test_contract_loader.py::test_pinned_odcs_schema_sha256_matches_the_sidecar \
+	tests/unit/models/data_contracts/test_contract_loader.py::test_every_checked_in_contract_validates_against_the_pinned_odcs_schema \
+	tests/unit/models/data_contracts/test_contract_loader.py::test_odcs_validator_rejects_the_hostile_fixtures
 FAST_OBSERVABILITY_CLASSES := \
 	tests.unit.observability.test_acceptance_evidence \
 	tests.unit.observability.test_architecture_guardrails \
@@ -96,7 +100,7 @@ define RUN_COMPOSE
 	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-adapter ci run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
+.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-contract-schema test-adapter ci run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
 
 seed-ivy:
 	@mkdir -p "$(IVY_JAR_DEST_DIR)" "$(ICEBERG_CATALOG_DIR)"; \
@@ -216,6 +220,9 @@ test-fast:
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
+
+test-contract-schema:
+	$(PYTHON) -m pytest -q $(CONTRACT_SCHEMA_TESTS)
 
 test-adapter:
 	@mkdir -p "$(dir $(DAGSTER_TEST_REPORT))"

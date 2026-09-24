@@ -1,0 +1,23 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: example.customproperties_mapping
+name: Invalid custom properties mapping
+version: 1.0.0
+status: draft
+domain: example
+description:
+  purpose: Hostile fixture using a mapping where ODCS requires an array of property-value pairs.
+team:
+  - username: janus-tests
+    role: owner
+schema:
+  - name: customproperties_mapping
+    physicalType: table
+    properties:
+      - name: id
+        logicalType: string
+        physicalType: string
+customProperties:
+  janus:
+    compatibility: additive
+    enforcement: lenient

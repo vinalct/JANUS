@@ -1,0 +1,43 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: example.federal_open_data_example
+name: Federal open data example
+version: 1.0.0
+status: active
+domain: example
+description:
+  purpose: Contract example that exercises the api family against example.invalid; not a live source.
+tags: [example, api]
+team:
+  - username: janus
+    role: owner
+schema:
+  - name: federal_open_data_example
+    physicalType: table
+    properties:
+      - name: id
+        businessName: Record id
+        description: Upstream record identifier, verbatim.
+        logicalType: string
+        physicalType: string
+        required: true
+        unique: true
+        primaryKey: true
+        classification: public
+        customProperties:
+          - property: sourceField
+            value: id
+          - property: sourceFormat
+            value: json
+      - name: updated_at
+        businessName: Updated at
+        description: Upstream update timestamp, kept as the string the API sent.
+        logicalType: string
+        physicalType: string
+        required: true
+        classification: public
+customProperties:
+  - property: janus.compatibility
+    value: additive
+  - property: janus.enforcement
+    value: lenient
