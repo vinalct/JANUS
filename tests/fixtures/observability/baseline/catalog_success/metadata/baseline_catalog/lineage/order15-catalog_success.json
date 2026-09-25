@@ -14,7 +14,7 @@
   "checkpoint_field": "updated_at",
   "checkpoint_strategy": "max_value",
   "checkpoint_value": "2026-07-02",
-  "config_version": "3e7378b91882e11634ec79125f104b4b93b8ab17303ce1111c5b724fc8f860d2",
+  "config_version": "0b2f6c472c0b311ce0bbdc372e812bcd0eaed636f14a054c862d628cb6dcd050",
   "configured_outputs": [
     {
       "format": "json",

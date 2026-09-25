@@ -1,6 +1,10 @@
 """Public model and loader surface for JANUS data contracts."""
 
 from janus.models.data_contracts.errors import ContractValidationError
+from janus.models.data_contracts.legacy import (
+    contract_from_legacy_schema_file,
+    legacy_contract_id,
+)
 from janus.models.data_contracts.loader import compute_schema_version, load_data_contract
 from janus.models.data_contracts.model import (
     SUPPORTED_COMPATIBILITY_MODES,
@@ -43,8 +47,10 @@ __all__ = [
     "VocabularyError",
     "VocabularyType",
     "compute_schema_version",
+    "contract_from_legacy_schema_file",
     "contract_properties_from_spark_json",
     "iceberg_type_name",
+    "legacy_contract_id",
     "load_data_contract",
     "odcs_logical_type_for",
     "parse_physical_type",

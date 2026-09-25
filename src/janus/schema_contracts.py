@@ -16,26 +16,46 @@ from janus.models.data_contracts import (
 from janus.utils.environment import resolve_project_path
 
 
-def resolve_schema_path_for_plan(plan: ExecutionPlan) -> Path | None:
-    """Return the explicit schema path configured for one plan, if any."""
-    if plan.source_config.schema.mode != "explicit" or not plan.source_config.schema.path:
+def resolve_declared_path(
+    project_root: Path, config_path: Path, configured: str | None
+) -> Path | None:
+    """Resolve one declared schema file against the project, then the config's parents."""
+    if not configured:
         return None
 
-    configured_path = Path(plan.source_config.schema.path)
-    if configured_path.is_absolute():
-        return configured_path
+    declared_path = Path(configured)
+    if declared_path.is_absolute():
+        return declared_path
 
-    runtime_path = resolve_project_path(plan.run_context.project_root, str(configured_path))
+    runtime_path = resolve_project_path(project_root, str(declared_path))
     if runtime_path.exists():
         return runtime_path
 
-    config_path = plan.source_config.config_path.resolve()
-    for parent in config_path.parents:
-        candidate = parent / configured_path
+    for parent in config_path.resolve().parents:
+        candidate = parent / declared_path
         if candidate.exists():
             return candidate
 
     return runtime_path
+
+
+def _resolve_declared_path_for_plan(plan: ExecutionPlan, configured: str | None) -> Path | None:
+    """Run the shared search with the project root and config path this plan carries."""
+    return resolve_declared_path(
+        plan.run_context.project_root, plan.source_config.config_path, configured
+    )
+
+
+def resolve_schema_path_for_plan(plan: ExecutionPlan) -> Path | None:
+    """Return the legacy schema file configured for one plan, if any."""
+    if not plan.source_config.schema.declares_legacy_file:
+        return None
+    return _resolve_declared_path_for_plan(plan, plan.source_config.schema.path)
+
+
+def resolve_contract_path_for_plan(plan: ExecutionPlan) -> Path | None:
+    """Return the data contract configured for one plan, if any."""
+    return _resolve_declared_path_for_plan(plan, plan.source_config.schema.contract)
 
 
 def resolve_spark_schema_for_plan(plan: ExecutionPlan) -> Any | None:
@@ -146,6 +166,8 @@ __all__ = [
     "contract_properties_from_spark_schema",
     "load_expected_fields_from_schema_path",
     "load_spark_schema_from_schema_path",
+    "resolve_contract_path_for_plan",
+    "resolve_declared_path",
     "resolve_schema_path_for_plan",
     "resolve_spark_schema_for_plan",
     "spark_schema_from_contract",

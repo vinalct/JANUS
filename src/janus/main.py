@@ -10,6 +10,7 @@ from typing import Any
 from janus.cli.common import (
     default_project_root,
     format_runtime_permission_error,
+    log_source_config_deprecations,
     parse_started_at,
 )
 from janus.cli.run_all import main as run_all_main
@@ -169,6 +170,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (FileNotFoundError, PlannerError, SourceNotFoundError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 2
+        log_source_config_deprecations(
+            build_structured_logger(
+                "janus.config",
+                level=config.get("runtime", {}).get("log_level", "INFO"),
+            ).bind(environment=config.get("name", args.environment)),
+            (planned_run.plan.source_config,),
+        )
         summary["planned_run"] = planned_run.to_summary()
 
     if args.execute:

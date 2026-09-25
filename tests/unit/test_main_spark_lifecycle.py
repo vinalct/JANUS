@@ -84,6 +84,20 @@ class ExecutionSpy:
         return RecordingRun(self.status)
 
 
+def _planned_run_double() -> SimpleNamespace:
+    """A plan shaped like the real one: the CLI reads its source config, not only its summary."""
+    return SimpleNamespace(
+        to_summary=lambda: {},
+        plan=SimpleNamespace(
+            source_config=SimpleNamespace(
+                source_id="stub_source",
+                config_path=Path("conf/sources/stub.yaml"),
+                deprecations=(),
+            )
+        ),
+    )
+
+
 @pytest.fixture
 def cli(monkeypatch, tmp_path):
     """Drive the real `main()` with planning and execution stubbed to a spy."""
@@ -95,7 +109,7 @@ def cli(monkeypatch, tmp_path):
     monkeypatch.setattr(
         main_module,
         "Planner",
-        lambda: SimpleNamespace(plan=lambda request: SimpleNamespace(to_summary=lambda: {})),
+        lambda: SimpleNamespace(plan=lambda request: _planned_run_double()),
     )
     monkeypatch.setattr(
         spark_lifecycle,

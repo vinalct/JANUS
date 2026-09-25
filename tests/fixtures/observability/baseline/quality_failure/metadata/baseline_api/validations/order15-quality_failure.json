@@ -12,7 +12,7 @@
     },
     {
       "details": {
-        "schema_mode": "infer"
+        "schema_mode": "contract"
       },
       "message": "Schema evolution is enabled; unexpected columns will be tolerated.",
       "name": "schema_contract_mode",

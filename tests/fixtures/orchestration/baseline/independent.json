@@ -23,7 +23,7 @@
         }
       ],
       "checkpoint_strategy": "none",
-      "config_version": "fac82b47d9d56670943cef0055fa358681e2c7e770c27599cbef0d7874fefea3",
+      "config_version": "09d606867709e5bbd0d100cbdb59e1ea694dabfaa26817c2cae68de4936b85f4",
       "configured_outputs": [
         {
           "format": "json",
@@ -235,7 +235,7 @@
         },
         {
           "details": {
-            "schema_mode": "infer"
+            "schema_mode": "contract"
           },
           "message": "Schema evolution is enabled; unexpected columns will be tolerated.",
           "name": "schema_contract_mode",

@@ -10,6 +10,7 @@ from janus.models.source_config import (
     SourceConfigValidationError,
 )
 from janus.registry import SourceNotFoundError, load_registry
+from tests.support.contracts import DECLARED_CONTRACT_PATH, write_minimal_contract
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -39,7 +40,9 @@ def test_checked_in_registry_returns_typed_source_config():
 
 
 def test_checked_in_registry_loads_cnpj_entity_source_contracts():
-    registry = load_registry(PROJECT_ROOT)
+    """The CNPJ entries keep their legacy declaration until TASK-08 repoints them."""
+    with pytest.warns(DeprecationWarning, match="schema.contract"):
+        registry = load_registry(PROJECT_ROOT)
 
     source = registry.get_source(
         "receita_federal__cnpj__empresas_full_refresh",
@@ -540,6 +543,40 @@ def test_registry_rejects_concurrency_above_one_without_speculative_pagination(t
     assert "'cursor' pagination" in message
 
 
+def test_a_legacy_declaration_warns_once_per_config_file(tmp_path):
+    """Ten entries in one file repeat one declaration; the operator reads one warning."""
+    legacy_schema = _valid_source_yaml("legacy_source", enabled=True).replace(
+        f"schema:\n  contract: {DECLARED_CONTRACT_PATH}\n",
+        "schema:\n  mode: infer\n",
+    )
+    project_root = _create_project(
+        tmp_path,
+        {
+            "legacy.yaml": _grouped_sources_yaml(
+                legacy_schema,
+                _valid_source_yaml("legacy_peer", enabled=True).replace(
+                    f"schema:\n  contract: {DECLARED_CONTRACT_PATH}\n",
+                    "schema:\n  mode: infer\n",
+                ),
+            ),
+            "declared.yaml": _valid_source_yaml("declared_source", enabled=True),
+        },
+    )
+
+    with pytest.warns(DeprecationWarning) as records:
+        registry = load_registry(project_root)
+
+    assert len(records) == 1
+    assert str(records[0].message) == (
+        f"{project_root / 'conf' / 'sources' / 'legacy.yaml'}: schema: "
+        "`schema.mode`/`schema.path` are deprecated and will be removed in order-19; "
+        "declare `schema.contract: conf/contracts/<domain>/<table>.yaml` instead "
+        "(see docs/data-contracts.md)."
+    )
+    assert registry.get_source("declared_source").deprecations == ()
+    assert registry.get_source("legacy_source").deprecations != ()
+
+
 def _create_project(tmp_path: Path, sources: dict[str, str]) -> Path:
     conf_dir = tmp_path / "conf"
     sources_dir = conf_dir / "sources"
@@ -548,6 +585,7 @@ def _create_project(tmp_path: Path, sources: dict[str, str]) -> Path:
         "registry:\n  sources_dir: conf/sources\n  file_pattern: \"*.yaml\"\n",
         encoding="utf-8",
     )
+    write_minimal_contract(tmp_path)
     for file_name, content in sources.items():
         file_path = sources_dir / file_name
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -659,7 +697,7 @@ extraction:
     backoff_seconds: 1
 
 schema:
-  mode: infer
+  contract: {DECLARED_CONTRACT_PATH}
 
 spark:
   input_format: json

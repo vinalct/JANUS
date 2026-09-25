@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+import warnings
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Self
@@ -116,11 +117,15 @@ class SourceRegistry:
             sources_dir,
             app_config.registry.file_pattern,
         ):
-            for source, entry in _load_source_configs(
+            loaded = _load_source_configs(
                 config_path,
                 policy=policy,
                 strategy_registry=strategy_registry,
-            ):
+            )
+            _warn_source_config_deprecations(
+                config_path, (source for source, _ in loaded)
+            )
+            for source, entry in loaded:
                 previous_path = seen_source_ids.get(source.source_id)
                 if previous_path is not None:
                     raise ValueError(
@@ -205,6 +210,28 @@ def load_registry(
         policy=policy,
         strategy_registry=strategy_registry,
     )
+
+
+def _warn_source_config_deprecations(
+    config_path: Path, configs: Iterable[SourceConfig]
+) -> None:
+    """Report a still-loading but deprecated declaration, once per config file.
+
+    Ten CNPJ entries in one grouped file repeat the same declaration; repeating the
+    warning ten times would train an operator to scroll past it.
+    """
+    reported: set[tuple[str, str]] = set()
+    for config in configs:
+        for issue in config.deprecations:
+            key = (issue.path, issue.message)
+            if key in reported:
+                continue
+            reported.add(key)
+            warnings.warn(
+                f"{config_path}: {issue.path}: {issue.message}",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
 
 def _discover_source_config_paths(sources_dir: Path, file_pattern: str) -> tuple[Path, ...]:

@@ -39,6 +39,7 @@ from janus.strategies.http import (
     split_path_and_query_params,
 )
 from janus.utils.logging import StructuredLogger, build_structured_logger
+from tests.support.contracts import CONTRACT_SCHEMA_BLOCK, write_minimal_contract
 
 # ---------------------------------------------------------------------------
 # Per-family symbol mappings — the single place later refactor steps update.
@@ -412,6 +413,7 @@ def build_source_config(
         if path is not None:
             access["path"] = path
 
+    write_minimal_contract(tmp_path)
     return SourceConfig.from_mapping(
         {
             "source_id": source_id,
@@ -441,7 +443,7 @@ def build_source_config(
                     ),
                 },
             },
-            "schema": {"mode": "infer"},
+            "schema": dict(CONTRACT_SCHEMA_BLOCK),
             "spark": {
                 "input_format": shape["spark_input_format"],
                 "write_mode": "append",
