@@ -358,6 +358,21 @@ def test_the_batch_plans_every_source_through_the_one_planner_and_one_snapshot(
     assert len({id(registry) for _, registry in calls}) == 1
 
 
+def test_every_node_is_planned_against_the_one_contract_the_snapshot_holds(tmp_path):
+    project_root = build_graph_project(tmp_path, "diamond")
+    registry = load_registry(project_root)
+
+    plan = BatchPlanner().plan(_request(project_root), registry=registry)
+
+    carried = [source.planned_run.plan.data_contract for source in plan.sources]
+    assert carried == [registry.contract_for(source.source_id) for source in plan.sources]
+    assert len({id(contract) for contract in carried}) == 1
+    assert all(
+        source.planned_run.to_summary()["contract"]["id"] == "example.minimal"
+        for source in plan.sources
+    )
+
+
 def test_a_caller_can_hand_the_batch_a_registry_it_already_validated(tmp_path):
     """An adapter that rendered the graph should not have to load the registry twice."""
     project_root = build_graph_project(tmp_path, "chain")

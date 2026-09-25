@@ -4,10 +4,12 @@ import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Self
 
 import yaml
 
+from janus.models.data_contracts import DataContract
 from janus.models.dependencies import SourceDependencyGraph
 from janus.models.source_config import (
     DEFAULT_VALIDATION_POLICY,
@@ -18,6 +20,7 @@ from janus.models.source_config import (
     ValidationIssue,
     ValidationPolicy,
 )
+from janus.registry.contracts import load_contract_snapshot
 from janus.registry.dependencies import (
     SourceLocation,
     build_source_dependency_graph,
@@ -64,6 +67,7 @@ class SourceRegistry:
     app_config: AppConfig
     sources: tuple[SourceConfig, ...]
     locations: tuple[SourceLocation, ...] = ()
+    contracts: Mapping[str, DataContract] = field(default_factory=dict)
     _sources_by_id: dict[str, SourceConfig] = field(init=False, repr=False)
     graph: SourceDependencyGraph = field(init=False, repr=False)
 
@@ -74,6 +78,7 @@ class SourceRegistry:
             "_sources_by_id",
             {source.source_id: source for source in self.sources},
         )
+        object.__setattr__(self, "contracts", MappingProxyType(dict(self.contracts)))
         object.__setattr__(
             self,
             "graph",
@@ -147,6 +152,11 @@ class SourceRegistry:
             app_config=app_config,
             sources=tuple(sources),
             locations=tuple(locations),
+            contracts=load_contract_snapshot(
+                sources,
+                project_root=resolved_project_root,
+                sources_dir=sources_dir,
+            ),
         )
 
     def list_sources(self, *, enabled_only: bool = True) -> tuple[SourceConfig, ...]:
@@ -154,6 +164,9 @@ class SourceRegistry:
         if not enabled_only:
             return self.sources
         return tuple(source for source in self.sources if source.enabled)
+
+    def contract_for(self, source_id: str) -> DataContract | None:
+        return self.contracts.get(source_id)
 
     def get_source(
         self, source_id: str, *, include_disabled: bool = False

@@ -2,6 +2,7 @@
 
 from janus.models.data_contracts.errors import ContractValidationError
 from janus.models.data_contracts.legacy import (
+    contract_from_legacy_schema_bytes,
     contract_from_legacy_schema_file,
     legacy_contract_id,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "VocabularyError",
     "VocabularyType",
     "compute_schema_version",
+    "contract_from_legacy_schema_bytes",
     "contract_from_legacy_schema_file",
     "contract_properties_from_spark_json",
     "iceberg_type_name",

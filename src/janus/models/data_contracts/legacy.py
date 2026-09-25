@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from janus.models.config.issues import ValidationIssue
 from janus.models.data_contracts.errors import ContractValidationError
-from janus.models.data_contracts.loader import PINNED_ODCS_API_VERSION, compute_schema_version
+from janus.models.data_contracts.loader import PINNED_ODCS_API_VERSION
 from janus.models.data_contracts.model import (
     ContractProperty,
     ContractSchema,
@@ -19,7 +20,6 @@ from janus.models.data_contracts.vocabulary import (
     contract_properties_from_spark_json,
     odcs_logical_type_for,
 )
-
 
 LEGACY_CONTRACT_STATUS = "draft"
 LEGACY_CONTRACT_VERSION = "0.0.0"
@@ -41,14 +41,37 @@ def contract_from_legacy_schema_file(
     domain: str,
     project_root: Path | None = None,
 ) -> DataContract:
-    """Read one legacy schema file and return the contract it describes.
+    """Read one legacy schema file and return the contract it describes."""
+    return contract_from_legacy_schema_bytes(
+        path.read_bytes(),
+        path,
+        source_id=source_id,
+        bronze_table=bronze_table,
+        domain=domain,
+        project_root=project_root,
+    )
+
+
+def contract_from_legacy_schema_bytes(
+    contract_bytes: bytes,
+    path: Path,
+    *,
+    source_id: str,
+    bronze_table: str,
+    domain: str,
+    project_root: Path | None = None,
+) -> DataContract:
+    """Convert legacy schema bytes a caller already holds into one synthetic contract.
 
     ``bronze_table`` names the schema, so the two entries that share one legacy file get
     one contract each, differing only in the table they describe while carrying the same
-    ``schema_version`` — the digest is of the file, not of the entry.
+    ``schema_version`` — the digest is of the file, not of the entry. Taking bytes rather
+    than re-reading ``path`` is what lets the registry snapshot convert both entries from
+    a single read; ``path`` is still required, because the contract id and every reported
+    issue name the file the bytes came from.
     """
     issues: list[ValidationIssue] = []
-    payload = _read_json(path, issues)
+    payload = _decode_json(contract_bytes, issues)
     properties = () if issues else _read_properties(payload, issues)
     if not properties and not issues:
         issues.append(ValidationIssue(_ROOT_PATH, "must declare at least one field"))
@@ -72,7 +95,7 @@ def contract_from_legacy_schema_file(
         janus=JanusContractOptions(
             compatibility=LEGACY_COMPATIBILITY, enforcement=LEGACY_ENFORCEMENT
         ),
-        schema_version=compute_schema_version(path),
+        schema_version=sha256(contract_bytes).hexdigest(),
     )
 
 
@@ -86,9 +109,9 @@ def legacy_contract_id(path: Path, project_root: Path | None = None) -> str:
     return f"legacy:{path.as_posix()}"
 
 
-def _read_json(path: Path, issues: list[ValidationIssue]) -> Any:
+def _decode_json(contract_bytes: bytes, issues: list[ValidationIssue]) -> Any:
     try:
-        return json.loads(path.read_bytes())
+        return json.loads(contract_bytes)
     except json.JSONDecodeError as exc:
         issues.append(ValidationIssue(_ROOT_PATH, f"must be valid JSON: {exc.msg}"))
         return None
@@ -218,6 +241,7 @@ __all__ = [
     "LEGACY_CONTRACT_STATUS",
     "LEGACY_CONTRACT_VERSION",
     "LEGACY_ENFORCEMENT",
+    "contract_from_legacy_schema_bytes",
     "contract_from_legacy_schema_file",
     "legacy_contract_id",
 ]
