@@ -8,9 +8,10 @@ pytest.importorskip("pyspark.sql")
 from pyspark.sql import SparkSession
 
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext
+from janus.models.data_contracts import contract_from_legacy_schema_file
 from janus.readers import SparkDatasetReader
 from janus.registry import load_registry
-from janus.schema_contracts import load_spark_schema_from_schema_path
+from janus.schema_contracts import spark_schema_from_contract
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 
@@ -124,7 +125,14 @@ def test_spark_dataset_reader_applies_explicit_schema_to_headerless_cnpj_csv(
         spark,
         extraction_result,
         format_name="csv",
-        schema=load_spark_schema_from_schema_path(Path(source_config.schema.path)),
+        schema=spark_schema_from_contract(
+            contract_from_legacy_schema_file(
+                Path(source_config.schema.path),
+                source_id=source_config.source_id,
+                bronze_table=source_config.outputs.bronze.path,
+                domain=source_config.domain,
+            )
+        ),
         options=source_config.spark.read_options,
     )
 

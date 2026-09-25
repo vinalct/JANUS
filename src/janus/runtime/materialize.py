@@ -66,6 +66,7 @@ class BronzeMaterializer:
 
         # Resolve the write intent exactly once per run
         run_intent = resolve_bronze_write_intent(plan)
+        contract_fields = _contract_log_fields(plan)
         # Keys the run wrote, accumulated across every batch so the bronze uniqueness
         # oracle covers rows from batches 1..n-1, not only the last one it validates.
         unique_fields = plan.source_config.quality.unique_fields
@@ -88,6 +89,7 @@ class BronzeMaterializer:
                 logger,
                 "spark_read_started",
                 artifact_count=len(batch_artifacts),
+                **contract_fields,
                 **batch_metadata,
             )
             handoff_format = batch_handoff.single_artifact_format()
@@ -156,6 +158,14 @@ class BronzeMaterializer:
         if run_keys is not None:
             run_keys = run_keys.distinct()
         return tuple(bronze_results), normalized_dataframe, run_keys
+
+
+def _contract_log_fields(plan: ExecutionPlan) -> dict[str, str]:
+    """Name the contract a read is shaped by, or nothing at all for an inferred source."""
+    contract = plan.data_contract
+    if contract is None:
+        return {}
+    return {"contract_id": contract.id, "schema_version": contract.schema_version}
 
 
 def _normalization_handoff_batches(

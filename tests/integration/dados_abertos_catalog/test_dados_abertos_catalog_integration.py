@@ -11,14 +11,16 @@ import yaml
 
 from janus.lineage import RunObserver
 from janus.models import RunContext, SourceConfig
+from janus.models.data_contracts import contract_from_legacy_schema_file
 from janus.normalizers import BaseNormalizer
-from janus.quality import QualityGate, load_expected_fields_from_schema_path
+from janus.quality import QualityGate
 from janus.readers import SparkDatasetReader
 from janus.registry import load_registry
 from janus.strategies.api import ApiResponse
 from janus.strategies.catalog import CatalogStrategy
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SparkDatasetWriter
+from tests.support.contracts import with_registry_contract
 from tests.support.spark_sessions import build_iceberg_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -107,7 +109,7 @@ def test_dados_abertos_catalog_source_contract_uses_generic_catalog_strategy():
     assert source_config.spark.input_format == "jsonl"
     assert source_config.outputs.bronze.format == "iceberg"
     assert source_config.outputs.bronze.path == "data/bronze/dados_abertos/catalog"
-    assert load_expected_fields_from_schema_path(schema_path) == SCHEMA_FIELDS
+    assert _declared_columns(source_config, schema_path) == SCHEMA_FIELDS
 
 
 def test_dados_abertos_catalog_extracts_catalog_entities_and_materializes_bronze(
@@ -137,7 +139,7 @@ def test_dados_abertos_catalog_extracts_catalog_entities_and_materializes_bronze
     )
     monkeypatch.setenv("DADOS_GOV_BR_API_TOKEN", "catalog-token")
 
-    plan = strategy.plan(source_config, run_context)
+    plan = with_registry_contract(strategy.plan(source_config, run_context))
     extraction_result = strategy.extract(plan)
     handoff = strategy.build_normalization_handoff(plan, extraction_result)
     metadata = extraction_result.metadata_as_dict()
@@ -372,3 +374,13 @@ def _storage_layout(project_root: Path) -> StorageLayout:
         },
         project_root,
     )
+
+
+def _declared_columns(source_config, schema_path: Path) -> tuple[str, ...]:
+    """The columns this entry declares, read the way the registry snapshot reads them."""
+    return contract_from_legacy_schema_file(
+        schema_path,
+        source_id=source_config.source_id,
+        bronze_table=source_config.outputs.bronze.path,
+        domain=source_config.domain,
+    ).column_names

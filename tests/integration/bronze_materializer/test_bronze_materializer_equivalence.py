@@ -16,6 +16,7 @@ from janus.scripts import ingest_raw_to_bronze
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.strategies.files import FileStrategy
 from janus.utils.storage import StorageLayout
+from tests.support.contracts import with_registry_contract
 from tests.support.spark_sessions import build_iceberg_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -110,7 +111,7 @@ def file_family_runs(spark, tmp_path_factory):
         sleeper=lambda seconds: None,
         clock=lambda: 0.0,
     )
-    plan = strategy.plan(source_config, run_context)
+    plan = with_registry_contract(strategy.plan(source_config, run_context))
     planned_run = PlannedRun(plan=plan, strategy=strategy)
 
     executed = SourceExecutor().execute(
@@ -186,7 +187,7 @@ def test_api_family_replay_produces_identical_bronze(spark, tmp_path, monkeypatc
     )
     monkeypatch.setenv("TRANSPARENCIA_API_TOKEN", "super-secret-token")
 
-    plan = strategy.plan(source_config, run_context)
+    plan = with_registry_contract(strategy.plan(source_config, run_context))
     planned_run = PlannedRun(plan=plan, strategy=strategy)
 
     executed = SourceExecutor().execute(

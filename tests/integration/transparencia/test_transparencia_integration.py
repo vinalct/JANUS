@@ -11,13 +11,15 @@ import yaml
 
 from janus.lineage import RunObserver
 from janus.models import RunContext, SourceConfig
+from janus.models.data_contracts import contract_from_legacy_schema_file
 from janus.normalizers import BaseNormalizer
-from janus.quality import QualityGate, load_expected_fields_from_schema_path
+from janus.quality import QualityGate
 from janus.readers import SparkDatasetReader
 from janus.registry import load_registry
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SparkDatasetWriter
+from tests.support.contracts import with_registry_contract
 from tests.support.spark_sessions import build_iceberg_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -79,7 +81,7 @@ def test_transparencia_source_contract_uses_safe_api_settings():
     assert source_config.extraction.mode == "full_refresh"
     assert source_config.extraction.checkpoint_strategy == "none"
     assert source_config.outputs.bronze.format == "iceberg"
-    assert load_expected_fields_from_schema_path(schema_path) == (
+    assert _declared_columns(source_config, schema_path) == (
         "qntPessoas",
         "qntVinculos",
         "skSituacao",
@@ -123,7 +125,7 @@ def test_transparencia_source_extracts_raw_pages_and_materializes_bronze_and_met
     )
     monkeypatch.setenv("TRANSPARENCIA_API_TOKEN", "super-secret-token")
 
-    plan = strategy.plan(source_config, run_context)
+    plan = with_registry_contract(strategy.plan(source_config, run_context))
     extraction_result = strategy.extract(plan)
 
     assert plan.notes == (
@@ -273,3 +275,13 @@ def _storage_layout(project_root: Path) -> StorageLayout:
         },
         project_root,
     )
+
+
+def _declared_columns(source_config, schema_path: Path) -> tuple[str, ...]:
+    """The columns this entry declares, read the way the registry snapshot reads them."""
+    return contract_from_legacy_schema_file(
+        schema_path,
+        source_id=source_config.source_id,
+        bronze_table=source_config.outputs.bronze.path,
+        domain=source_config.domain,
+    ).column_names

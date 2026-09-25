@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from janus.models import ExecutionPlan
+from janus.registry.contracts import load_contract_snapshot
+
 MINIMAL_CONTRACT_FIXTURE = (
     Path(__file__).resolve().parents[1] / "fixtures" / "contracts" / "minimal_contract.yaml"
 )
@@ -24,3 +27,14 @@ def write_minimal_contract(project_root: Path) -> Path:
 def minimal_contract_yaml() -> str:
     """The contract's text, for a builder that renders a project as strings."""
     return MINIMAL_CONTRACT_FIXTURE.read_text(encoding="utf-8")
+
+
+def with_registry_contract(plan: ExecutionPlan) -> ExecutionPlan:
+    """Give a hand-built plan the contract the planner would have attached to it."""
+    source_config = plan.source_config
+    snapshot = load_contract_snapshot(
+        (source_config,),
+        project_root=plan.run_context.project_root,
+        sources_dir=source_config.config_path.parent,
+    )
+    return plan.with_data_contract(snapshot.get(source_config.source_id))
