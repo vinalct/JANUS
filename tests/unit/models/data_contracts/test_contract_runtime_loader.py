@@ -22,6 +22,7 @@ from janus.models.data_contracts import (
     load_data_contract,
 )
 from janus.models.data_contracts.loader import PINNED_ODCS_API_VERSION
+from janus.models.data_contracts.vocabulary import iceberg_type_name
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 CONTRACT_FIXTURES = PROJECT_ROOT / "tests" / "fixtures" / "contracts"
@@ -276,10 +277,133 @@ def test_invalid_yaml_is_reported_as_a_contract_issue(tmp_path):
     assert "must be valid YAML" in exc_info.value.issues[0].message
 
 
-@pytest.mark.xfail(strict=True, reason="owns the closed type vocabulary")
-def test_unknown_physical_type_is_rejected_by_the_future_vocabulary(tmp_path):
+def test_unknown_physical_type_is_rejected_by_the_closed_vocabulary(tmp_path):
     data = _minimal_mapping()
     data["schema"][0]["properties"][0]["physicalType"] = "not-a-type"
 
-    with pytest.raises(ContractValidationError):
+    with pytest.raises(ContractValidationError) as exc_info:
         load_data_contract(_write_contract(tmp_path, data))
+
+    assert [issue.path for issue in exc_info.value.issues] == [
+        "schema[0].properties[0].physicalType"
+    ]
+    assert "unknown physical type" in exc_info.value.issues[0].message
+    assert "timestamptz" in exc_info.value.issues[0].message
+
+
+def test_a_declared_logical_type_must_agree_with_its_physical_type(tmp_path):
+    data = _minimal_mapping()
+    data["schema"][0]["properties"][0]["physicalType"] = "long"
+
+    with pytest.raises(ContractValidationError) as exc_info:
+        load_data_contract(_write_contract(tmp_path, data))
+
+    assert [(issue.path, issue.message) for issue in exc_info.value.issues] == [
+        (
+            "schema[0].properties[0].logicalType",
+            "must be 'integer' for physicalType 'long'",
+        )
+    ]
+
+
+def test_a_non_string_logical_type_reports_one_problem_once(tmp_path):
+    data = _minimal_mapping()
+    data["schema"][0]["properties"][0]["logicalType"] = 7
+
+    with pytest.raises(ContractValidationError) as exc_info:
+        load_data_contract(_write_contract(tmp_path, data))
+
+    assert [(issue.path, issue.message) for issue in exc_info.value.issues] == [
+        ("schema[0].properties[0].logicalType", "must be a string")
+    ]
+
+
+def test_an_omitted_logical_type_is_derived_from_the_physical_type(tmp_path):
+    data = _minimal_mapping()
+    prop = data["schema"][0]["properties"][0]
+    prop.pop("logicalType")
+    prop["physicalType"] = "decimal(18,2)"
+
+    contract = load_data_contract(_write_contract(tmp_path, data))
+
+    assert contract.schema.properties[0].physical_type == "decimal(18,2)"
+    assert contract.schema.properties[0].logical_type == "number"
+
+
+def test_a_malformed_decimal_spelling_is_rejected(tmp_path):
+    data = _minimal_mapping()
+    data["schema"][0]["properties"][0]["physicalType"] = "decimal"
+
+    with pytest.raises(ContractValidationError) as exc_info:
+        load_data_contract(_write_contract(tmp_path, data))
+
+    assert [issue.path for issue in exc_info.value.issues] == [
+        "schema[0].properties[0].physicalType"
+    ]
+
+
+def test_a_map_reads_its_odcs_key_and_value_block(tmp_path):
+    data = _minimal_mapping()
+    data["schema"][0]["properties"].append(
+        {
+            "name": "attributes",
+            "logicalType": "object",
+            "physicalType": "map",
+            "map": {
+                "key": {
+                    "name": "key",
+                    "logicalType": "string",
+                    "physicalType": "string",
+                    "required": True,
+                },
+                "value": {
+                    "name": "value",
+                    "logicalType": "integer",
+                    "physicalType": "long",
+                },
+            },
+        }
+    )
+
+    contract = load_data_contract(_write_contract(tmp_path, data))
+    attributes = contract.schema.properties[1]
+
+    assert attributes.physical_type == "map"
+    assert attributes.keys is not None and attributes.keys.physical_type == "string"
+    assert attributes.keys.required is True
+    assert attributes.values is not None and attributes.values.physical_type == "long"
+    assert iceberg_type_name(attributes) == "map<string, long>"
+
+
+def test_a_map_without_its_key_and_value_block_is_an_issue(tmp_path):
+    data = _minimal_mapping()
+    data["schema"][0]["properties"].append(
+        {"name": "attributes", "logicalType": "object", "physicalType": "map"}
+    )
+
+    with pytest.raises(ContractValidationError) as exc_info:
+        load_data_contract(_write_contract(tmp_path, data))
+
+    assert [(issue.path, issue.message) for issue in exc_info.value.issues] == [
+        ("schema[0].properties[1].map", "is required for physicalType 'map'")
+    ]
+
+
+def test_a_nested_shape_belonging_to_another_container_is_rejected(tmp_path):
+    data = _minimal_mapping()
+    data["schema"][0]["properties"].append(
+        {
+            "name": "tags",
+            "logicalType": "array",
+            "physicalType": "array",
+            "items": {"name": "element", "logicalType": "string", "physicalType": "string"},
+            "map": {"key": {}, "value": {}},
+        }
+    )
+
+    with pytest.raises(ContractValidationError) as exc_info:
+        load_data_contract(_write_contract(tmp_path, data))
+
+    assert [(issue.path, issue.message) for issue in exc_info.value.issues] == [
+        ("schema[0].properties[1].map", "is not allowed for physicalType 'array'")
+    ]

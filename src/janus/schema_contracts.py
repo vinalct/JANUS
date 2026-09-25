@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from janus.models import ExecutionPlan
+from janus.models.data_contracts import (
+    ContractProperty,
+    DataContract,
+    contract_properties_from_spark_json,
+    spark_struct_json,
+)
 from janus.utils.environment import resolve_project_path
 
 
@@ -40,6 +46,21 @@ def resolve_spark_schema_for_plan(plan: ExecutionPlan) -> Any | None:
     if not schema_path.exists():
         raise FileNotFoundError(f"Configured schema path does not exist: {schema_path}")
     return load_spark_schema_from_schema_path(schema_path)
+
+
+def spark_schema_from_contract(contract: DataContract) -> Any:
+    """Build the Spark schema for one contract — the single generator in `src`."""
+    struct_json = spark_struct_json(contract.schema.properties)
+    try:
+        from pyspark.sql.types import StructType
+    except ImportError:
+        return _FieldNameSchema(contract.column_names)
+    return StructType.fromJson(struct_json)
+
+
+def contract_properties_from_spark_schema(struct_type: Any) -> tuple[ContractProperty, ...]:
+    """Invert :func:`spark_schema_from_contract` for the drafting CLI."""
+    return contract_properties_from_spark_json(struct_type.jsonValue())
 
 
 def load_spark_schema_from_schema_path(path: Path) -> Any:
@@ -122,8 +143,10 @@ def _normalize_field_names(field_names: Sequence[str]) -> tuple[str, ...]:
 
 
 __all__ = [
+    "contract_properties_from_spark_schema",
     "load_expected_fields_from_schema_path",
     "load_spark_schema_from_schema_path",
     "resolve_schema_path_for_plan",
     "resolve_spark_schema_for_plan",
+    "spark_schema_from_contract",
 ]

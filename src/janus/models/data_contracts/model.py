@@ -50,6 +50,8 @@ class ContractProperty:
     source_format: str | None = None
     properties: tuple[ContractProperty, ...] = ()
     items: ContractProperty | None = None
+    keys: ContractProperty | None = None
+    values: ContractProperty | None = None
 
     def __post_init__(self) -> None:
         _validate_written_name(self.name, "property name")
@@ -58,20 +60,31 @@ class ContractProperty:
         if not self.logical_type.strip():
             raise ValueError("logical_type must not be empty")
         _validate_unique_property_names(self.properties, self.name)
+        self._validate_nested_declarations()
 
+    def _validate_nested_declarations(self) -> None:
+        """One nested shape per container type; every other type declares none of them."""
         if self.physical_type == "struct":
             if not self.properties:
                 raise ValueError("struct properties must contain at least one property")
-            if self.items is not None:
-                raise ValueError("struct properties must not declare items")
+            self._reject_nested(("items", "keys", "values"))
         elif self.physical_type == "array":
             if self.items is None:
                 raise ValueError("array properties must declare items")
-            if self.properties:
-                raise ValueError("array properties must not declare nested properties")
-        elif self.properties or self.items is not None:
+            self._reject_nested(("properties", "keys", "values"))
+        elif self.physical_type == "map":
+            if self.keys is None or self.values is None:
+                raise ValueError("map properties must declare a key and a value")
+            self._reject_nested(("properties", "items"))
+        else:
+            self._reject_nested(("properties", "items", "keys", "values"))
+
+    def _reject_nested(self, field_names: tuple[str, ...]) -> None:
+        declared = [name for name in field_names if getattr(self, name)]
+        if declared:
             raise ValueError(
-                f"{self.physical_type} properties must not declare properties or items"
+                f"{self.physical_type} properties must not declare "
+                + " or ".join(declared)
             )
 
 

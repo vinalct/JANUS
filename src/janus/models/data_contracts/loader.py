@@ -30,11 +30,26 @@ from janus.models.data_contracts.model import (
     JanusContractOptions,
     _is_semver,
 )
+from janus.models.data_contracts.vocabulary import (
+    VocabularyError,
+    odcs_logical_type_for,
+    parse_physical_type,
+)
 
 PINNED_ODCS_API_VERSION = "v3.2.0"
 _ALLOWED_JANUS_PROPERTIES = frozenset(
     {"janus.compatibility", "janus.draftedFrom", "janus.enforcement"}
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _Nested:
+    """The nested declarations one property carries, at most one shape per container type."""
+
+    properties: tuple[ContractProperty, ...] = ()
+    items: ContractProperty | None = None
+    keys: ContractProperty | None = None
+    values: ContractProperty | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,12 +283,15 @@ def _read_property(
 
     name = _read_property_name(value, path, issues)
     physical_type = _require_string(value, "physicalType", issues, path)
-    logical_type = _optional_string(value, "logicalType", issues, path) or physical_type
+    vocabulary_name = _read_vocabulary_name(physical_type, path, issues)
+    logical_type = _read_logical_type(
+        value, physical_type, vocabulary_name, path, issues
+    )
     custom = _read_custom_properties(
         value.get("customProperties"), f"{path}.customProperties", issues
     )
-    properties, items = _read_nested_declarations(
-        value, physical_type, path, issues
+    nested = _read_nested_declarations(
+        value, physical_type, vocabulary_name, path, issues
     )
 
     business_name = _optional_string(value, "businessName", issues, path)
@@ -296,9 +314,48 @@ def _read_property(
         classification=classification,
         source_field=custom.get("sourceField"),
         source_format=custom.get("sourceFormat"),
-        properties=properties,
-        items=items,
+        properties=nested.properties,
+        items=nested.items,
+        keys=nested.keys,
+        values=nested.values,
     )
+
+
+def _read_vocabulary_name(
+    physical_type: str, path: str, issues: list[ValidationIssue]
+) -> str | None:
+    """Resolve one declared ``physicalType`` through the closed vocabulary."""
+    if not physical_type:
+        return None
+    try:
+        return parse_physical_type(physical_type).name
+    except VocabularyError as exc:
+        issues.append(ValidationIssue(f"{path}.physicalType", str(exc)))
+        return None
+
+
+def _read_logical_type(
+    data: Mapping[str, Any],
+    physical_type: str,
+    vocabulary_name: str | None,
+    path: str,
+    issues: list[ValidationIssue],
+) -> str:
+    """The ODCS logical type for one property, derived from its physical type."""
+    declared = _optional_string(data, "logicalType", issues, path)
+    if vocabulary_name is None:
+        return declared or physical_type
+    expected = odcs_logical_type_for(physical_type)
+    # An empty ``declared`` already carries its own issue from ``_optional_string``, so
+    # comparing it here would report one problem twice.
+    if declared and declared != expected:
+        issues.append(
+            ValidationIssue(
+                f"{path}.logicalType",
+                f"must be '{expected}' for physicalType '{physical_type}'",
+            )
+        )
+    return expected
 
 
 def _read_property_name(
@@ -324,71 +381,81 @@ def _read_property_name(
 def _read_nested_declarations(
     data: Mapping[str, Any],
     physical_type: str,
+    vocabulary_name: str | None,
     path: str,
     issues: list[ValidationIssue],
-) -> tuple[tuple[ContractProperty, ...], ContractProperty | None]:
-    has_properties = "properties" in data
-    has_items = "items" in data
-    properties: tuple[ContractProperty, ...] = ()
-    items: ContractProperty | None = None
-
-    if physical_type == "struct":
-        properties = _read_properties(
-            data.get("properties"), f"{path}.properties", issues
-        )
-        if has_items:
-            issues.append(
-                ValidationIssue(
-                    f"{path}.items", "is not allowed for physicalType 'struct'"
-                )
+) -> _Nested:
+    """Read the one nested shape a container type declares and refuse the others."""
+    if vocabulary_name is None:
+        return _Nested()
+    if vocabulary_name == "struct":
+        _reject_nested_keys(data, ("items", "map"), physical_type, path, issues)
+        return _Nested(
+            properties=_read_properties(
+                data.get("properties"), f"{path}.properties", issues
             )
-    elif physical_type == "array":
-        items = _read_array_item(data.get("items"), f"{path}.items", issues)
-        if has_properties:
-            issues.append(
-                ValidationIssue(
-                    f"{path}.properties", "is not allowed for physicalType 'array'"
-                )
-            )
-    else:
-        _reject_scalar_nested_declarations(
-            has_properties, has_items, physical_type, path, issues
         )
-    return properties, items
+    if vocabulary_name == "array":
+        _reject_nested_keys(data, ("properties", "map"), physical_type, path, issues)
+        return _Nested(
+            items=_read_required_child(
+                data.get("items"), f"{path}.items", physical_type, issues
+            )
+        )
+    if vocabulary_name == "map":
+        _reject_nested_keys(data, ("properties", "items"), physical_type, path, issues)
+        return _read_map_children(data.get("map"), f"{path}.map", issues)
+
+    _reject_nested_keys(
+        data, ("properties", "items", "map"), physical_type, path, issues
+    )
+    return _Nested()
 
 
-def _read_array_item(
+def _read_map_children(
     value: Any, path: str, issues: list[ValidationIssue]
+) -> _Nested:
+    """Read the ODCS ``map`` block, whose key and value are properties in their own right."""
+    if value is None:
+        issues.append(ValidationIssue(path, "is required for physicalType 'map'"))
+        return _Nested()
+    if not isinstance(value, Mapping):
+        issues.append(ValidationIssue(path, "must be a mapping"))
+        return _Nested()
+    return _Nested(
+        keys=_read_required_child(value.get("key"), f"{path}.key", "map", issues),
+        values=_read_required_child(
+            value.get("value"), f"{path}.value", "map", issues
+        ),
+    )
+
+
+def _read_required_child(
+    value: Any, path: str, physical_type: str, issues: list[ValidationIssue]
 ) -> ContractProperty | None:
     if value is None:
         issues.append(
-            ValidationIssue(path, "is required for physicalType 'array'")
+            ValidationIssue(path, f"is required for physicalType '{physical_type}'")
         )
         return None
     return _read_property(value, path, issues)
 
 
-def _reject_scalar_nested_declarations(
-    has_properties: bool,
-    has_items: bool,
+def _reject_nested_keys(
+    data: Mapping[str, Any],
+    field_names: tuple[str, ...],
     physical_type: str,
     path: str,
     issues: list[ValidationIssue],
 ) -> None:
-    if has_properties:
-        issues.append(
-            ValidationIssue(
-                f"{path}.properties",
-                f"is not allowed for physicalType '{physical_type}'",
+    for field_name in field_names:
+        if field_name in data:
+            issues.append(
+                ValidationIssue(
+                    f"{path}.{field_name}",
+                    f"is not allowed for physicalType '{physical_type}'",
+                )
             )
-        )
-    if has_items:
-        issues.append(
-            ValidationIssue(
-                f"{path}.items",
-                f"is not allowed for physicalType '{physical_type}'",
-            )
-        )
 
 
 def _read_custom_properties(
