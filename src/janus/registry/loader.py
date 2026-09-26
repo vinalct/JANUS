@@ -97,13 +97,13 @@ class SourceRegistry:
         policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
         strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
     ) -> Self:
-        """Load app settings, discover source YAML files, and return the typed registry.
+        """Load app settings, discover sources, and return one validated registry snapshot.
 
         ``policy`` and ``strategy_registry`` are load-time inputs, forwarded untouched to
-        every ``SourceConfig.from_mapping`` call this discovery makes. Neither is stored on
-        the returned registry: which policy validated a load is lineage, not registry state,
-        and a field would change ``__eq__`` and ``repr`` for every consumer to record
-        something nobody reads afterwards.
+        every ``SourceConfig.from_mapping`` call. The policy also checks each loaded contract
+        after the snapshot is read. Neither input is stored on the returned registry: which
+        policy validated a load is lineage, not registry state, and a field would change
+        ``__eq__`` and ``repr`` for every consumer to record something nobody reads afterwards.
 
         Graph validation happens last, in ``__post_init__``: after every individual config
         is typed and after duplicate ids are rejected, because a graph over configs that do
@@ -152,10 +152,12 @@ class SourceRegistry:
             app_config=app_config,
             sources=tuple(sources),
             locations=tuple(locations),
-            contracts=load_contract_snapshot(
+            contracts=_load_declared_contracts(
                 sources,
+                locations=locations,
                 project_root=resolved_project_root,
                 sources_dir=sources_dir,
+                policy=policy,
             ),
         )
 
@@ -222,6 +224,39 @@ def load_registry(
         project_root,
         policy=policy,
         strategy_registry=strategy_registry,
+    )
+
+
+def _load_declared_contracts(
+    sources: Iterable[SourceConfig],
+    *,
+    locations: Iterable[SourceLocation],
+    project_root: Path,
+    sources_dir: Path,
+    policy: ValidationPolicy,
+) -> dict[str, DataContract]:
+    """Load one contract snapshot and consult phase policy once for every source."""
+    entries_by_source = {location.source_id: location.entry for location in locations}
+
+    def validate(source: SourceConfig, contract: DataContract | None) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        policy.validate_schema_declaration(
+            enabled=source.enabled,
+            contract_status=contract.status if contract is not None else None,
+            issues=issues,
+        )
+        entry = entries_by_source[source.source_id]
+        if entry is None:
+            return issues
+        return [
+            ValidationIssue(f"{entry}.{issue.path}", issue.message) for issue in issues
+        ]
+
+    return load_contract_snapshot(
+        sources,
+        project_root=project_root,
+        sources_dir=sources_dir,
+        validate_contract=validate,
     )
 
 

@@ -10,10 +10,11 @@ import pytest
 import yaml
 
 from janus.lineage import compute_config_version
-from janus.models.config.policy import DEFAULT_VALIDATION_POLICY
+from janus.models.config.policy import DEFAULT_VALIDATION_POLICY, PhaseValidationPolicy
 from janus.models.config.strategy_registry import STRATEGY_REGISTRY
 from janus.models.source_config import SourceConfig, SourceConfigValidationError
 from janus.registry import load_registry
+from tests.support.contracts import minimal_contract_yaml
 
 CONFIG_PATH = Path("conf/sources/example/default_policy_parity.yaml")
 
@@ -82,6 +83,27 @@ def _without(field_name: str, **overrides: Any) -> dict[str, Any]:
     mapping = _base_mapping(**overrides)
     del mapping[field_name]
     return mapping
+
+
+def _write_project_with_contract_status(
+    project_root: Path, mapping: dict[str, Any], *, status: str
+) -> Path:
+    sources_dir = project_root / "conf/sources/example"
+    sources_dir.mkdir(parents=True)
+    (project_root / "conf/app.yaml").write_text(
+        'registry:\n  sources_dir: conf/sources\n  file_pattern: "*.yaml"\n',
+        encoding="utf-8",
+    )
+    contract_path = project_root / "conf/contracts/example/parity.yaml"
+    contract_path.parent.mkdir(parents=True)
+    contract_path.write_text(
+        minimal_contract_yaml().replace("status: active", f"status: {status}"),
+        encoding="utf-8",
+    )
+    mapping["schema"] = {"contract": "conf/contracts/example/parity.yaml"}
+    source_path = sources_dir / "source.yaml"
+    source_path.write_text(yaml.safe_dump(mapping, sort_keys=False), encoding="utf-8")
+    return source_path
 
 
 # ── the differential ─────────────────────────────────────────────────────────
@@ -166,6 +188,61 @@ BROKEN_CASES: dict[str, tuple[dict[str, Any], str]] = {
         "- extraction.mode: must be one of: full_refresh, incremental, snapshot",
     ),
 }
+
+
+def test_loader_contract_policy_error_is_rendered_after_mapping_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The loader consults contract status only after ``from_mapping`` returns cleanly.
+
+    The existing ``several_at_once`` differential continues to pin the order of the four
+    mapping consultations. This loader-only case pins that the fifth consultation follows
+    successful mapping validation and renders its own collected issue.
+    """
+    source_path = _write_project_with_contract_status(
+        tmp_path, _base_mapping(), status="draft"
+    )
+    calls: list[str] = []
+    from_mapping = SourceConfig.from_mapping
+    validate_contract = PhaseValidationPolicy.validate_schema_declaration
+
+    def record_mapping(mapping, config_path, **kwargs):
+        config = from_mapping(mapping, config_path, **kwargs)
+        calls.append("from_mapping")
+        return config
+
+    def record_contract_validation(
+        self, *, enabled: bool, contract_status: str | None, issues
+    ) -> None:
+        calls.append("validate_schema_declaration")
+        validate_contract(
+            self,
+            enabled=enabled,
+            contract_status=contract_status,
+            issues=issues,
+        )
+
+    monkeypatch.setattr(SourceConfig, "from_mapping", staticmethod(record_mapping))
+    monkeypatch.setattr(
+        PhaseValidationPolicy, "validate_schema_declaration", record_contract_validation
+    )
+
+    with pytest.raises(SourceConfigValidationError) as exc_info:
+        load_registry(tmp_path)
+
+    assert calls == ["from_mapping", "validate_schema_declaration"]
+    assert [(issue.path, issue.message) for issue in exc_info.value.issues] == [
+        (
+            "schema.contract",
+            "must reference a contract with status 'active' for an enabled source "
+            "in phase 1 (found 'draft')",
+        )
+    ]
+    assert str(exc_info.value) == (
+        f"Invalid source config: {source_path}\n"
+        "- schema.contract: must reference a contract with status 'active' for an "
+        "enabled source in phase 1 (found 'draft')"
+    )
 
 
 @pytest.mark.parametrize("case", sorted(BROKEN_CASES))

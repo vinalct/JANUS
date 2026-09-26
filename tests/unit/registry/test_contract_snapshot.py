@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,11 +16,14 @@ from test_source_registry import (
     _valid_source_yaml,
 )
 
+from janus.models.config.policy import DEFAULT_VALIDATION_POLICY
 from janus.models.data_contracts import DataContract
 from janus.models.source_config import SourceConfigValidationError
 from janus.planner import Planner, PlanningRequest
 from janus.registry import load_registry
 from tests.support.contracts import DECLARED_CONTRACT_PATH, minimal_contract_yaml
+
+LEGACY_POLICY = replace(DEFAULT_VALIDATION_POLICY, require_active_contract=False)
 
 LEGACY_SCHEMA_PATH = "conf/schemas/example/legacy_schema.json"
 LEGACY_SCHEMA = {
@@ -90,7 +94,7 @@ def test_a_legacy_entry_yields_a_synthetic_draft_contract(tmp_path: Path) -> Non
     _write_legacy_schema(project_root)
 
     with pytest.warns(DeprecationWarning):
-        registry = load_registry(project_root)
+        registry = load_registry(project_root, policy=LEGACY_POLICY)
 
     contract = registry.contract_for("legacy_source")
     assert contract.id == f"legacy:{LEGACY_SCHEMA_PATH}"
@@ -125,7 +129,7 @@ def test_two_legacy_entries_sharing_one_file_get_their_own_bronze_table(
     _write_legacy_schema(project_root)
 
     with pytest.warns(DeprecationWarning):
-        registry = load_registry(project_root)
+        registry = load_registry(project_root, policy=LEGACY_POLICY)
 
     first = registry.contract_for("legacy_first")
     second = registry.contract_for("legacy_second")
@@ -148,7 +152,7 @@ def test_an_inferred_entry_contributes_no_contract(tmp_path: Path) -> None:
     )
 
     with pytest.warns(DeprecationWarning):
-        registry = load_registry(project_root)
+        registry = load_registry(project_root, policy=LEGACY_POLICY)
 
     assert registry.contract_for("inferred") is None
     assert "inferred" not in registry.contracts
@@ -224,7 +228,7 @@ def test_a_shared_legacy_file_is_read_exactly_once_per_load(
     counted_reads.clear()
 
     with pytest.warns(DeprecationWarning):
-        load_registry(project_root)
+        load_registry(project_root, policy=LEGACY_POLICY)
 
     assert counted_reads.count("legacy_schema.json") == 1
 
@@ -242,7 +246,7 @@ def test_deprecations_are_warned_once_per_config_path(tmp_path: Path) -> None:
     )
 
     with pytest.warns(DeprecationWarning) as records:
-        load_registry(project_root)
+        load_registry(project_root, policy=LEGACY_POLICY)
 
     assert len(records) == 2
 
@@ -310,11 +314,15 @@ def test_nothing_found_is_reported_against_the_runtime_path(tmp_path: Path) -> N
     with pytest.raises(SourceConfigValidationError) as exc_info:
         load_registry(project_root)
 
+    assert [issue.path for issue in exc_info.value.issues] == [
+        "missing.schema.contract",
+        "schema.contract",
+    ]
     issue = exc_info.value.issues[0]
-    assert issue.path == "missing.schema.contract"
     assert "conf/contracts/example/absent.yaml" in issue.message
     assert "the file does not exist" in issue.message
     assert str(project_root / "conf" / "contracts" / "example" / "absent.yaml") in issue.message
+    assert exc_info.value.issues[1].message.endswith("(no contract declared)")
 
 
 # ── failures ──────────────────────────────────────────────────────────────────
@@ -333,10 +341,15 @@ def test_a_malformed_contract_carries_the_loaders_issues(tmp_path: Path) -> None
 
     sources_dir = project_root / "conf" / "sources"
     assert exc_info.value.config_path == sources_dir / "example" / "source.yaml"
+    assert [issue.path for issue in exc_info.value.issues] == [
+        "broken.schema.contract",
+        "schema.contract",
+    ]
     message = exc_info.value.issues[0].message
     assert "could not load" in message
     assert "id: is required" in message
     assert "schema: is required" in message
+    assert exc_info.value.issues[1].message.endswith("(no contract declared)")
 
 
 def test_two_sources_with_two_broken_contracts_raise_once_listing_both(
@@ -361,7 +374,9 @@ def test_two_sources_with_two_broken_contracts_raise_once_listing_both(
     assert exc_info.value.config_path == project_root / "conf" / "sources"
     assert [issue.path for issue in exc_info.value.issues] == [
         "first.schema.contract",
+        "schema.contract",
         "second.schema.contract",
+        "schema.contract",
     ]
     assert "absent_a.yaml" in str(exc_info.value)
     assert "absent_b.yaml" in str(exc_info.value)
@@ -386,9 +401,12 @@ def test_a_broken_legacy_file_is_reported_under_the_field_it_declared(
     with pytest.raises(SourceConfigValidationError) as exc_info:
         load_registry(project_root)
 
-    issue = exc_info.value.issues[0]
-    assert issue.path == "legacy_source.schema.path"
-    assert "must be valid JSON" in issue.message
+    assert [issue.path for issue in exc_info.value.issues] == [
+        "legacy_source.schema.path",
+        "schema.contract",
+    ]
+    assert "must be valid JSON" in exc_info.value.issues[0].message
+    assert exc_info.value.issues[1].message.endswith("(no contract declared)")
 
 
 # ── plan carriage ─────────────────────────────────────────────────────────────
@@ -441,7 +459,7 @@ def test_the_planning_summary_carries_a_null_contract_for_an_inferred_source(
         tmp_path, {"example/source.yaml": _declaring("inferred", "schema:\n  mode: infer\n")}
     )
     with pytest.warns(DeprecationWarning):
-        registry = load_registry(project_root)
+        registry = load_registry(project_root, policy=LEGACY_POLICY)
 
     planned = Planner().plan(
         PlanningRequest.create(

@@ -1,0 +1,45 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: orchestration.C
+name: Orchestration independent events
+version: 1.0.0
+status: active
+domain: independent
+description:
+  purpose: Independent event rows returned for a requested date window.
+tags: [example, orchestration, independent]
+team:
+  - username: janus-example
+    role: owner
+schema:
+  - name: orchestration_example.independent_c
+    physicalType: table
+    properties:
+      - name: event_id
+        businessName: Event id
+        description: Stable identifier for the event in the requested window.
+        logicalType: string
+        physicalType: string
+        required: true
+        unique: true
+        primaryKey: true
+        classification: public
+      - name: window_start
+        businessName: Window start
+        description: Start date of the requested window, returned as a string.
+        logicalType: string
+        physicalType: string
+        required: true
+        classification: public
+      - name: window_end
+        businessName: Window end
+        description: End date of the requested window, returned as a string.
+        logicalType: string
+        physicalType: string
+        required: true
+        classification: public
+customProperties:
+  - property: janus.compatibility
+    value: additive
+  - property: janus.enforcement
+    value: lenient

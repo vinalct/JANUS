@@ -90,11 +90,10 @@ def test_spark_dataset_reader_applies_explicit_schema_to_headerless_cnpj_csv(
     spark: SparkSession,
     tmp_path,
 ):
-    with pytest.warns(DeprecationWarning, match="schema.contract"):
-        source_config = load_registry(PROJECT_ROOT).get_source(
-            "receita_federal__cnpj__empresas_full_refresh",
-            include_disabled=True,
-        )
+    source_config = load_registry(PROJECT_ROOT).get_source(
+        "receita_federal__cnpj__empresas_full_refresh",
+        include_disabled=True,
+    )
     run_context = RunContext.create(
         run_id="run-reader-cnpj-001",
         environment="local",

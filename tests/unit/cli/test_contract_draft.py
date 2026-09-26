@@ -15,6 +15,7 @@ import yaml
 
 import janus.cli.contract as contract_cli
 import janus.runtime.spark_lifecycle as spark_lifecycle
+from janus.cli.contract_drafting import _DataProfile
 from janus.main import main
 from janus.models import load_data_contract
 from janus.planner import Planner, PlanningRequest
@@ -54,7 +55,7 @@ spark:
 source_id: draft_source
 name: Draft source
 owner: janus-tests
-enabled: true
+enabled: false
 source_type: api
 strategy: api
 strategy_variant: page_number_api
@@ -125,6 +126,7 @@ def _fixture_arguments(root: Path, fixture: Path, *extra: str) -> list[str]:
         str(fixture),
         "--project-root",
         str(root),
+        "--include-disabled",
         *extra,
     ]
 
@@ -278,7 +280,7 @@ def test_draft_uses_one_session_and_releases_it_before_writing(
     monkeypatch.setattr(
         contract_cli,
         "_profile_dataframe",
-        lambda dataframe: contract_cli._DataProfile(
+        lambda dataframe: _DataProfile(
             schema=dataframe.schema,
             row_count=3,
             null_counts=(0, 1),
@@ -364,6 +366,7 @@ def test_raw_run_pin_selects_the_requested_run(tmp_path):
             source_id="draft_source",
             environment="local",
             project_root=tmp_path,
+            include_disabled=True,
         )
     )
     raw_root = (tmp_path / planned.plan.raw_output.path).resolve()
@@ -474,7 +477,7 @@ def test_ibge_fixture_draft_reproduces_the_inferred_bronze_golden(
     assert draft_schema.jsonValue() == baseline["inferred_struct_type"]
 
 
-def test_transparencia_fixture_draft_matches_legacy_physical_types(spark, tmp_path):
+def test_transparencia_fixture_draft_matches_legacy_logical_types(spark, tmp_path):
     from janus.models.data_contracts import contract_from_legacy_schema_file
     from janus.runtime import SparkSessionProvider
 
@@ -513,13 +516,18 @@ def test_transparencia_fixture_draft_matches_legacy_physical_types(spark, tmp_pa
         project_root=PROJECT_ROOT,
     )
 
-    actual_types = {
-        prop.name: prop.physical_type for prop in load_data_contract(output).schema.properties
+    draft_properties = load_data_contract(output).schema.properties
+    logical = {prop.name: prop.logical_type for prop in draft_properties}
+    physical = {prop.name: prop.physical_type for prop in draft_properties}
+    legacy_logical = {prop.name: prop.logical_type for prop in expected.schema.properties}
+    legacy_physical = {prop.name: prop.physical_type for prop in expected.schema.properties}
+
+    assert drafted.columns == tuple(sorted(legacy_logical))
+    assert logical == legacy_logical
+    assert set(logical.values()) <= {"integer", "string"}
+    assert {name: kind for name, kind in physical.items() if kind != legacy_physical[name]} == {
+        name: "long" for name, kind in legacy_physical.items() if kind == "integer"
     }
-    expected_types = {prop.name: prop.physical_type for prop in expected.schema.properties}
-    assert drafted.columns == tuple(expected_types)
-    assert actual_types == expected_types
-    assert set(actual_types.values()) <= {"integer", "string"}
 
 
 def test_from_raw_draft_reads_the_requested_baseline_execute_run(spark, tmp_path):

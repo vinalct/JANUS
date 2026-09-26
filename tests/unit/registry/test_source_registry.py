@@ -1,7 +1,9 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from janus.models.config.policy import DEFAULT_VALIDATION_POLICY
 from janus.models.source_config import (
     CombinedRequestInputsConfig,
     DateWindowRequestInputsConfig,
@@ -13,6 +15,7 @@ from janus.registry import SourceNotFoundError, load_registry
 from tests.support.contracts import DECLARED_CONTRACT_PATH, write_minimal_contract
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+LEGACY_POLICY = replace(DEFAULT_VALIDATION_POLICY, require_active_contract=False)
 
 
 def test_checked_in_registry_lists_enabled_sources():
@@ -567,7 +570,7 @@ def test_a_legacy_declaration_warns_once_per_config_file(tmp_path):
     )
 
     with pytest.warns(DeprecationWarning) as records:
-        registry = load_registry(project_root)
+        registry = load_registry(project_root, policy=LEGACY_POLICY)
 
     assert len(records) == 1
     assert str(records[0].message) == (

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,12 +23,15 @@ CONTRACT_FIELD_PATH = "schema.contract"
 #: Field path reported when a legacy schema file cannot be converted.
 LEGACY_FIELD_PATH = "schema.path"
 
+ContractValidation = Callable[[SourceConfig, DataContract | None], list[ValidationIssue]]
+
 
 def load_contract_snapshot(
     sources: Iterable[SourceConfig],
     *,
     project_root: Path,
     sources_dir: Path,
+    validate_contract: ContractValidation | None = None,
 ) -> dict[str, DataContract]:
     """Return the contract every source declared, or raise listing each that failed.
 
@@ -42,13 +45,18 @@ def load_contract_snapshot(
     failures: list[tuple[Path, ValidationIssue]] = []
 
     for source in sources:
+        contract: DataContract | None = None
         try:
             contract = reader.contract_for(source)
         except (ContractValidationError, OSError) as exc:
             failures.append((source.config_path, _failure_issue(source, exc)))
-            continue
         if contract is not None:
             contracts[source.source_id] = contract
+        if validate_contract is not None:
+            failures.extend(
+                (source.config_path, issue)
+                for issue in validate_contract(source, contract)
+            )
 
     if failures:
         raise _collected_error(failures, sources_dir)

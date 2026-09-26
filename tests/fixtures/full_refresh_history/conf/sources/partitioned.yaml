@@ -34,7 +34,7 @@ extraction:
     backoff_seconds: 1
 
 schema:
-  mode: infer
+  contract: conf/contracts/test/full_refresh_history_partitioned.yaml
 
 spark:
   input_format: json

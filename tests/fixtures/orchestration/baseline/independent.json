@@ -41,6 +41,8 @@
           "zone": "metadata"
         }
       ],
+      "contract_id": "example.minimal",
+      "contract_version": "1.0.0",
       "emitted_at": "2026-09-13T12:00:05+00:00",
       "environment": "local",
       "extraction_metadata": {
@@ -121,6 +123,7 @@
         "trigger": "baseline"
       },
       "run_id": "order14-independent",
+      "schema_version": "36b064711c0849a241baa4eb3a5af56c7b8c40c1bb394413797146324b996583",
       "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
       "source_id": "C",
       "source_name": "Synthetic C",
@@ -147,6 +150,8 @@
           "zone": "metadata"
         }
       ],
+      "contract_id": "example.minimal",
+      "contract_version": "1.0.0",
       "duration_seconds": 5.0,
       "ended_at": "2026-09-13T12:00:05+00:00",
       "environment": "local",
@@ -213,6 +218,7 @@
         "trigger": "baseline"
       },
       "run_id": "order14-independent",
+      "schema_version": "36b064711c0849a241baa4eb3a5af56c7b8c40c1bb394413797146324b996583",
       "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
       "source_id": "C",
       "source_name": "Synthetic C",

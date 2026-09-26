@@ -16,11 +16,10 @@ import yaml
 from janus.cli.common import default_project_root
 from janus.cli.contract_drafting import (
     _DRAFT_REQUEST_ATTRIBUTE,
-    _DataProfile as _DataProfile,
-    _DraftInput,
     _contract_document,
     _draft_properties,
     _drafted_from,
+    _DraftInput,
     _profile_dataframe,
     _read_draft_input,
 )

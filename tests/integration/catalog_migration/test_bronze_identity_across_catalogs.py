@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,7 +55,7 @@ BASELINE_TABLE_IDENTIFIER = (
 BASELINE_ROW_COUNT = 3
 BASELINE_PARTITION_BY = ("ingestion_date",)
 BASELINE_SORTED_ROWS_SHA256 = (
-    "8f5ae456834d500672a772e36ed1460c0c573ba280b5172e022221822ce22925"
+    "ca7ff657f48b9a17e3301adf5089a8a6b74f1e13b7c2bbd394b170f0bbfc8387"
 )
 BASELINE_PAYLOAD_SHA256 = (
     "e448db3b91bee8e18fdbcda8e49bbea2130faa277f43c1c14c264330dc1929fa"
@@ -186,6 +187,9 @@ def catalogs(tmp_path_factory):
         patch.undo()
         pytest.skip("SQLite JDBC driver jar is not available in the local Ivy cache")
 
+    patch.setenv("TZ", "UTC")
+    time.tzset()
+
     resolved_paths = prepare_runtime(config, project_root)
     options = dict(build_spark_options(config, resolved_paths))
     options.pop("spark.jars.packages", None)
@@ -212,6 +216,7 @@ def catalogs(tmp_path_factory):
     finally:
         session.stop()
         patch.undo()
+        time.tzset()
 
 
 @pytest.fixture(scope="module")

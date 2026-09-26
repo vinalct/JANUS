@@ -21,6 +21,11 @@ SOFT_CEILING_ALLOWANCES: dict[str, str] = {
         "scope. Cohesive: one validator per quality rule, with the plan-scoped schema "
         "expectation already split out into quality/schema_expectation.py."
     ),
+    "observability/iceberg_sink.py": (
+        "626 LOC; one bounded append path. Additive schema evolution is a step of "
+        "that path, on the same worker thread inside the same five-second emission budget, "
+        "and a fresh table bootstraps through it too."
+    ),
     "strategies/http/transport.py": (
         "AC-8 pins the opener, the redirect handler and the byte cap to this one module"
     ),

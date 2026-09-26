@@ -372,7 +372,7 @@ def _ensure_table(
     dependencies: _EngineDependencies,
 ) -> tuple[Any | None, IcebergAppendResult | None]:
     try:
-        schema = _declared_schema(dependencies)
+        schema = _declared_schema(dependencies, _creation_columns())
         partition_spec = _declared_partition_spec(dependencies)
         table = catalog.create_table(
             target.identifier,
@@ -395,6 +395,20 @@ def _ensure_table(
             exception_type=type(exc).__name__,
         )
     return table, None
+
+
+def _creation_columns(
+    columns: Sequence[RunsTableColumn] = RUNS_TABLE_SCHEMA,
+) -> tuple[RunsTableColumn, ...]:
+    """The longest declared prefix a fresh ``create_table`` numbers exactly as declared."""
+    for size in range(len(columns), 0, -1):
+        prefix = tuple(columns[:size])
+        element_ids = [column.element_id for column in prefix if column.element_id is not None]
+        if all(column.field_id == index for index, column in enumerate(prefix, 1)) and (
+            element_ids == list(range(size + 1, size + 1 + len(element_ids)))
+        ):
+            return prefix
+    return tuple(columns)
 
 
 def _declared_schema(

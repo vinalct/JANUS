@@ -13,8 +13,8 @@ from janus.models import (
     ExtractedArtifact,
     ExtractionResult,
     WriteResult,
-    compute_schema_version as _compute_schema_version,
 )
+from janus.models import compute_schema_version as _compute_schema_version
 
 SUPPORTED_RUN_STATUSES = frozenset({"failed", "running", "succeeded"})
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -544,7 +544,7 @@ def compute_schema_version(contract_path: Path) -> str:
     return _compute_schema_version(contract_path)
 
 
-def _contract_identity(plan: ExecutionPlan) -> dict[str, str | None]:
+def _contract_identity(plan: ExecutionPlan) -> dict[str, Any]:
     """Project identity from the contract already loaded into this plan."""
     contract = plan.data_contract
     if contract is None:

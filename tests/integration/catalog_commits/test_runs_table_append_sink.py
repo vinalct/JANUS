@@ -193,7 +193,7 @@ def test_v1_table_evolves_additively_and_appends_a_v2_row(
         derive_pyiceberg_catalog_name(config),
         **derive_pyiceberg_catalog_properties(config, catalog_target.resolved_paths),
     )
-    catalog.create_namespace("metadata")
+    catalog.create_namespace_if_not_exists("metadata")
     v1_schema = iceberg_sink._declared_schema(dependencies, RUNS_TABLE_SCHEMA_V1)
     table = catalog.create_table(
         identifier,
