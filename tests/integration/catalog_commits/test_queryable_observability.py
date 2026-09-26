@@ -62,6 +62,9 @@ class _RunEvidence:
     source_id: str
     config_path: Path
     status: str
+    schema_version: str | None
+    contract_id: str | None
+    contract_version: str | None
 
 
 def _environment(
@@ -166,12 +169,18 @@ def _execute_case(
 
     assert result.run_event_emission is not None
     assert result.run_event_emission.outcome.value == "emitted"
+    contract = planned.plan.data_contract
     return _RunEvidence(
         case=case,
         run_id=planned.plan.run_context.run_id,
         source_id=source_id,
         config_path=planned.plan.source_config.config_path,
         status=result.status,
+        schema_version=contract.schema_version if contract is not None else None,
+        contract_id=contract.id if contract is not None else None,
+        contract_version=(
+            None if contract is None or contract.id.startswith("legacy:") else contract.version
+        ),
     )
 
 
@@ -215,6 +224,10 @@ def test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources(
         assert row["ended_at"].astimezone(UTC) == FINISHED_AT
         assert row["duration_seconds"] == 5.0
         assert row["config_version"] == compute_config_version(item.config_path)
+        assert row["schema_version"] == item.schema_version
+        assert row["contract_id"] == item.contract_id
+        assert row["contract_version"] == item.contract_version
+        assert row["record_schema_version"] == 2
         assert row["source_config_path"] == str(item.config_path)
 
     by_case = {item.case: rows[item.run_id] for item in evidence}

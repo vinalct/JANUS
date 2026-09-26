@@ -178,7 +178,14 @@ def test_every_captured_terminal_shape_carries_the_ac1_fields(tmp_path, monkeypa
                 )
 
         monkeypatch.setattr(baseline, "FixedObserver", EmittingFixedObserver)
-        baseline.capture_case(root, case)
+        manifest = baseline.capture_case(root, case)
+        contract = manifest["summary"]["planned_run"]["contract"]
+        assert records[case].schema_version == contract["schema_version"]
+        assert records[case].contract_id == contract["id"]
+        expected_contract_version = (
+            None if contract["id"].startswith("legacy:") else contract["version"]
+        )
+        assert records[case].contract_version == expected_contract_version
 
     assert set(records) == set(baseline.BASELINE_CASES)
     assert {record.source_id for record in records.values()} == {

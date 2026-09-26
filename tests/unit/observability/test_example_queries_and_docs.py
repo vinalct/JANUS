@@ -78,6 +78,16 @@ def test_the_query_set_gives_every_declared_column_an_operational_use():
     assert schema_columns <= used_identifiers
 
 
+def test_config_version_drift_query_includes_contract_identity_changes():
+    sql = _queries()["config-version-drift.sql"]
+
+    assert "LAG(schema_version)" in sql
+    assert "previous_schema_version" in sql
+    assert "contract_id" in sql
+    assert "contract_version" in sql
+    assert "NOT (previous_schema_version <=> schema_version)" in sql
+
+
 def test_operator_column_register_matches_the_schema_in_both_directions():
     guide = OPERATOR_GUIDE.read_text(encoding="utf-8")
     column_register = guide.split("## Column register", 1)[1].split("## Published Spark SQL", 1)[0]

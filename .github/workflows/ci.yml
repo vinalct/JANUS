@@ -198,7 +198,7 @@ jobs:
             exit 1
           fi
           docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_queryable_observability --test-name test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources --minimum-passed 1
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_runs_table_append_sink --minimum-passed 2
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_runs_table_append_sink --minimum-passed 3
       - name: Assert the contracts bronze differential executed
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.contracts.test_bronze_unchanged_after_migration --minimum-passed 23
