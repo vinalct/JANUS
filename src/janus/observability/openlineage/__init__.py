@@ -5,6 +5,7 @@ from janus.observability.openlineage.constants import (
     OPENLINEAGE_PRODUCER,
     OPENLINEAGE_SCHEMA_URL,
     OPENLINEAGE_SPEC_VERSION,
+    SCHEMA_DATASET_FACET_SCHEMA_URL,
     openlineage_run_id,
 )
 from janus.observability.openlineage.facets import (
@@ -57,6 +58,7 @@ __all__ = [
     "OPENLINEAGE_PRODUCER",
     "OPENLINEAGE_SCHEMA_URL",
     "OPENLINEAGE_SPEC_VERSION",
+    "SCHEMA_DATASET_FACET_SCHEMA_URL",
     "PROFILE_ERROR_REASON",
     "SUPPORTED_TRANSPORTS",
     "DisabledOpenLineageTransport",

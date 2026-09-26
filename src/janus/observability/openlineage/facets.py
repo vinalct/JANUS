@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from janus.lineage.models import LineageRecord, MaterializedOutput, RunMetadata
+from janus.models.data_contracts import ContractProperty, DataContract
 from janus.models.dependencies import SourceDependencyEdge, SourceDependencyGraph
 from janus.observability.openlineage.constants import (
     DOCUMENTATION_JOB_FACET_SCHEMA_URL,
@@ -17,6 +18,7 @@ from janus.observability.openlineage.constants import (
     OPENLINEAGE_PRODUCER,
     OPENLINEAGE_SCHEMA_URL,
     OUTPUT_STATISTICS_FACET_SCHEMA_URL,
+    SCHEMA_DATASET_FACET_SCHEMA_URL,
     SOURCE_CODE_LOCATION_JOB_FACET_SCHEMA_URL,
     facet_base,
     openlineage_run_id,
@@ -116,6 +118,7 @@ def build_openlineage_run_event(
     lineage_record: LineageRecord | None = None,
     run_record: RunRecord | None = None,
     graph: SourceDependencyGraph | None = None,
+    data_contract: DataContract | None = None,
 ) -> dict[str, Any]:
     """Map one lifecycle record to a deterministic, JSON-serialisable ``RunEvent``."""
 
@@ -151,7 +154,7 @@ def build_openlineage_run_event(
         "job": {
             "namespace": _job_namespace(run_metadata.environment),
             "name": run_metadata.source_id,
-            "facets": _job_facets(run_metadata, lineage_record),
+            "facets": _job_facets(run_metadata, lineage_record, data_contract),
         },
         "inputs": [
             {
@@ -160,7 +163,7 @@ def build_openlineage_run_event(
             }
             for edge in dependencies
         ],
-        "outputs": _output_datasets(lineage_record, dataset_context),
+        "outputs": _output_datasets(lineage_record, dataset_context, data_contract),
         "producer": OPENLINEAGE_PRODUCER,
         "schemaURL": OPENLINEAGE_SCHEMA_URL,
     }
@@ -211,6 +214,7 @@ def _job_namespace(environment: str) -> str:
 def _job_facets(
     run_metadata: RunMetadata,
     lineage_record: LineageRecord | None,
+    data_contract: DataContract | None,
 ) -> dict[str, dict[str, Any]]:
     source_location: dict[str, Any] = {
         **facet_base(SOURCE_CODE_LOCATION_JOB_FACET_SCHEMA_URL),
@@ -223,7 +227,9 @@ def _job_facets(
     return {
         "documentation": {
             **facet_base(DOCUMENTATION_JOB_FACET_SCHEMA_URL),
-            "description": run_metadata.source_name,
+            "description": (
+                data_contract.purpose if data_contract is not None else run_metadata.source_name
+            ),
             "contentType": "text/plain",
         },
         "jobType": {
@@ -325,6 +331,7 @@ def _metadata_zone_paths(run_record: RunRecord | None) -> dict[str, str | None]:
 def _output_datasets(
     lineage_record: LineageRecord | None,
     context: OpenLineageDatasetContext,
+    data_contract: DataContract | None,
 ) -> list[dict[str, Any]]:
     if lineage_record is None:
         return []
@@ -332,7 +339,7 @@ def _output_datasets(
     outputs: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for output in lineage_record.materialized_outputs:
-        dataset = _materialized_output_dataset(output, context)
+        dataset = _materialized_output_dataset(output, context, data_contract)
         identity = (dataset["namespace"], dataset["name"])
         if identity not in seen:
             outputs.append(dataset)
@@ -361,17 +368,36 @@ def _output_datasets(
 def _materialized_output_dataset(
     output: MaterializedOutput,
     context: OpenLineageDatasetContext,
+    data_contract: DataContract | None,
 ) -> dict[str, Any]:
     if output.zone == "bronze" and output.format.lower() == "iceberg":
         namespace, name = context.iceberg_namespace, output.path
     else:
         namespace, name = _storage_dataset_identity(output.path)
     dataset: dict[str, Any] = {"namespace": namespace, "name": name}
+    if output.zone == "bronze" and data_contract is not None:
+        dataset["facets"] = {"schema": _schema_dataset_facet(data_contract)}
     if output.records_written is not None:
         dataset["outputFacets"] = {
             "outputStatistics": _output_statistics(output.records_written)
         }
     return dataset
+
+
+def _schema_dataset_facet(contract: DataContract) -> dict[str, Any]:
+    return {
+        **facet_base(SCHEMA_DATASET_FACET_SCHEMA_URL),
+        "fields": [_schema_field(prop) for prop in contract.schema.properties],
+    }
+
+
+def _schema_field(prop: ContractProperty) -> dict[str, Any]:
+    field: dict[str, Any] = {"name": prop.name, "type": prop.physical_type}
+    if prop.description:
+        field["description"] = prop.description
+    if prop.properties:
+        field["fields"] = [_schema_field(child) for child in prop.properties]
+    return field
 
 
 def _output_statistics(row_count: int) -> dict[str, Any]:

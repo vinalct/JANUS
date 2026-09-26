@@ -14,6 +14,7 @@ from uuid import UUID
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Registry, Resource
 
 from janus.checkpoints import CheckpointWriteResult
 from janus.lineage import (
@@ -24,6 +25,12 @@ from janus.lineage import (
     RunMetadata,
 )
 from janus.models import SourceDependencyEdge, SourceDependencyGraph, SourceDependencyNode
+from janus.models.data_contracts import (
+    ContractProperty,
+    ContractSchema,
+    DataContract,
+    JanusContractOptions,
+)
 from janus.observability import RunEvidencePaths, RunRecord
 from janus.observability.openlineage import (
     CUSTOM_ONLY_LINEAGE_FIELDS,
@@ -31,6 +38,7 @@ from janus.observability.openlineage import (
     LINEAGE_FIELD_MAPPING,
     OPENLINEAGE_SCHEMA_URL,
     OPENLINEAGE_SPEC_VERSION,
+    SCHEMA_DATASET_FACET_SCHEMA_URL,
     OpenLineageDatasetContext,
     build_openlineage_run_event,
     openlineage_run_id,
@@ -43,6 +51,7 @@ OPENLINEAGE_SCHEMA = FIXTURES / "OpenLineage-2-0-2.json"
 JANUS_FACET_SCHEMA = (
     PROJECT_ROOT / "docs" / "schemas" / "openlineage" / "JanusRunFacet.json"
 )
+SCHEMA_DATASET_FACET_SCHEMA = FIXTURES / "SchemaDatasetFacet-1-1-1.json"
 
 STARTED_AT = datetime(2026, 7, 4, 12, 0, tzinfo=UTC)
 FINISHED_AT = datetime(2026, 7, 4, 12, 0, 5, tzinfo=UTC)
@@ -52,6 +61,53 @@ BRONZE_TABLE = "bronze.consumer"
 DATASETS = OpenLineageDatasetContext(
     catalog_name="janus",
     warehouse="s3://janus-bronze/warehouse",
+)
+
+
+def _data_contract(
+    properties: tuple[ContractProperty, ...],
+    *,
+    purpose: str = (
+        "Contract example that exercises the api family against example.invalid; "
+        "not a live source."
+    ),
+) -> DataContract:
+    return DataContract(
+        contract_path=Path("conf/contracts/example/federal_open_data_example.yaml"),
+        api_version="v3.2.0",
+        id="example.consumer",
+        name="Example consumer contract",
+        version="1.0.0",
+        status="active",
+        domain="example",
+        purpose=purpose,
+        owners=("janus",),
+        tags=("example",),
+        schema=ContractSchema(
+            name="consumer",
+            physical_type="table",
+            properties=properties,
+        ),
+        janus=JanusContractOptions(compatibility="additive", enforcement="lenient"),
+        schema_version="a" * 64,
+    )
+
+
+EXAMPLE_CONTRACT = _data_contract(
+    (
+        ContractProperty(
+            name="id",
+            physical_type="string",
+            logical_type="string",
+            description="Upstream record identifier, verbatim.",
+        ),
+        ContractProperty(
+            name="updated_at",
+            physical_type="string",
+            logical_type="string",
+            description="Upstream update timestamp, kept as the string the API sent.",
+        ),
+    )
 )
 GRAPH = SourceDependencyGraph(
     nodes=(
@@ -276,7 +332,12 @@ def _terminal_records(
     return metadata, lineage, run_record
 
 
-def _terminal_event(shape: str, **kwargs: str) -> dict:
+def _terminal_event(
+    shape: str,
+    *,
+    data_contract: DataContract | None = EXAMPLE_CONTRACT,
+    **kwargs: str,
+) -> dict:
     metadata, lineage, run_record = _terminal_records(shape, **kwargs)
     graph = GRAPH if metadata.source_id == SOURCE_ID else None
     return build_openlineage_run_event(
@@ -285,12 +346,27 @@ def _terminal_event(shape: str, **kwargs: str) -> dict:
         lineage_record=lineage,
         run_record=run_record,
         graph=graph,
+        data_contract=data_contract,
     )
 
 
 def _validator(path: Path) -> Draft202012Validator:
     return Draft202012Validator(
         json.loads(path.read_text(encoding="utf-8")),
+        format_checker=FormatChecker(),
+    )
+
+
+def _schema_dataset_facet_validator() -> Draft202012Validator:
+    facet_schema = json.loads(SCHEMA_DATASET_FACET_SCHEMA.read_text(encoding="utf-8"))
+    core_schema = json.loads(OPENLINEAGE_SCHEMA.read_text(encoding="utf-8"))
+    registry = Registry().with_resource(
+        "https://openlineage.io/spec/2-0-2/OpenLineage.json",
+        Resource.from_contents(core_schema),
+    )
+    return Draft202012Validator(
+        facet_schema,
+        registry=registry,
         format_checker=FormatChecker(),
     )
 
@@ -311,11 +387,137 @@ def test_every_terminal_shape_validates_against_the_pinned_schema(shape):
 
     _validator(OPENLINEAGE_SCHEMA).validate(event)
     _validator(JANUS_FACET_SCHEMA).validate(event["run"]["facets"]["janusRun"])
+    for output in event["outputs"]:
+        schema_facet = output.get("facets", {}).get("schema")
+        if schema_facet is not None:
+            _schema_dataset_facet_validator().validate({"schema": schema_facet})
+
+
+def test_bronze_output_carries_the_schema_facet_rendered_from_the_contract():
+    metadata, lineage, run_record = _terminal_records("success")
+    contract = _data_contract(
+        (
+            ContractProperty(
+                name="estabelecimento",
+                physical_type="struct",
+                logical_type="object",
+                description="Merchant establishment.",
+                properties=(
+                    ContractProperty(
+                        name="nome",
+                        physical_type="string",
+                        logical_type="string",
+                        description="Merchant name.",
+                    ),
+                    ContractProperty(
+                        name="identificacao",
+                        physical_type="struct",
+                        logical_type="object",
+                        description="Merchant identifiers.",
+                        properties=(
+                            ContractProperty(
+                                name="cnpjFormatado",
+                                physical_type="string",
+                                logical_type="string",
+                                description="Formatted CNPJ.",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            ContractProperty(
+                name="valorTransacao",
+                physical_type="decimal(18,2)",
+                logical_type="number",
+                description="Transaction amount.",
+            ),
+            ContractProperty(
+                name="dataTransacao",
+                physical_type="timestamptz",
+                logical_type="date-time",
+                description="Transaction timestamp.",
+            ),
+        ),
+        purpose="Card expenses by transaction date.",
+    )
+    event = build_openlineage_run_event(
+        metadata,
+        DATASETS,
+        lineage_record=lineage,
+        run_record=run_record,
+        data_contract=contract,
+    )
+    bronze = next(output for output in event["outputs"] if output["name"] == BRONZE_TABLE)
+    schema_facet = bronze["facets"]["schema"]
+
+    assert schema_facet["_schemaURL"] == SCHEMA_DATASET_FACET_SCHEMA_URL
+    assert schema_facet["fields"] == [
+        {
+            "name": "estabelecimento",
+            "type": "struct",
+            "description": "Merchant establishment.",
+            "fields": [
+                {"name": "nome", "type": "string", "description": "Merchant name."},
+                {
+                    "name": "identificacao",
+                    "type": "struct",
+                    "description": "Merchant identifiers.",
+                    "fields": [
+                        {
+                            "name": "cnpjFormatado",
+                            "type": "string",
+                            "description": "Formatted CNPJ.",
+                        }
+                    ],
+                },
+            ],
+        },
+        {
+            "name": "valorTransacao",
+            "type": "decimal(18,2)",
+            "description": "Transaction amount.",
+        },
+        {
+            "name": "dataTransacao",
+            "type": "timestamptz",
+            "description": "Transaction timestamp.",
+        },
+    ]
+
+
+def test_raw_artifact_outputs_carry_no_schema_facet():
+    event = _terminal_event("success", data_contract=EXAMPLE_CONTRACT)
+    raw = next(output for output in event["outputs"] if output["name"] == RAW_PATH)
+    bronze = next(output for output in event["outputs"] if output["name"] == BRONZE_TABLE)
+
+    assert "facets" not in raw
+    assert "schema" in bronze["facets"]
+
+
+def test_no_contract_means_no_schema_facet_and_source_name_documentation():
+    event = _terminal_event("success", data_contract=None)
+    expected = json.loads((FIXTURES / "success.json").read_text(encoding="utf-8"))
+    expected["job"]["facets"]["documentation"]["description"] = "Source consumer"
+    bronze = next(output for output in expected["outputs"] if output["name"] == BRONZE_TABLE)
+    bronze.pop("facets")
+
+    assert event == expected
+
+
+def test_documentation_facet_uses_contract_purpose():
+    event = _terminal_event("success", data_contract=EXAMPLE_CONTRACT)
+
+    assert (
+        event["job"]["facets"]["documentation"]["description"]
+        == EXAMPLE_CONTRACT.purpose
+    )
 
 
 def test_start_complete_and_fail_lifecycle_mapping_uses_recorded_timestamps():
     started = _run_metadata(run_id="paired-run", status="running")
-    start = build_openlineage_run_event(started, DATASETS, graph=GRAPH)
+    start = build_openlineage_run_event(
+        started, DATASETS, graph=GRAPH, data_contract=EXAMPLE_CONTRACT
+    )
     _validator(OPENLINEAGE_SCHEMA).validate(start)
     _validator(JANUS_FACET_SCHEMA).validate(start["run"]["facets"]["janusRun"])
     complete = _terminal_event("success", run_id="paired-run")
@@ -432,12 +634,21 @@ def test_success_and_quality_failure_payloads_match_goldens(shape, fixture_name)
 def test_schema_version_and_vendored_bytes_are_pinned():
     expected = (FIXTURES / "OpenLineage-2-0-2.sha256").read_text(encoding="utf-8").split()[0]
     actual = hashlib.sha256(OPENLINEAGE_SCHEMA.read_bytes()).hexdigest()
+    facet_expected = (
+        FIXTURES / "SchemaDatasetFacet-1-1-1.sha256"
+    ).read_text(encoding="utf-8").split()[0]
+    facet_actual = hashlib.sha256(SCHEMA_DATASET_FACET_SCHEMA.read_bytes()).hexdigest()
 
     assert OPENLINEAGE_SPEC_VERSION == "2-0-2"
     assert OPENLINEAGE_SCHEMA_URL == (
         "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
     )
     assert actual == expected
+    assert SCHEMA_DATASET_FACET_SCHEMA_URL == (
+        "https://openlineage.io/spec/facets/1-1-1/SchemaDatasetFacet.json"
+        "#/$defs/SchemaDatasetFacet"
+    )
+    assert facet_actual == facet_expected
 
 
 def test_mapping_imports_no_compute_or_catalog_engine():

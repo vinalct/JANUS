@@ -43,10 +43,16 @@ write result for the same path are emitted once, while checksum and write detail
 in the custom facet. Configured-but-unwritten targets are not presented as outputs.
 
 Standard facets carry job documentation, source-code location and config version, job
-type, failure messages, and output row counts. A schema facet is deliberately absent:
-JANUS does not have the bronze schema at this pure mapping boundary and does not invent
-one. Quality results remain run-scoped because JANUS checks may describe config, input
-data, or output rather than one dataset.
+type, failure messages, output row counts, and the bronze schema. The SchemaDatasetFacet
+is rendered from the DataContract already carried on the execution plan, with no file or
+catalog reads during emission. It appears only on bronze outputs in terminal COMPLETE and
+FAIL events; raw artifacts and START events have no schema facet. Field types use JANUS's
+engine-neutral vocabulary (for example timestamptz, decimal(18,2), and struct), and nested
+struct properties are represented as nested fields. Job documentation uses the contract
+purpose when one is present and falls back to the source name otherwise. The facet schema
+is pinned at tests/fixtures/openlineage/SchemaDatasetFacet-1-1-1.json, with its SHA-256
+recorded beside it. Quality results remain run-scoped because JANUS checks may describe
+config, input data, or output rather than one dataset.
 
 All JANUS-specific data lives in one `janusRun` run facet. Its versioned schema is
 `docs/schemas/openlineage/JanusRunFacet.json`. It retains every `LineageRecord` field plus

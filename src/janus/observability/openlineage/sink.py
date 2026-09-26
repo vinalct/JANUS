@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from janus.lineage.models import LineageRecord, RunMetadata
+from janus.models.data_contracts import DataContract
 from janus.models.dependencies import SourceDependencyGraph
 from janus.observability.openlineage.facets import (
     OpenLineageDatasetContext,
@@ -46,6 +47,7 @@ class OpenLineageRunSink:
         *,
         lineage_record: LineageRecord | None = None,
         run_record: RunRecord | None = None,
+        data_contract: DataContract | None = None,
         budget_seconds: float,
         logger: StructuredLogger | WarningLogger | None = None,
     ) -> OpenLineageEmissionResult:
@@ -70,6 +72,7 @@ class OpenLineageRunSink:
                 lineage_record=lineage_record,
                 run_record=run_record,
                 graph=self.graph,
+                data_contract=data_contract,
             )
         except Exception as exc:
             return _report(
