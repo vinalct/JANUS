@@ -573,7 +573,7 @@ def test_a_legacy_declaration_warns_once_per_config_file(tmp_path):
     assert len(records) == 1
     assert str(records[0].message) == (
         f"{project_root / 'conf' / 'sources' / 'legacy.yaml'}: schema: "
-        "`schema.mode`/`schema.path` are deprecated and will be removed in order-19; "
+        "`schema.mode`/`schema.path` are deprecated and will be removed; "
         "declare `schema.contract: conf/contracts/<domain>/<table>.yaml` instead "
         "(see docs/data-contracts.md)."
     )

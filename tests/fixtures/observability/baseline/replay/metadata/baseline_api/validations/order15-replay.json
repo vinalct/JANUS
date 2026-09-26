@@ -12,9 +12,10 @@
     },
     {
       "details": {
-        "schema_mode": "contract"
+        "expected_field_count": "1",
+        "schema_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
       },
-      "message": "Schema evolution is enabled; unexpected columns will be tolerated.",
+      "message": "Schema validation will use an explicit field contract.",
       "name": "schema_contract_mode",
       "outcome": "passed",
       "phase": "config"
@@ -70,7 +71,7 @@
   "environment": "local",
   "metadata": {
     "allow_schema_evolution": "True",
-    "schema_expectation_source": ""
+    "schema_expectation_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
   },
   "run_id": "order15-replay",
   "source_id": "baseline_api",

@@ -20,7 +20,7 @@ from janus.models.data_contracts.legacy import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
-LEGACY_SCHEMAS = PROJECT_ROOT / "conf" / "schemas"
+LEGACY_SCHEMAS = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "legacy_schemas"
 SPARK_SCHEMA_GOLDENS = (
     PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "baseline" / "spark_schema"
 )
@@ -66,7 +66,7 @@ def test_every_checked_in_legacy_schema_file_converts() -> None:
 @pytest.mark.parametrize("golden_path", _goldens(), ids=lambda path: path.stem)
 def test_converted_contract_reproduces_the_m0_spark_schema(golden_path: Path) -> None:
     golden = json.loads(golden_path.read_text(encoding="utf-8"))
-    schema_path = PROJECT_ROOT / golden["schema_path"]
+    schema_path = LEGACY_SCHEMAS / Path(golden["schema_path"]).relative_to("conf/schemas")
 
     contract = contract_from_legacy_schema_file(
         schema_path,
@@ -118,7 +118,10 @@ def test_a_converted_file_declares_itself_unreviewed() -> None:
         project_root=PROJECT_ROOT,
     )
 
-    assert contract.id == "legacy:conf/schemas/inep/censo_escolar_microdados_schema.json"
+    assert contract.id == (
+        "legacy:tests/fixtures/contracts/legacy_schemas/inep/"
+        "censo_escolar_microdados_schema.json"
+    )
     assert contract.status == LEGACY_CONTRACT_STATUS == "draft"
     assert contract.version == LEGACY_CONTRACT_VERSION == "0.0.0"
     assert contract.name == "Legacy schema for inep_censo_escolar_microdados"

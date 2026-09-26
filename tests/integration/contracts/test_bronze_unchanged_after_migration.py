@@ -59,7 +59,10 @@ def test_bronze_identifier_schema_and_rows_match_pre_contract_golden(case, bronz
     assert set(expected["lineage_keys"]).issubset(actual["lineage_keys"])
 
     if expected["read_schema_source"] == "explicit":
-        assert actual["quality_report"] == expected["quality_report"]
+        assert actual["quality_report"]["checks"] == expected["quality_report"]["checks"]
+        assert actual["quality_report"]["schema_expectation_source"].startswith(
+            "<PROJECT>/conf/contracts/"
+        )
     else:
         assert expected["inferred_struct_type"] == expected["read_struct_type"]
 

@@ -107,19 +107,20 @@ def test_an_undeclared_file_resolves_to_nothing(tmp_path: Path) -> None:
 def test_the_contract_declaration_resolves_like_the_legacy_one(
     source_config: SourceConfig,
 ) -> None:
-    legacy = _plan(source_config, PROJECT_ROOT)
-    declared = _plan(
+    legacy = _plan(
         _declaring(
             source_config,
-            mode="contract",
-            path=None,
-            contract="conf/contracts/example/federal_open_data_example.yaml",
+            mode="explicit",
+            path="tests/fixtures/contracts/legacy_schemas/example/source_schema.json",
+            contract=None,
         ),
         PROJECT_ROOT,
     )
+    declared = _plan(source_config, PROJECT_ROOT)
 
     assert resolve_schema_path_for_plan(legacy) == (
-        PROJECT_ROOT / source_config.schema.path
+        PROJECT_ROOT / "tests" / "fixtures" / "contracts"
+        / "legacy_schemas" / "example" / "source_schema.json"
     )
     assert resolve_contract_path_for_plan(declared) == (
         PROJECT_ROOT / "conf" / "contracts" / "example" / "federal_open_data_example.yaml"
@@ -129,23 +130,25 @@ def test_the_contract_declaration_resolves_like_the_legacy_one(
 def test_each_entry_point_ignores_the_other_declaration(
     source_config: SourceConfig,
 ) -> None:
-    legacy = _plan(source_config, PROJECT_ROOT)
-    declared = _plan(
+    legacy = _plan(
         _declaring(
             source_config,
-            mode="contract",
-            path=None,
-            contract="conf/contracts/example/federal_open_data_example.yaml",
+            mode="explicit",
+            path="tests/fixtures/contracts/legacy_schemas/example/source_schema.json",
+            contract=None,
         ),
         PROJECT_ROOT,
     )
+    declared = _plan(source_config, PROJECT_ROOT)
 
     assert resolve_contract_path_for_plan(legacy) is None
     assert resolve_schema_path_for_plan(declared) is None
 
 
 def test_an_inferred_source_declares_neither(source_config: SourceConfig) -> None:
-    plan = _plan(_declaring(source_config, mode="infer", path=None), PROJECT_ROOT)
+    plan = _plan(
+        _declaring(source_config, mode="infer", path=None, contract=None), PROJECT_ROOT
+    )
 
     assert resolve_schema_path_for_plan(plan) is None
     assert resolve_contract_path_for_plan(plan) is None
@@ -158,5 +161,5 @@ def test_the_plan_free_entry_point_agrees_with_the_plan_one(
     plan = _plan(source_config, PROJECT_ROOT)
 
     assert resolve_declared_path(
-        PROJECT_ROOT, source_config.config_path, source_config.schema.path
-    ) == resolve_schema_path_for_plan(plan)
+        PROJECT_ROOT, source_config.config_path, source_config.schema.contract
+    ) == resolve_contract_path_for_plan(plan)

@@ -11,7 +11,7 @@ import yaml
 
 from janus.lineage import RunObserver
 from janus.models import RunContext, SourceConfig
-from janus.models.data_contracts import contract_from_legacy_schema_file
+from janus.models.data_contracts import load_data_contract
 from janus.normalizers import BaseNormalizer
 from janus.quality import QualityGate
 from janus.readers import SparkDatasetReader
@@ -87,7 +87,7 @@ def spark(tmp_path_factory):
 
 def test_dados_abertos_catalog_source_contract_uses_generic_catalog_strategy():
     source_config = load_registry(PROJECT_ROOT).get_source(SOURCE_ID, include_disabled=True)
-    schema_path = PROJECT_ROOT / source_config.schema.path
+    contract_path = PROJECT_ROOT / source_config.schema.contract
 
     assert source_config.enabled is False
     assert source_config.strategy == "catalog"
@@ -109,7 +109,7 @@ def test_dados_abertos_catalog_source_contract_uses_generic_catalog_strategy():
     assert source_config.spark.input_format == "jsonl"
     assert source_config.outputs.bronze.format == "iceberg"
     assert source_config.outputs.bronze.path == "data/bronze/dados_abertos/catalog"
-    assert _declared_columns(source_config, schema_path) == SCHEMA_FIELDS
+    assert _declared_columns(contract_path) == SCHEMA_FIELDS
 
 
 def test_dados_abertos_catalog_extracts_catalog_entities_and_materializes_bronze(
@@ -300,26 +300,14 @@ def test_dados_abertos_catalog_extracts_catalog_entities_and_materializes_bronze
 
 def _cloned_source_config(tmp_path: Path, *, page_size: int) -> SourceConfig:
     source_config = load_registry(PROJECT_ROOT).get_source(SOURCE_ID, include_disabled=True)
-    schema_path = (
-        PROJECT_ROOT
-        / "conf"
-        / "schemas"
-        / "dados_abertos_catalog"
-        / "catalog_metadata_schema.json"
-    )
+    contract_path = PROJECT_ROOT / source_config.schema.contract
 
     copied_config_path = (
         tmp_path / "conf" / "sources" / "dados_abertos_catalog" / "conjunto_de_dados.yaml"
     )
-    copied_schema_path = (
-        tmp_path
-        / "conf"
-        / "schemas"
-        / "dados_abertos_catalog"
-        / "catalog_metadata_schema.json"
-    )
+    copied_contract_path = tmp_path / source_config.schema.contract
     copied_config_path.parent.mkdir(parents=True, exist_ok=True)
-    copied_schema_path.parent.mkdir(parents=True, exist_ok=True)
+    copied_contract_path.parent.mkdir(parents=True, exist_ok=True)
 
     config_payload = yaml.safe_load(SOURCE_CONFIG_PATH.read_text(encoding="utf-8"))
     source_entries = config_payload.get("sources") if isinstance(config_payload, dict) else None
@@ -338,15 +326,11 @@ def _cloned_source_config(tmp_path: Path, *, page_size: int) -> SourceConfig:
         yaml.safe_dump(config_payload, sort_keys=False),
         encoding="utf-8",
     )
-    copied_schema_path.write_text(schema_path.read_text(encoding="utf-8"), encoding="utf-8")
+    copied_contract_path.write_bytes(contract_path.read_bytes())
 
     return replace(
         source_config,
         config_path=copied_config_path,
-        schema=replace(
-            source_config.schema,
-            path="conf/schemas/dados_abertos_catalog/catalog_metadata_schema.json",
-        ),
         access=replace(
             source_config.access,
             pagination=replace(source_config.access.pagination, page_size=page_size),
@@ -376,11 +360,6 @@ def _storage_layout(project_root: Path) -> StorageLayout:
     )
 
 
-def _declared_columns(source_config, schema_path: Path) -> tuple[str, ...]:
+def _declared_columns(contract_path: Path) -> tuple[str, ...]:
     """The columns this entry declares, read the way the registry snapshot reads them."""
-    return contract_from_legacy_schema_file(
-        schema_path,
-        source_id=source_config.source_id,
-        bronze_table=source_config.outputs.bronze.path,
-        domain=source_config.domain,
-    ).column_names
+    return load_data_contract(contract_path).column_names

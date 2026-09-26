@@ -62,6 +62,7 @@ SPARK_ORCHESTRATION_CLASS := tests.integration.orchestration.test_dependency_exe
 QUERYABLE_CLASS := tests.integration.catalog_commits.test_queryable_observability
 RUNS_SINK_CLASS := tests.integration.catalog_commits.test_runs_table_append_sink
 CROSS_ENGINE_CLASS := tests.integration.catalog_commits.test_pyiceberg_round_trip
+CONTRACTS_GOLDEN_CLASS := tests.integration.contracts.test_bronze_unchanged_after_migration
 AC1_TEST := test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources
 AC2_TEST := test_published_ac2_queries_execute_verbatim_with_retry_and_window_boundaries
 CROSS_ENGINE_TEST := test_spark_reads_the_row_pyiceberg_committed
@@ -241,6 +242,7 @@ ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CONTRACTS_GOLDEN_CLASS) --minimum-passed 23)
 
 run-local: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main --environment $(ENVIRONMENT) --with-spark)

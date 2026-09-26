@@ -206,8 +206,8 @@ def test_the_example_contract_generates_its_declared_columns():
 
     assert generated == StructType(
         [
-            StructField("id", StringType(), False),
-            StructField("updated_at", StringType(), False),
+            StructField("id", StringType(), True),
+            StructField("updated_at", StringType(), True),
         ]
     )
     assert generated.fieldNames() == list(contract.column_names)

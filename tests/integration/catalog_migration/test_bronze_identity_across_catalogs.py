@@ -28,6 +28,7 @@ from janus.utils.environment import (
     prepare_runtime,
 )
 from janus.utils.storage import StorageLayout
+from tests.support.contracts import with_registry_contract
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 IVY_JARS_DIR = PROJECT_ROOT / "data" / "metadata" / "ivy" / "jars"
@@ -53,7 +54,7 @@ BASELINE_TABLE_IDENTIFIER = (
 BASELINE_ROW_COUNT = 3
 BASELINE_PARTITION_BY = ("ingestion_date",)
 BASELINE_SORTED_ROWS_SHA256 = (
-    "ca7ff657f48b9a17e3301adf5089a8a6b74f1e13b7c2bbd394b170f0bbfc8387"
+    "8f5ae456834d500672a772e36ed1460c0c573ba280b5172e022221822ce22925"
 )
 BASELINE_PAYLOAD_SHA256 = (
     "e448db3b91bee8e18fdbcda8e49bbea2130faa277f43c1c14c264330dc1929fa"
@@ -455,7 +456,7 @@ def materialize_into(
         clock=lambda: 0.0,
     )
 
-    plan = strategy.plan(source_config, run_context)
+    plan = with_registry_contract(strategy.plan(source_config, run_context))
     executed = SourceExecutor().execute(
         PlannedRun(plan=plan, strategy=strategy),
         SparkSessionProvider.wrapping(session),
@@ -515,12 +516,12 @@ def cloned_api_source_config(project_root: Path) -> SourceConfig:
 
     source_config = load_registry(PROJECT_ROOT).get_source(API_SOURCE_ID, include_disabled=True)
     config_path = PROJECT_ROOT / source_config.config_path.relative_to(PROJECT_ROOT)
-    schema_path = PROJECT_ROOT / source_config.schema.path
+    contract_path = PROJECT_ROOT / source_config.schema.contract
 
     copied_config_path = project_root / source_config.config_path.relative_to(PROJECT_ROOT)
-    copied_schema_path = project_root / source_config.schema.path
+    copied_contract_path = project_root / source_config.schema.contract
     copied_config_path.parent.mkdir(parents=True, exist_ok=True)
-    copied_schema_path.parent.mkdir(parents=True, exist_ok=True)
+    copied_contract_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if "sources" in payload:
@@ -534,7 +535,7 @@ def cloned_api_source_config(project_root: Path) -> SourceConfig:
         payload["access"]["pagination"]["page_size"] = PAGE_SIZE
 
     copied_config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    copied_schema_path.write_text(schema_path.read_text(encoding="utf-8"), encoding="utf-8")
+    copied_contract_path.write_bytes(contract_path.read_bytes())
 
     return replace(
         source_config,
