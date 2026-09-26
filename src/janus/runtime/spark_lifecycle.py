@@ -126,6 +126,15 @@ class SparkSessionProvider:
             return
         self._log("spark_session_stopped")
 
+    @contextmanager
+    def scoped(self) -> Iterator[SparkSession]:
+        """Acquire one session for a bounded operation and always release it."""
+
+        try:
+            yield self.get()
+        finally:
+            self.stop()
+
     def take_cleanup_failures(self) -> tuple[Exception, ...]:
         """Return and clear teardown failures retained for the owning runtime."""
 

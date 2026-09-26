@@ -120,10 +120,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def _dispatch_subcommand(argv: tuple[str, ...]) -> int | None:
+    if argv and argv[0] == "run-all":
+        return run_all_main(argv[1:])
+    if argv and argv[0] == "contract":
+        from janus.cli.contract import main as contract_main
+
+        return contract_main(argv[1:])
+    return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     resolved_argv = tuple(sys.argv[1:] if argv is None else argv)
-    if resolved_argv and resolved_argv[0] == "run-all":
-        return run_all_main(resolved_argv[1:])
+    dispatch_result = _dispatch_subcommand(resolved_argv)
+    if dispatch_result is not None:
+        return dispatch_result
 
     args = parse_args(resolved_argv)
     project_root = args.project_root.resolve()

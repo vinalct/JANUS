@@ -115,6 +115,8 @@ janus \
 
 This does not hit the live source. It validates the source contract, resolves the strategy, and prints a stable JSON planning summary.
 
+Draft an inferred contract from a previous raw run or local fixture with `janus contract draft --source-id <id> (--from-raw <run-id> | --from-fixture <path>)`; review inferred types before activation.
+
 ### 6. Execute one live source end to end
 
 ```bash

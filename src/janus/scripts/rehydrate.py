@@ -19,6 +19,7 @@ a session around that one call and nothing else.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -56,6 +57,9 @@ def _build_extraction_result_from_raw(
     plan: ExecutionPlan,
     spark_provider: SparkSessionProvider,
     storage_layout: StorageLayout,
+    *,
+    raw_run_id: str | None = None,
+    temporary_raw_root: Path | None = None,
 ) -> ExtractionResult:
     if isinstance(planned_run.strategy, CatalogStrategy):
         return _build_catalog_extraction_result_from_raw(
@@ -63,15 +67,18 @@ def _build_extraction_result_from_raw(
             plan,
             spark_provider,
             storage_layout,
+            raw_run_id=raw_run_id,
+            temporary_raw_root=temporary_raw_root,
         )
 
-    raw_plan = _plan_with_active_raw_root(plan)
+    raw_plan = _plan_with_active_raw_root(plan, run_id=raw_run_id)
     raw_artifacts = _rediscover_raw_artifacts(raw_plan)
     raw_artifacts = _rehydrate_file_raw_artifacts(
         planned_run,
         raw_plan,
         raw_artifacts,
         storage_layout,
+        temporary_raw_root=temporary_raw_root,
     )
     return ExtractionResult.from_plan(
         plan,
@@ -116,6 +123,8 @@ def _rehydrate_file_raw_artifacts(
     plan: ExecutionPlan,
     raw_artifacts: tuple[ExtractedArtifact, ...],
     storage_layout: StorageLayout,
+    *,
+    temporary_raw_root: Path | None = None,
 ) -> tuple[ExtractedArtifact, ...]:
     if getattr(planned_run.strategy, "strategy_family", None) != "file":
         return raw_artifacts
@@ -131,6 +140,7 @@ def _rehydrate_file_raw_artifacts(
 
     artifacts_by_path = {artifact.path: artifact for artifact in raw_artifacts}
     raw_writer = RawArtifactWriter(storage_layout)
+    write_plan = _with_temporary_raw_root(plan, temporary_raw_root)
     file_hook = planned_run.hook if isinstance(planned_run.hook, FileHook) else None
     raw_root = Path(plan.raw_output.path)
 
@@ -172,7 +182,7 @@ def _rehydrate_file_raw_artifacts(
             if member_payload is None:
                 continue
             persisted = raw_writer.write_bytes(
-                plan,
+                write_plan,
                 _raw_extracted_relative_path(
                     archive_file.version or "current",
                     archive_file.filename,
@@ -230,6 +240,9 @@ def _build_catalog_extraction_result_from_raw(
     plan: ExecutionPlan,
     spark_provider: SparkSessionProvider,
     storage_layout: StorageLayout,
+    *,
+    raw_run_id: str | None = None,
+    temporary_raw_root: Path | None = None,
 ) -> ExtractionResult:
     strategy = planned_run.strategy
     assert isinstance(strategy, CatalogStrategy)
@@ -242,7 +255,7 @@ def _build_catalog_extraction_result_from_raw(
     if not request_inputs:
         request_inputs = (None,)
 
-    raw_plan = _plan_with_active_raw_root(plan)
+    raw_plan = _plan_with_active_raw_root(plan, run_id=raw_run_id)
 
     raw_artifacts = _rediscover_catalog_raw_artifacts(
         raw_plan,
@@ -280,8 +293,9 @@ def _build_catalog_extraction_result_from_raw(
         )
 
     raw_writer = RawArtifactWriter(storage_layout)
+    write_plan = _with_temporary_raw_root(raw_plan, temporary_raw_root)
     normalized_artifacts = _persist_normalized_records(
-        raw_plan,
+        write_plan,
         raw_writer,
         normalized_records,
     )
@@ -304,6 +318,18 @@ def _build_catalog_extraction_result_from_raw(
             "datasets_extracted": str(len(normalized_records["dataset"])),
             "resources_extracted": str(len(normalized_records["resource"])),
         },
+    )
+
+
+def _with_temporary_raw_root(
+    plan: ExecutionPlan, temporary_raw_root: Path | None
+) -> ExecutionPlan:
+    """Redirect helper-generated raw artifacts away from persistent storage when asked."""
+    if temporary_raw_root is None:
+        return plan
+    return replace(
+        plan,
+        raw_output=replace(plan.raw_output, path=str(temporary_raw_root.resolve())),
     )
 
 
