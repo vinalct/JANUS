@@ -42,6 +42,12 @@ LINEAGE_FIELD_MAPPING: dict[str, str] = {
     "emitted_at": "eventTime and run.facets.janusRun.emitted_at",
     "source_config_path": "job.facets.sourceCodeLocation and janusRun.source_config_path",
     "config_version": "job.facets.sourceCodeLocation.version and janusRun.config_version",
+    "schema_version": (
+        "run.facets.janusRun.schema_version and "
+        "outputs[].facets.schema"
+    ),
+    "contract_id": "run.facets.janusRun.contract_id",
+    "contract_version": "run.facets.janusRun.contract_version and job.facets.documentation",
     "configured_outputs": "run.facets.janusRun.configured_outputs",
     "materialized_outputs": "outputs and run.facets.janusRun.materialized_outputs",
     "artifacts": "outputs and run.facets.janusRun.artifacts",
@@ -58,6 +64,8 @@ LINEAGE_FIELD_MAPPING: dict[str, str] = {
 }
 DELIBERATELY_DROPPED_LINEAGE_FIELDS: frozenset[str] = frozenset()
 
+OPTIONAL_LINEAGE_FIELDS = frozenset({"schema_version", "contract_id", "contract_version"})
+
 CUSTOM_ONLY_LINEAGE_FIELDS = frozenset(
     {
         "strategy_family",
@@ -68,6 +76,7 @@ CUSTOM_ONLY_LINEAGE_FIELDS = frozenset(
         "materialized_outputs",
         "artifacts",
         "config_version",
+        "contract_id",
         "checkpoint_field",
         "source_hook",
         "checkpoint_value",
@@ -279,8 +288,9 @@ def _lineage_fields(
         "extraction_metadata": {},
     }
     for name in LINEAGE_FIELD_MAPPING:
-        payload.setdefault(name, defaults.get(name))
-    return {name: payload[name] for name in LINEAGE_FIELD_MAPPING}
+        if name not in OPTIONAL_LINEAGE_FIELDS:
+            payload.setdefault(name, defaults.get(name))
+    return {name: payload[name] for name in LINEAGE_FIELD_MAPPING if name in payload}
 
 
 def _quality_payload(run_record: RunRecord | None) -> dict[str, Any] | None:

@@ -139,6 +139,9 @@ def _run_metadata(
         run_attributes=attributes,
         plan_notes=("dispatch:api.page_number_api",),
         metadata=(("strategy.request_count", "1"),),
+        schema_version="e" * 64,
+        contract_id="example.consumer",
+        contract_version="1.0.0",
     )
 
 
@@ -175,6 +178,9 @@ def _lineage(metadata: RunMetadata, *, replay: bool = False) -> LineageRecord:
             else (("request_count", "1"),)
         ),
         metadata=metadata.metadata,
+        schema_version=metadata.schema_version,
+        contract_id=metadata.contract_id,
+        contract_version=metadata.contract_version,
     )
 
 
@@ -373,6 +379,26 @@ def test_declared_graph_edge_becomes_the_iceberg_input_dataset():
             "input_paths": ["access.request_inputs"],
         }
     ]
+
+
+def test_absent_contract_identity_is_omitted_from_the_janus_run_facet():
+    metadata, lineage, run_record = _terminal_records("success")
+    metadata = replace(
+        metadata, schema_version=None, contract_id=None, contract_version=None
+    )
+    lineage = replace(
+        lineage, schema_version=None, contract_id=None, contract_version=None
+    )
+    event = build_openlineage_run_event(
+        metadata,
+        DATASETS,
+        lineage_record=lineage,
+        run_record=run_record,
+        graph=GRAPH,
+    )
+
+    facet = event["run"]["facets"]["janusRun"]
+    assert not {"schema_version", "contract_id", "contract_version"} & facet.keys()
 
 
 def test_every_lineage_field_has_a_mapping_decision_and_custom_only_fields_survive():

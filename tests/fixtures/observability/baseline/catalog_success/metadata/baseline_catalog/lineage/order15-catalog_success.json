@@ -32,6 +32,8 @@
       "zone": "metadata"
     }
   ],
+  "contract_id": "example.minimal",
+  "contract_version": "1.0.0",
   "emitted_at": "2026-07-04T12:00:05+00:00",
   "environment": "local",
   "extraction_metadata": {
@@ -134,6 +136,7 @@
     "trigger": "baseline"
   },
   "run_id": "order15-catalog_success",
+  "schema_version": "36b064711c0849a241baa4eb3a5af56c7b8c40c1bb394413797146324b996583",
   "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
   "source_id": "baseline_catalog",
   "source_name": "Baseline catalog source",
