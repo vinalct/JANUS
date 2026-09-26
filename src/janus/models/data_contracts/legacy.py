@@ -167,6 +167,7 @@ def _properties_from_field_names(
             physical_type=LEGACY_COLUMN_TYPE,
             logical_type=odcs_logical_type_for(LEGACY_COLUMN_TYPE),
             required=False,
+            source_nullable=True,
         )
         for name in names
     )

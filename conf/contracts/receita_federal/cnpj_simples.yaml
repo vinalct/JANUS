@@ -1,0 +1,140 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: receita_federal.cnpj_simples
+name: Receita Federal - CNPJ Simples
+version: 1.0.0
+status: active
+domain: receita_federal
+description:
+  purpose: Simples Nacional and individual microentrepreneur option fields from the Receita Federal CNPJ
+    registry.
+team:
+- username: janus
+  role: owner
+tags:
+- receita-federal
+- cnpj
+- simples
+- bulk-file
+- federal
+schema:
+- name: cnpj_simples
+  physicalType: table
+  properties:
+  - name: cnpj_basico
+    businessName: CNPJ base
+    description: Eight-digit base identifier shared by the establishments of a CNPJ.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: true
+    primaryKey: true
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnpj_basico
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: opcao_simples
+    businessName: Simples Nacional enrollment option
+    description: Indicator of the company's Simples Nacional option.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: opcao_simples
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: data_opcao_simples
+    businessName: Simples Nacional enrollment date
+    description: Date the Simples Nacional option began.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: data_opcao_simples
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: data_exclusao_simples
+    businessName: Simples Nacional exclusion date
+    description: Date the company left Simples Nacional, when applicable.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: data_exclusao_simples
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: opcao_mei
+    businessName: Individual microentrepreneur enrollment option
+    description: Indicator of the company's individual microentrepreneur option.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: opcao_mei
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: data_opcao_mei
+    businessName: Individual microentrepreneur enrollment date
+    description: Date the individual microentrepreneur option began.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: data_opcao_mei
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: data_exclusao_mei
+    businessName: Individual microentrepreneur exclusion date
+    description: Date the company left the individual microentrepreneur option.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: data_exclusao_mei
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient

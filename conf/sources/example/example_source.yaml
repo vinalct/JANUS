@@ -50,9 +50,7 @@ extraction:
     backoff_seconds: 2
 
 schema:
-  mode: explicit
-  path: conf/schemas/example/source_schema.json
-
+  contract: conf/contracts/example/federal_open_data_example.yaml
 spark:
   input_format: json
   write_mode: append

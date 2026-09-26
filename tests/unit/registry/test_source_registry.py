@@ -40,7 +40,7 @@ def test_checked_in_registry_returns_typed_source_config():
 
 
 def test_checked_in_registry_loads_cnpj_entity_source_contracts():
-    """The CNPJ entries keep their legacy declaration until TASK-08 repoints them."""
+    """The CNPJ entries resolve their migrated active data contracts."""
     with pytest.warns(DeprecationWarning, match="schema.contract"):
         registry = load_registry(PROJECT_ROOT)
 
@@ -51,9 +51,13 @@ def test_checked_in_registry_loads_cnpj_entity_source_contracts():
 
     assert source.enabled is False
     assert source.source_hook is None
+    contract = registry.contract_for(source.source_id)
+
     assert source.access.remote_file_pattern == "Empresas*.zip"
-    assert source.schema.mode == "explicit"
-    assert source.schema.path == "conf/schemas/receita_federal/cnpj/empresas_schema.json"
+    assert source.schema.mode == "contract"
+    assert source.schema.contract == "conf/contracts/receita_federal/cnpj_empresas.yaml"
+    assert contract is not None
+    assert contract.status == "active"
     assert source.outputs.raw.path == "data/raw/receita_federal/cnpj/empresas"
     assert source.outputs.bronze.namespace == "bronze__receita_federal"
     assert source.outputs.bronze.table_name == "cnpj_empresas"

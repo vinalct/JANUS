@@ -51,9 +51,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: explicit
-      path: conf/schemas/dados_abertos_catalog/catalog_metadata_schema.json
-
+      contract: conf/contracts/dados_abertos/conjuntos_dados.yaml
     spark:
       input_format: jsonl
       write_mode: overwrite
@@ -147,9 +145,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: explicit
-      path: conf/schemas/dados_abertos_catalog/catalog_metadata_schema.json
-
+      contract: conf/contracts/dados_abertos/conjuntos_dados_details.yaml
     spark:
       input_format: jsonl
       write_mode: overwrite

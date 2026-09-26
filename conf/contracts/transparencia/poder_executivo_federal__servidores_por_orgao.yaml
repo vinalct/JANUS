@@ -1,0 +1,235 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: transparencia.poder_executivo_federal__servidores_por_orgao
+name: Portal da Transparencia - Servidores agregados por orgao
+version: 1.0.0
+status: active
+domain: transparencia
+description:
+  purpose: Aggregated federal executive employee counts grouped by SIAPE agency. The source also supplies
+    situation and employment type descriptors.
+team:
+- username: janus
+  role: owner
+tags:
+- transparencia
+- federal
+- api
+- servidores
+schema:
+- name: poder_executivo_federal__servidores_por_orgao
+  physicalType: table
+  properties:
+  - name: qntPessoas
+    businessName: People count
+    description: Number of people reported for the SIAPE agency grouping.
+    logicalType: integer
+    physicalType: integer
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: qntPessoas
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'false'
+  - name: qntVinculos
+    businessName: Employment relationship count
+    description: Number of employment relationships reported for the agency grouping.
+    logicalType: integer
+    physicalType: integer
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: qntVinculos
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'false'
+  - name: skSituacao
+    businessName: Situation key
+    description: Source key for the employee situation category.
+    logicalType: integer
+    physicalType: integer
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: skSituacao
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: descSituacao
+    businessName: Situation description
+    description: Description of the employee situation category.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: descSituacao
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: skTipoVinculo
+    businessName: Relationship type key
+    description: Source key for the employment relationship type.
+    logicalType: integer
+    physicalType: integer
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: skTipoVinculo
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: descTipoVinculo
+    businessName: Relationship type description
+    description: Description of the employment relationship type.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: descTipoVinculo
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: skTipoServidor
+    businessName: Employee type key
+    description: Source key for the employee type.
+    logicalType: integer
+    physicalType: integer
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: skTipoServidor
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: descTipoServidor
+    businessName: Employee type description
+    description: Description of the employee type.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: descTipoServidor
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: licenca
+    businessName: Leave indicator
+    description: Source code indicating a leave situation, when present.
+    logicalType: integer
+    physicalType: integer
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: licenca
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: codOrgaoExercicioSiape
+    businessName: SIAPE employing agency code
+    description: SIAPE code of the employee's employing agency.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: codOrgaoExercicioSiape
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'false'
+  - name: nomOrgaoExercicioSiape
+    businessName: SIAPE employing agency name
+    description: Name of the employee's employing agency.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: nomOrgaoExercicioSiape
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: codOrgaoSuperiorExercicioSiape
+    businessName: SIAPE supervising agency code
+    description: SIAPE code of the supervising agency.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: codOrgaoSuperiorExercicioSiape
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: nomOrgaoSuperiorExercicioSiape
+    businessName: SIAPE supervising agency name
+    description: Name of the supervising agency.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: nomOrgaoSuperiorExercicioSiape
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient

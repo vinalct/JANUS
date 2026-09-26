@@ -300,6 +300,9 @@ def _read_property(
     unique = _optional_bool(value, "unique", issues, path)
     primary_key = _optional_bool(value, "primaryKey", issues, path)
     classification = _optional_string(value, "classification", issues, path)
+    source_nullable = _read_source_nullable(
+        custom.get("sourceNullable"), f"{path}.customProperties.sourceNullable", issues
+    )
     if len(issues) != start:
         return None
     return ContractProperty(
@@ -314,11 +317,24 @@ def _read_property(
         classification=classification,
         source_field=custom.get("sourceField"),
         source_format=custom.get("sourceFormat"),
+        source_nullable=source_nullable,
         properties=nested.properties,
         items=nested.items,
         keys=nested.keys,
         values=nested.values,
     )
+
+
+def _read_source_nullable(
+    value: str | None, path: str, issues: list[ValidationIssue]
+) -> bool | None:
+    """Read source nullability separately from a quality-required expectation."""
+    if value is None:
+        return None
+    if value not in {"true", "false"}:
+        issues.append(ValidationIssue(path, "must be the string 'true' or 'false'"))
+        return None
+    return value == "true"
 
 
 def _read_vocabulary_name(

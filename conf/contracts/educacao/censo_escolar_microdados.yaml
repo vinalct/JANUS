@@ -1,0 +1,204 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: educacao.censo_escolar_microdados
+name: INEP - Microdados do Censo Escolar da Educacao Basica
+version: 1.0.0
+status: active
+domain: educacao
+description:
+  purpose: Selected INEP Basic Education School Census microdata for Brazilian education institutions.
+    The contract describes the initial set of fields used by JANUS.
+team:
+- username: janus
+  role: owner
+tags:
+- inep
+- censo-escolar
+- microdados
+- bulk-file
+- federal
+schema:
+- name: censo_escolar_microdados
+  physicalType: table
+  properties:
+  - name: NU_ANO_CENSO
+    businessName: School census year
+    description: Reference year of the Basic Education School Census.
+    logicalType: integer
+    physicalType: integer
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: NU_ANO_CENSO
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'false'
+  - name: CO_ENTIDADE
+    businessName: Education institution code
+    description: INEP code identifying the education institution.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: CO_ENTIDADE
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'false'
+  - name: NO_ENTIDADE
+    businessName: Education institution name
+    description: Official name of the education institution.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: NO_ENTIDADE
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: CO_UF
+    businessName: State code
+    description: Numeric code of the Brazilian state.
+    logicalType: integer
+    physicalType: integer
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: CO_UF
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: SG_UF
+    businessName: State abbreviation
+    description: Two-letter abbreviation of the Brazilian state.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: SG_UF
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: CO_MUNICIPIO
+    businessName: Municipality code
+    description: INEP code identifying the municipality.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: CO_MUNICIPIO
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: NO_MUNICIPIO
+    businessName: Municipality name
+    description: Official municipality name.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: NO_MUNICIPIO
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: TP_DEPENDENCIA
+    businessName: Administrative dependency type code
+    description: Code for the institution's administrative dependency.
+    logicalType: integer
+    physicalType: integer
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: TP_DEPENDENCIA
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'false'
+  - name: TP_LOCALIZACAO
+    businessName: Location type code
+    description: Code for the institution's rural or urban location.
+    logicalType: integer
+    physicalType: integer
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: TP_LOCALIZACAO
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: TP_SITUACAO_FUNCIONAMENTO
+    businessName: Operating status code
+    description: Code describing whether the institution is operating.
+    logicalType: integer
+    physicalType: integer
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: TP_SITUACAO_FUNCIONAMENTO
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: QT_MAT_BAS
+    businessName: Basic education enrollment count
+    description: Number of enrollments in basic education.
+    logicalType: integer
+    physicalType: integer
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: QT_MAT_BAS
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient

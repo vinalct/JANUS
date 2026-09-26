@@ -44,7 +44,7 @@ The source is disabled by default. Running it requires `--include-disabled`, whi
 The explicit schema lives at:
 
 ```text
-conf/schemas/inep/censo_escolar_microdados_schema.json
+conf/contracts/educacao/censo_escolar_microdados.yaml
 ```
 
 The first schema is intentionally narrow. It covers the fields needed to prove the pipeline contract and quality checks without trying to model the entire INEP release in one pass.

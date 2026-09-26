@@ -49,9 +49,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: explicit
-      path: conf/schemas/transparencia/servidores_por_orgao_schema.json
-
+      contract: conf/contracts/transparencia/poder_executivo_federal__servidores_por_orgao.yaml
     spark:
       input_format: json
       write_mode: overwrite

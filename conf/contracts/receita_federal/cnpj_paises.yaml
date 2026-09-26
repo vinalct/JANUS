@@ -1,0 +1,59 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: receita_federal.cnpj_paises
+name: Receita Federal - CNPJ Paises
+version: 1.0.0
+status: active
+domain: receita_federal
+description:
+  purpose: Country codes and descriptions from the Receita Federal CNPJ registry.
+team:
+- username: janus
+  role: owner
+tags:
+- receita-federal
+- cnpj
+- paises
+- lookup
+- federal
+schema:
+- name: cnpj_paises
+  physicalType: table
+  properties:
+  - name: codigo
+    businessName: Code
+    description: Code identifying an entry in the source lookup table.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: true
+    primaryKey: true
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: codigo
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: descricao
+    businessName: Description
+    description: Human-readable label supplied for the corresponding source code.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: descricao
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient

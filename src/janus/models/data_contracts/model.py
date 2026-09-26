@@ -48,6 +48,7 @@ class ContractProperty:
     classification: str | None = None
     source_field: str | None = None
     source_format: str | None = None
+    source_nullable: bool | None = None
     properties: tuple[ContractProperty, ...] = ()
     items: ContractProperty | None = None
     keys: ContractProperty | None = None

@@ -155,7 +155,7 @@ def spark_json_type(prop: ContractProperty) -> dict[str, Any] | str:
         return {
             "type": "array",
             "elementType": spark_json_type(items),
-            "containsNull": not items.required,
+            "containsNull": _source_nullable(items),
         }
     if parsed.name == "map":
         keys, values = _map_children(prop)
@@ -163,7 +163,7 @@ def spark_json_type(prop: ContractProperty) -> dict[str, Any] | str:
             "type": "map",
             "keyType": spark_json_type(keys),
             "valueType": spark_json_type(values),
-            "valueContainsNull": not values.required,
+            "valueContainsNull": _source_nullable(values),
         }
     return parsed.spark_json_type
 
@@ -176,7 +176,7 @@ def spark_struct_json(properties: tuple[ContractProperty, ...]) -> dict[str, Any
             {
                 "name": prop.name,
                 "type": spark_json_type(prop),
-                "nullable": not prop.required,
+                "nullable": _source_nullable(prop),
                 "metadata": {},
             }
             for prop in properties
@@ -203,6 +203,7 @@ def contract_properties_from_spark_json(
             _spark_field_name(field),
             field["type"],
             required=not field.get("nullable", True),
+            source_nullable=bool(field.get("nullable", True)),
         )
         for field in fields
     )
@@ -266,7 +267,11 @@ def _required_key(value: Mapping[str, Any], key: str) -> Any:
 
 
 def _property_from_spark_type(
-    name: str, value: _SparkJson, *, required: bool
+    name: str,
+    value: _SparkJson,
+    *,
+    required: bool,
+    source_nullable: bool,
 ) -> ContractProperty:
     physical_type = physical_type_from_spark_json(value)
     nested: dict[str, Any] = {}
@@ -278,24 +283,35 @@ def _property_from_spark_type(
             _ARRAY_ELEMENT_NAME,
             _required_key(element, "elementType"),
             required=not element.get("containsNull", True),
+            source_nullable=bool(element.get("containsNull", True)),
         )
     elif physical_type == "map":
         entries = _spark_mapping(value)
         nested["keys"] = _property_from_spark_type(
-            _MAP_KEY_NAME, _required_key(entries, "keyType"), required=True
+            _MAP_KEY_NAME,
+            _required_key(entries, "keyType"),
+            required=True,
+            source_nullable=False,
         )
         nested["values"] = _property_from_spark_type(
             _MAP_VALUE_NAME,
             _required_key(entries, "valueType"),
             required=not entries.get("valueContainsNull", True),
+            source_nullable=bool(entries.get("valueContainsNull", True)),
         )
     return ContractProperty(
         name=name,
         physical_type=physical_type,
         logical_type=odcs_logical_type_for(physical_type),
         required=required,
+        source_nullable=source_nullable,
         **nested,
     )
+
+
+def _source_nullable(prop: ContractProperty) -> bool:
+    """Keep source nullability independent from a contract quality expectation."""
+    return prop.source_nullable if prop.source_nullable is not None else not prop.required
 
 
 def _spark_struct_fields(value: _SparkJson) -> tuple[Mapping[str, Any], ...]:

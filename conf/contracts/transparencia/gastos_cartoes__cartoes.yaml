@@ -1,0 +1,584 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: transparencia.gastos_cartoes__cartoes
+name: Portal da Transparencia - Gastos Cartões
+version: 1.0.0
+status: active
+domain: transparencia
+description:
+  purpose: Payment card transaction records returned by the Portal da Transparência API. Nested fields
+    describe the merchant, card holder, card type, and managing unit.
+team:
+- username: janus
+  role: owner
+tags:
+- transparencia
+- federal
+- api
+- cartoes
+schema:
+- name: gastos_cartoes__cartoes
+  physicalType: table
+  properties:
+  - name: dataTransacao
+    businessName: Transaction date
+    description: Date reported for the payment card transaction.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: dataTransacao
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: estabelecimento
+    businessName: Merchant establishment
+    description: Merchant establishment provided by the upstream source; retained in its source representation
+      in bronze.
+    logicalType: object
+    physicalType: struct
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: estabelecimento
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+    properties:
+    - name: cnpjFormatado
+      businessName: Formatted CNPJ
+      description: CNPJ registered for the merchant establishment.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: cnpjFormatado
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: cpfFormatado
+      businessName: Formatted CPF
+      description: CPF value supplied for the merchant establishment.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: cpfFormatado
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: id
+      businessName: Record identifier
+      description: Source identifier for the merchant establishment.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: id
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: nome
+      businessName: Name
+      description: Name supplied for the merchant establishment.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: nome
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: nomeFantasiaReceita
+      businessName: Receita Federal trade name
+      description: Trade name returned by Receita Federal for the merchant.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: nomeFantasiaReceita
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: numeroInscricaoSocial
+      businessName: Social registration number
+      description: Social registration number supplied for the merchant.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: numeroInscricaoSocial
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: razaoSocialReceita
+      businessName: Receita Federal corporate name
+      description: Corporate name returned by Receita Federal for the merchant.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: razaoSocialReceita
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: tipo
+      businessName: Establishment type
+      description: Type code for the merchant establishment.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: tipo
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+  - name: id
+    businessName: Record identifier
+    description: Record identifier provided by the upstream source; retained in its source representation
+      in bronze.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: true
+    primaryKey: true
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: id
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'false'
+  - name: mesExtrato
+    businessName: Statement month
+    description: Month of the statement associated with the transaction.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: mesExtrato
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'false'
+  - name: portador
+    businessName: Payment card holder
+    description: Payment card holder provided by the upstream source; retained in its source representation
+      in bronze.
+    logicalType: object
+    physicalType: struct
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: portador
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+    properties:
+    - name: cpfFormatado
+      businessName: Formatted CPF
+      description: Formatted CPF of the payment card holder.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: personal
+      customProperties:
+      - property: sourceField
+        value: cpfFormatado
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: nis
+      businessName: Social identification number
+      description: Social identification number of the payment card holder.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: personal
+      customProperties:
+      - property: sourceField
+        value: nis
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: nome
+      businessName: Name
+      description: Name supplied for the payment card holder.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: nome
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+  - name: tipoCartao
+    businessName: Payment card type
+    description: Payment card type provided by the upstream source; retained in its source representation
+      in bronze.
+    logicalType: object
+    physicalType: struct
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: tipoCartao
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+    properties:
+    - name: codigo
+      businessName: Code
+      description: Source code for the payment card type.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: codigo
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: descricao
+      businessName: Description
+      description: Source description of the payment card type.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: descricao
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: id
+      businessName: Record identifier
+      description: Source identifier for the payment card type.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: id
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+  - name: unidadeGestora
+    businessName: Managing government unit
+    description: Managing government unit provided by the upstream source; retained in its source representation
+      in bronze.
+    logicalType: object
+    physicalType: struct
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: unidadeGestora
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+    properties:
+    - name: codigo
+      businessName: Code
+      description: Source code for the managing government unit.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: codigo
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: descricaoPoder
+      businessName: Government branch description
+      description: Government branch description for the managing unit.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: descricaoPoder
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: nome
+      businessName: Name
+      description: Name of the managing government unit.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: nome
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: orgaoMaximo
+      businessName: Highest-level agency
+      description: Highest-level agency provided by the upstream source; retained in its source representation
+        in bronze.
+      logicalType: object
+      physicalType: struct
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: orgaoMaximo
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+      properties:
+      - name: codigo
+        businessName: Code
+        description: Code of the highest-level agency.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: codigo
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: nome
+        businessName: Name
+        description: Name of the highest-level agency.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: nome
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: sigla
+        businessName: Abbreviation
+        description: Abbreviation of the highest-level agency.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: sigla
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+    - name: orgaoVinculado
+      businessName: Linked agency
+      description: Linked agency provided by the upstream source; retained in its source representation
+        in bronze.
+      logicalType: object
+      physicalType: struct
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: orgaoVinculado
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+      properties:
+      - name: cnpj
+        businessName: CNPJ
+        description: CNPJ of the linked agency.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: cnpj
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: codigoSIAFI
+        businessName: SIAFI code
+        description: SIAFI code of the linked agency.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: codigoSIAFI
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: nome
+        businessName: Name
+        description: Name of the linked agency.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: nome
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: sigla
+        businessName: Abbreviation
+        description: Abbreviation of the linked agency.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: sigla
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+  - name: valorTransacao
+    businessName: Transaction amount
+    description: Transaction value retained in the source's string representation.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: valorTransacao
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'false'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient

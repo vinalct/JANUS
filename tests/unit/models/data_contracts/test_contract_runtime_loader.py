@@ -80,6 +80,7 @@ def test_example_contract_loads_into_the_complete_frozen_model():
                     classification="public",
                     source_field="id",
                     source_format="json",
+                    source_nullable=True,
                 ),
                 ContractProperty(
                     name="updated_at",
@@ -91,6 +92,9 @@ def test_example_contract_loads_into_the_complete_frozen_model():
                     ),
                     required=True,
                     classification="public",
+                    source_field="updated_at",
+                    source_format="json",
+                    source_nullable=True,
                 ),
             ),
         ),

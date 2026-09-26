@@ -9,6 +9,7 @@ from janus.models.data_contracts import (
     ContractValidationError,
     contract_from_legacy_schema_file,
     legacy_contract_id,
+    load_data_contract,
     spark_struct_json,
 )
 from janus.models.data_contracts.legacy import (
@@ -251,3 +252,45 @@ def test_a_spark_type_outside_the_vocabulary_is_refused(tmp_path: Path) -> None:
     message = _rendered_issues(_write(tmp_path, payload))
 
     assert "no JANUS vocabulary spelling" in message
+
+
+# ── the checked-in contracts ──────────────────────────────────────────────────
+
+
+def test_migrated_contract_column_order_matches_every_m0_entry() -> None:
+    """Contracts preserve bronze field order for all seventeen explicit entries."""
+    from janus.registry.loader import load_registry
+
+    registry = load_registry(PROJECT_ROOT)
+    goldens = _goldens()
+
+    assert len(goldens) == 17
+    for golden_path in goldens:
+        golden = json.loads(golden_path.read_text(encoding="utf-8"))
+        source = registry.get_source(golden["source_id"], include_disabled=True)
+        assert source.schema.contract is not None
+        contract = load_data_contract(PROJECT_ROOT / source.schema.contract)
+
+        assert contract.column_names == tuple(
+            field["name"] for field in golden["struct_type"]["fields"]
+        )
+        assert spark_struct_json(contract.schema.properties) == golden["struct_type"]
+
+
+def test_migrated_contract_spark_schemas_match_every_m0_entry() -> None:
+    """The contract-generated Spark schemas retain names, types, nullability, and order."""
+    pytest.importorskip("pyspark.sql")
+    from janus.registry.loader import load_registry
+    from janus.schema_contracts import spark_schema_from_contract
+
+    registry = load_registry(PROJECT_ROOT)
+    goldens = _goldens()
+
+    assert len(goldens) == 17
+    for golden_path in goldens:
+        golden = json.loads(golden_path.read_text(encoding="utf-8"))
+        source = registry.get_source(golden["source_id"], include_disabled=True)
+        assert source.schema.contract is not None
+        contract = load_data_contract(PROJECT_ROOT / source.schema.contract)
+
+        assert spark_schema_from_contract(contract).jsonValue() == golden["struct_type"]
