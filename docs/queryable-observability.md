@@ -136,6 +136,11 @@ all de-duplicate on `run_id` before answering the question:
 - [config and contract version drift](queries/observability/config-version-drift.sql);
 - [failed sources in one pipeline run](queries/observability/pipeline-failures.sql).
 
+The drift query emits the first observed run for each source and every later change in either
+`config_version` or `schema_version`. Compare `contract_id` and `contract_version` to tell a
+new declaration from an in-place byte edit; a version bump alone does not enforce compatibility.
+Old v1 rows have `NULL` contract fields. See [Data contracts](data-contracts.md) for the identity
+and versioning rules.
 
 ## OpenLineage operator surface
 
@@ -202,6 +207,7 @@ terminal `outcome=failed` or `skipped` does not change the ingestion outcome.
 | PyIceberg or PyArrow is missing | `runs_table_append_degraded` reports `reason=pyiceberg_or_pyarrow_unavailable`, `step=dependency_import`, `exception_type=ImportError`. Install the project runtime dependencies. |
 | Catalog is unreachable or credentials are refused | The same event reports `reason=catalog_load_failed`, `step=catalog_load`, and the concrete exception type. Check the profile URI, credentials, service, and network. Namespace/table bootstrap failures similarly report `namespace_create_failed`, `table_create_failed`, or `table_load_failed`. |
 | Live schema differs from the declaration | `reason=live_schema_does_not_match_declaration` or `live_schema_does_not_match_declaration_after_evolution`, `step=schema_validation`, `exception_type=RunsTableSchemaMismatch`. Compare the live schema with `RUNS_TABLE_SCHEMA`; type changes, renames, dropped fields, extra fields, required additions, and ID mismatches need an explicit migration. |
+| Runs table evolution conflicts with a live schema | Check `step=schema_validation` for a non-additive mismatch or `step=schema_evolution` for a failed nullable-column update. Stop retries of a persistent mismatch and plan an explicit migration. |
 | Two runs try to add the contract columns at once | Iceberg commits one schema update; the other reports `reason=schema_evolution_failed`, `step=schema_evolution`, and its commit-conflict exception type. The next run reloads the table, sees the columns, and appends without another evolution. |
 | Emission exceeded its budget | `run_event_emission_finished` reports `reason=budget_failed`, `stage=budget`, normally with `exception_type=EmissionTimeoutError`. The total START or terminal fan-out budget is five seconds; investigate a slow catalog or endpoint. |
 | Table exists but a query returns no rows | Confirm the catalog name and `observability.runs_table` override, then confirm the half-open `started_at` window. `emitted_at` is the partition-pruning timestamp, not a substitute for the operator's run-start window. |

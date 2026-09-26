@@ -223,7 +223,7 @@ That command:
 - prepares runtime paths;
 - loads the requested source from the registry;
 - resolves its strategy family and variant;
-- prints a stable JSON planning summary.
+- prints a stable JSON planning summary, including the contract identity block loaded with the registry snapshot. `schema_version` is the SHA-256 of the contract file bytes and can be derived without a run.
 
 Why pass `--run-id` and `--started-at` explicitly?
 

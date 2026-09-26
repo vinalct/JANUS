@@ -533,38 +533,19 @@ Practical rule: if `extraction.mode` is `incremental`, define a real `checkpoint
 
 ### `schema`
 
-The `schema` block is narrower than it may look at first glance. Today it supports only:
-
-- `mode`
-- `path`
-
-Supported values are:
-
-- `mode: infer`
-- `mode: explicit`
-
-Examples:
+Declare the bronze table's versioned ODCS contract by path:
 
 ```yaml
 schema:
-  mode: infer
+  contract: conf/contracts/transparencia/poder_executivo_federal__servidores_por_orgao.yaml
 ```
 
-```yaml
-schema:
-  mode: explicit
-  path: conf/schemas/transparencia/servidores_por_orgao_schema.json
-```
+The contract has exactly one table schema and records column types, order, ownership, descriptions
+and business metadata. Co-writers of one bronze table reference the same file. The registry loads
+it once with the source snapshot, and JANUS generates the Spark read schema from it when the
+normalization handoff format matches `spark.input_format`. See [Data contracts](data-contracts.md)
+for the format, type vocabulary, drafting workflow and bronze naming rule.
 
-If `mode` is `explicit`, `path` is required. JANUS does not currently support inline field definitions, inline types, or other schema metadata in the source YAML.
-
-The schema path may point to a Spark `StructType` JSON document or to a JSON field contract that JANUS can read as field names. Supported field-contract shapes are:
-
-- a JSON array of field names;
-- a mapping with `fields` or `columns`;
-- a mapping with `schema.fields` or `schema.columns`.
-
-During execution, JANUS passes an explicit Spark schema to the reader when the normalization handoff format matches `spark.input_format`. The same schema file also feeds the quality gate's expected-field check.
 
 ### `spark`
 
@@ -619,7 +600,7 @@ Examples of behavior that should stay in config:
 - page size or offset parameter names;
 - file URL resolver mode, remote file filters, and archive-member filters;
 - checkpoint field and checkpoint strategy;
-- explicit schema path and Spark read options;
+- a data contract path and Spark read options;
 - output formats and paths, plus optional `outputs.bronze.namespace` and `outputs.bronze.table_name` for Iceberg bronze targets;
 - quality rules such as required fields and uniqueness keys.
 

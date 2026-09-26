@@ -7,7 +7,7 @@
 
 JANUS is a metadata-driven Apache Spark framework for ingesting Brazilian federal open data in a reproducible, safe, and extensible way.
 
-In simple terms, it helps turn public datasets published as APIs, catalogs, and bulk files into repeatable, traceable data products. Technically, it combines typed YAML source contracts, a planner, strategy families (`api`, `catalog`, `file`), optional narrow hooks, Spark normalization, and metadata, checkpoint, lineage, and validation persistence.
+In simple terms, it helps turn public datasets published as APIs, catalogs, and bulk files into repeatable, traceable data products. Technically, it combines typed YAML source contracts and ODCS data contracts, a planner, strategy families (`api`, `catalog`, `file`), optional narrow hooks, Spark normalization, and metadata, checkpoint, lineage, and validation persistence.
 
 ## Objective
 
@@ -46,14 +46,14 @@ More detail: [strategy patterns](docs/strategy-patterns.md), [source onboarding]
 
 The checked-in source contracts already cover the three core strategy families.
 
-| Source group | Family | Notes |
-| --- | --- | --- |
-| Portal da Transparencia APIs | `api` | Contratos, emendas, gastos com cartoes, licitacoes, orgaos, renuncias fiscais, and servidores; disabled by default; require `TRANSPARENCIA_API_TOKEN` for live execution |
-| dados.gov.br catalog | `catalog` | Catalog listing and detail sources; disabled by default; require `DADOS_GOV_BR_API_TOKEN` for live execution |
-| IBGE SIDRA | `api` | `ibge_pib_brasil` and `ibge_agro_abacaxi_pronaf`; disabled by default; public execution path; use the `ibge.sidra_flat` hook |
-| INEP microdata | `file` | `inep_censo_escolar_microdados`; disabled by default; exercises ZIP extraction and configured CSV read options |
-| Receita Federal CNPJ | `file` | Declarative CNPJ entity ingestions for empresas, estabelecimentos, socios, simples, and lookup tables; disabled by default; use WebDAV discovery, archive filtering, and explicit schemas |
-| `federal_open_data_example` | `api` | Contract example only; points to `example.invalid` and is not a live source |
+| Source group | Family | Contract | Notes |
+| --- | --- | --- | --- |
+| Portal da Transparencia APIs | `api` | [`conf/contracts/transparencia/*.yaml`](conf/contracts/transparencia/) | Contratos, emendas, gastos com cartoes, licitacoes, orgaos, renuncias fiscais, and servidores; twelve contracts remain drafts pending live review; disabled by default; require `TRANSPARENCIA_API_TOKEN` for live execution |
+| dados.gov.br catalog | `catalog` | [`conjuntos_dados.yaml`](conf/contracts/dados_abertos/conjuntos_dados.yaml), [`conjuntos_dados_details.yaml`](conf/contracts/dados_abertos/conjuntos_dados_details.yaml) | Catalog listing and detail sources; disabled by default; require `DADOS_GOV_BR_API_TOKEN` for live execution |
+| IBGE SIDRA | `api` | [`pib_brasil.yaml`](conf/contracts/estatisticas/pib_brasil.yaml), [`agro_abacaxi_pronaf.yaml`](conf/contracts/estatisticas/agro_abacaxi_pronaf.yaml) | Two fixture-reviewed sources; disabled by default; public execution path; use the `ibge.sidra_flat` hook |
+| INEP microdata | `file` | [`censo_escolar_microdados.yaml`](conf/contracts/educacao/censo_escolar_microdados.yaml) | Disabled by default; exercises ZIP extraction and configured CSV read options |
+| Receita Federal CNPJ | `file` | [`conf/contracts/receita_federal/*.yaml`](conf/contracts/receita_federal/) | Empresas, estabelecimentos, socios, simples, and lookup tables; disabled by default; use WebDAV discovery and archive filtering |
+| `federal_open_data_example` | `api` | [`federal_open_data_example.yaml`](conf/contracts/example/federal_open_data_example.yaml) | Contract example only; points to `example.invalid` and is not a live source |
 
 Output zones live under `data/`:
 
@@ -115,7 +115,7 @@ janus \
 
 This does not hit the live source. It validates the source contract, resolves the strategy, and prints a stable JSON planning summary.
 
-Draft an inferred contract from a previous raw run or local fixture with `janus contract draft --source-id <id> (--from-raw <run-id> | --from-fixture <path>)`; review inferred types before activation.
+Draft a data contract with `janus contract draft --source-id <id> (--from-raw <run-id> | --from-fixture <path>)`; review inferred types before activation. See [Data contracts](docs/data-contracts.md).
 
 ### 6. Execute one live source end to end
 

@@ -45,7 +45,8 @@ in the custom facet. Configured-but-unwritten targets are not presented as outpu
 Standard facets carry job documentation, source-code location and config version, job
 type, failure messages, output row counts, and the bronze schema. The SchemaDatasetFacet
 is rendered from the DataContract already carried on the execution plan, with no file or
-catalog reads during emission. It appears only on bronze outputs in terminal COMPLETE and
+catalog reads during emission. See [Data contracts](data-contracts.md) for the declaration
+format and identity. It appears only on bronze outputs in terminal COMPLETE and
 FAIL events; raw artifacts and START events have no schema facet. Field types use JANUS's
 engine-neutral vocabulary (for example timestamptz, decimal(18,2), and struct), and nested
 struct properties are represented as nested fields. Job documentation uses the contract
