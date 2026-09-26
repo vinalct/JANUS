@@ -1,0 +1,339 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: transparencia.renuncias_fiscais__renuncias_valores
+name: Portal da Transparencia - Renuncias Fiscais - Valores
+version: 0.1.0
+status: draft
+domain: transparencia
+description:
+  purpose: Draft contract for Portal da Transparencia - Renuncias Fiscais - Valores; sample semantics
+    remain pending review.
+team:
+- username: janus
+  role: owner
+tags:
+- transparencia
+- federal
+- api
+- renuncias fiscais
+schema:
+- name: renuncias_fiscais__renuncias_valores
+  physicalType: table
+  properties:
+  - name: ano
+    businessName: Ano
+    description: Portal da Transparencia response field ano; field meaning and observed nullability remain
+      pending review against a sampled response.
+    logicalType: integer
+    physicalType: long
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: ano
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: cnaeCodigoClasse
+    businessName: CNAE Codigo Classe
+    description: Portal da Transparencia response field cnaeCodigoClasse; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnaeCodigoClasse
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: cnaeCodigoGrupo
+    businessName: CNAE Codigo Grupo
+    description: Portal da Transparencia response field cnaeCodigoGrupo; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnaeCodigoGrupo
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: cnaeCodigoSubClasse
+    businessName: CNAE Codigo Sub Classe
+    description: Portal da Transparencia response field cnaeCodigoSubClasse; field meaning and observed
+      nullability remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnaeCodigoSubClasse
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: cnaeDivisao
+    businessName: CNAE Divisao
+    description: Portal da Transparencia response field cnaeDivisao; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnaeDivisao
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: cnaeNomeClasse
+    businessName: CNAE Nome Classe
+    description: Portal da Transparencia response field cnaeNomeClasse; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnaeNomeClasse
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: cnpj
+    businessName: CNPJ
+    description: Portal da Transparencia response field cnpj; field meaning and observed nullability remain
+      pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnpj
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: codigoIBGE
+    businessName: Codigo IBGE
+    description: Portal da Transparencia response field codigoIBGE; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: codigoIBGE
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: descricaoBeneficioFiscal
+    businessName: Descricao Beneficio Fiscal
+    description: Portal da Transparencia response field descricaoBeneficioFiscal; field meaning and observed
+      nullability remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: descricaoBeneficioFiscal
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: descricaoFundamentoLegal
+    businessName: Descricao Fundamento Legal
+    description: Portal da Transparencia response field descricaoFundamentoLegal; field meaning and observed
+      nullability remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: descricaoFundamentoLegal
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: formaTributacao
+    businessName: Forma Tributacao
+    description: Portal da Transparencia response field formaTributacao; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: formaTributacao
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: municipio
+    businessName: Municipio
+    description: Portal da Transparencia response field municipio; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: municipio
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: nomeFantasia
+    businessName: Nome Fantasia
+    description: Portal da Transparencia response field nomeFantasia; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: nomeFantasia
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: razaoSocial
+    businessName: Razao Social
+    description: Portal da Transparencia response field razaoSocial; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: razaoSocial
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: tipoRenuncia
+    businessName: Tipo Renuncia
+    description: Portal da Transparencia response field tipoRenuncia; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: tipoRenuncia
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: tributo
+    businessName: Tributo
+    description: Portal da Transparencia response field tributo; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: tributo
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: uf
+    businessName: UF
+    description: Portal da Transparencia response field uf; field meaning and observed nullability remain
+      pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: uf
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: valorRenunciado
+    businessName: Valor Renunciado
+    description: Portal da Transparencia response field valorRenunciado; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: number
+    physicalType: double
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: valorRenunciado
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient
+- property: janus.draftedFrom
+  value: official OpenAPI response model RenunciaDTO at https://api.portaldatransparencia.gov.br/v3/api-docs
+    for GET /api-de-dados/renuncias-valor; no sample payload, fixture or saved raw run was available on
+    2026-09-23, and TRANSPARENCIA_API_TOKEN was not present in the process environment. This is a documentation-shaped
+    draft only; inferred field types/order, nullability, business descriptions and quality agreement require
+    a bounded live run and human review before activation.

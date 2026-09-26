@@ -1,0 +1,66 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: transparencia.licitacoes__modalidades
+name: Portal da Transparencia - Modalidades das Licitações
+version: 0.1.0
+status: draft
+domain: transparencia
+description:
+  purpose: Consulta para obter as modalidades das licitações.
+team:
+- username: janus
+  role: owner
+tags:
+- transparencia
+- federal
+- api
+- licitacoes
+schema:
+- name: licitacoes__modalidades
+  physicalType: table
+  properties:
+  - name: codigo
+    businessName: Codigo
+    description: Portal da Transparencia response field codigo; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: codigo
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: descricao
+    businessName: Descricao
+    description: Portal da Transparencia response field descricao; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: descricao
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient
+- property: janus.draftedFrom
+  value: official OpenAPI response model CodigoDescricaoDTO at https://api.portaldatransparencia.gov.br/v3/api-docs
+    for GET /api-de-dados/licitacoes/modalidades; no sample payload, fixture or saved raw run was available
+    on 2026-09-23, and TRANSPARENCIA_API_TOKEN was not present in the process environment. This is a documentation-shaped
+    draft only; inferred field types/order, nullability, business descriptions and quality agreement require
+    a bounded live run and human review before activation.

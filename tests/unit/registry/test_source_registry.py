@@ -41,8 +41,7 @@ def test_checked_in_registry_returns_typed_source_config():
 
 def test_checked_in_registry_loads_cnpj_entity_source_contracts():
     """The CNPJ entries resolve their migrated active data contracts."""
-    with pytest.warns(DeprecationWarning, match="schema.contract"):
-        registry = load_registry(PROJECT_ROOT)
+    registry = load_registry(PROJECT_ROOT)
 
     source = registry.get_source(
         "receita_federal__cnpj__empresas_full_refresh",

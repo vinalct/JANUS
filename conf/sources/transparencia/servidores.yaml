@@ -125,8 +125,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: infer
-      
+      contract: conf/contracts/transparencia/poder_executivo_federal__servidores.yaml
     spark:
       input_format: json
       write_mode: overwrite

@@ -49,8 +49,7 @@ sources:
         retryable_status_codes: [400, 408, 429, 500, 502, 503, 504]
 
     schema:
-      mode: infer
-      
+      contract: conf/contracts/transparencia/renuncias_fiscais__renuncias_valores.yaml
     spark:
       input_format: json
       write_mode: overwrite
@@ -130,8 +129,7 @@ sources:
         retryable_status_codes: [400, 408, 429, 500, 502, 503, 504]
 
     schema:
-      mode: infer
-      
+      contract: conf/contracts/transparencia/renuncias_fiscais__empresas_imunes_isentas.yaml
     spark:
       input_format: json
       write_mode: overwrite
@@ -211,8 +209,7 @@ sources:
         retryable_status_codes: [400, 408, 429, 500, 502, 503, 504]
 
     schema:
-      mode: infer
-      
+      contract: conf/contracts/transparencia/renuncias_fiscais__empresas_habilitadas.yaml
     spark:
       input_format: json
       write_mode: overwrite

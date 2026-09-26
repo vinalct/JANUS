@@ -29,8 +29,7 @@ STARTED_AT = datetime(2026, 9, 22, 12, 0, tzinfo=UTC)
 
 @pytest.fixture
 def source_config() -> SourceConfig:
-    with pytest.warns(DeprecationWarning, match="schema.contract"):
-        registry = load_registry(PROJECT_ROOT)
+    registry = load_registry(PROJECT_ROOT)
     return registry.get_source("federal_open_data_example")
 
 

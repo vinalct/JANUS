@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
 
 from janus.models.data_contracts import load_data_contract
@@ -17,6 +17,30 @@ SOURCES_ROOT = PROJECT_ROOT / "conf" / "sources"
 CONTRACTS_ROOT = PROJECT_ROOT / "conf" / "contracts"
 EXPECTED_SOURCE_FILES = 21
 EXPECTED_SOURCE_ENTRIES = 31
+EXPECTED_CONTRACT_FILES = 30
+
+# Live Transparency sources require a token and sampled response before review.
+PENDING_ACTIVATION: dict[str, dict[str, str]] = {
+    source_id: {
+        "since": "2026-09-23",
+        "review_by": "2026-10-23",
+        "reason": "No token or saved run; draft reflects the published DTO only.",
+    }
+    for source_id in (
+        "transparencia__contratos__contratos__full_refresh",
+        "transparencia__emendas_parlamentares__emendas__full_refresh",
+        "transparencia__emendas_parlamentares__documentos__full_refresh",
+        "transparencia__licitacoes__licitacoes__full_refresh",
+        "transparencia__licitacoes__unidades_gestoras__full_refresh",
+        "transparencia__licitacoes__modalidades__full_refresh",
+        "transparencia__orgaos__siape__full_refresh",
+        "transparencia__orgaos__siafi__full_refresh",
+        "transparencia__renuncias_fiscais__renuncias_valores__full_refresh",
+        "transparencia__renuncias_fiscais__empresas_imunes_isentas__full_refresh",
+        "transparencia__renuncias_fiscais__empresas_habilitadas__full_refresh",
+        "transparencia__poder_executivo_federal__servidores__full_refresh",
+    )
+}
 
 
 def _source_entries() -> tuple[tuple[Path, dict[str, Any]], ...]:
@@ -82,7 +106,6 @@ def test_no_entry_uses_schema_path_or_mode_explicit() -> None:
     assert not offenders, f"legacy explicit declarations: {offenders}"
 
 
-@pytest.mark.xfail(strict=True, reason="LATER_CHANGES")
 def test_no_entry_uses_schema_mode_infer() -> None:
     offenders = [
         entry["source_id"]
@@ -92,7 +115,6 @@ def test_no_entry_uses_schema_mode_infer() -> None:
     assert not offenders, f"inferred declarations: {offenders}"
 
 
-@pytest.mark.xfail(strict=True, reason="LATER_CHANGES")
 def test_every_entry_declares_a_contract_that_exists() -> None:
     missing = []
     for config_path, entry in _source_entries():
@@ -106,18 +128,52 @@ def test_every_entry_declares_a_contract_that_exists() -> None:
     assert not missing, "\n".join(missing)
 
 
-@pytest.mark.xfail(strict=True, reason="LATER_CHANGES")
-def test_every_enabled_entry_references_an_active_contract() -> None:
-    inactive = []
+def test_every_entry_references_an_active_or_documented_pending_contract() -> None:
+    unaccounted = []
     for config_path, entry in _source_entries():
+        source_id = entry["source_id"]
         declared = entry.get("schema", {}).get("contract")
         if not isinstance(declared, str):
-            inactive.append(f"{entry['source_id']}: no contract (enabled={entry.get('enabled')})")
+            unaccounted.append(f"{source_id}: no contract (enabled={entry.get('enabled')})")
             continue
         path = _contract_path(config_path, declared)
-        if not path.is_file() or load_data_contract(path).status != "active":
-            inactive.append(f"{entry['source_id']}: no active contract")
-    assert not inactive, "\n".join(inactive)
+        if not path.is_file():
+            unaccounted.append(f"{source_id}: missing contract {path}")
+            continue
+        contract = load_data_contract(path)
+        if contract.status == "active":
+            if source_id in PENDING_ACTIVATION:
+                unaccounted.append(f"{source_id}: pending entry is already active")
+            continue
+        if source_id not in PENDING_ACTIVATION:
+            unaccounted.append(f"{source_id}: unallowlisted {contract.status} contract")
+        elif entry.get("enabled") is not False:
+            unaccounted.append(f"{source_id}: pending source must remain disabled")
+    assert not unaccounted, "\n".join(unaccounted)
+
+
+def test_pending_activation_allowlist_has_current_drafts_and_expiry() -> None:
+    entries = {entry["source_id"]: entry for _, entry in _source_entries()}
+    drafts = set()
+    for config_path, entry in _source_entries():
+        declared = entry.get("schema", {}).get("contract")
+        if isinstance(declared, str):
+            contract = load_data_contract(_contract_path(config_path, declared))
+            if contract.status == "draft":
+                drafts.add(entry["source_id"])
+
+    assert set(PENDING_ACTIVATION) == drafts, (
+        f"pending activation entries do not match drafts: "
+        f"missing={sorted(drafts - set(PENDING_ACTIVATION))}, "
+        f"stale={sorted(set(PENDING_ACTIVATION) - drafts)}"
+    )
+    for source_id, allowance in PENDING_ACTIVATION.items():
+        assert source_id in entries, f"stale pending source id: {source_id}"
+        assert allowance["reason"].strip(), f"missing reason for {source_id}"
+        since = date.fromisoformat(allowance["since"])
+        review_by = date.fromisoformat(allowance["review_by"])
+        assert since <= date.today(), f"future pending date for {source_id}: {since}"
+        assert review_by > date.today(), f"pending activation review is overdue for {source_id}"
 
 
 def test_contract_domain_matches_entry_domain() -> None:
@@ -141,6 +197,8 @@ def test_contract_schema_name_matches_bronze_table() -> None:
 
 def test_every_contract_is_referenced() -> None:
     files = {path.resolve() for path in CONTRACTS_ROOT.rglob("*.yaml")}
-    assert files, "no contracts found"
+    assert len(files) == EXPECTED_CONTRACT_FILES, (
+        f"expected {EXPECTED_CONTRACT_FILES} contracts, found {len(files)}"
+    )
     referenced = {path for _, path in _declared_contracts()}
     assert files == referenced, f"orphan contracts: {sorted(files - referenced)}"
