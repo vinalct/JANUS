@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-RUN_RECORD_SCHEMA_VERSION = 1
+RUN_RECORD_SCHEMA_VERSION = 2
 RUN_RECORD_STATUSES = frozenset({"failed", "succeeded"})
 SUPPORTED_QUALITY_OUTCOMES = frozenset({"failed", "not_run", "passed"})
 QUALITY_NOT_RUN = "not_run"

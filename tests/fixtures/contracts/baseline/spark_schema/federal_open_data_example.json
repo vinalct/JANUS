@@ -1,0 +1,22 @@
+{
+  "schema_path": "conf/schemas/example/source_schema.json",
+  "schema_sha256": "8611064777b3636f917e231589e58375b481a78aea91e7263f279fbec783962f",
+  "source_id": "federal_open_data_example",
+  "struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "id",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "updated_at",
+        "nullable": true,
+        "type": "string"
+      }
+    ],
+    "type": "struct"
+  }
+}

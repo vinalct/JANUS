@@ -25,6 +25,7 @@ from janus.scripts.raw_to_bronze import RawToBronzeLoader
 from janus.strategies.api import ApiHook, ApiResponse, ApiStrategy
 from janus.strategies.catalog import CatalogStrategy
 from janus.utils.storage import StorageLayout, bronze_table_identifier
+from tests.support.contracts import CONTRACT_SCHEMA_BLOCK, write_minimal_contract
 
 # Fixed instants: every timestamp in a golden is derived from one of these two.
 STARTED_AT = datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)
@@ -207,7 +208,7 @@ def source_payload(case: str) -> dict[str, Any]:
             "checkpoint_strategy": "max_value",
             "retry": {"max_attempts": 1, "backoff_seconds": 1},
         },
-        "schema": {"mode": "infer"},
+        "schema": dict(CONTRACT_SCHEMA_BLOCK),
         "spark": {
             "input_format": "jsonl" if family == "catalog" else "json",
             "write_mode": "overwrite",
@@ -240,6 +241,7 @@ def write_project(root: Path, document: dict[str, Any]) -> None:
     (root / "conf" / "app.yaml").write_text(
         "registry:\n  sources_dir: conf/sources\n  file_pattern: '*.yaml'\n", encoding="utf-8"
     )
+    write_minimal_contract(root)
     (sources_dir / "sources.yaml").write_text(
         yaml.safe_dump({"sources": [document]}, sort_keys=False), encoding="utf-8"
     )

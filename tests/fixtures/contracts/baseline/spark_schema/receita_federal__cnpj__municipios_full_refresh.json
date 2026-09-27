@@ -1,0 +1,22 @@
+{
+  "schema_path": "conf/schemas/receita_federal/cnpj/municipios_schema.json",
+  "schema_sha256": "32d66482799c167b33c2f9a03450c952196d7face46843dc312ea5aac59be81a",
+  "source_id": "receita_federal__cnpj__municipios_full_refresh",
+  "struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "codigo",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "descricao",
+        "nullable": true,
+        "type": "string"
+      }
+    ],
+    "type": "struct"
+  }
+}

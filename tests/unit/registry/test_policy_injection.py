@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import yaml
 
 # The registry suite is not a package (no ``__init__.py``), so pytest puts this directory
 # on ``sys.path`` and the sibling module is imported by plain name.
@@ -16,13 +17,16 @@ from test_source_registry import (
     _valid_source_yaml,
 )
 
+from janus.models.config.policy import PhaseValidationPolicy
 from janus.models.source_config import (
     DEFAULT_VALIDATION_POLICY,
     STRATEGY_REGISTRY,
+    SourceConfig,
     SourceConfigValidationError,
 )
 from janus.registry import SourceRegistry, load_registry
 from janus.registry.loader import _load_grouped_source_configs, _load_source_configs
+from tests.support.contracts import DECLARED_CONTRACT_PATH
 
 PUBLIC_ACCESS_MESSAGE = (
     "must be true because JANUS only supports public federal sources in phase 1"
@@ -35,18 +39,32 @@ STATE_SOURCES_ALLOWED = replace(
     federation_levels=frozenset({"federal", "state"}),
 )
 
+DRAFT_CONTRACTS_ALLOWED = replace(
+    DEFAULT_VALIDATION_POLICY, require_active_contract=False
+)
 
-def _project_with_one_source(tmp_path: Path, **overrides: object) -> Path:
+
+def _project_with_one_source(
+    tmp_path: Path, *, enabled: bool = True, **overrides: object
+) -> Path:
     """A one-source project tree whose single config carries `overrides`."""
     return _create_project(
         tmp_path,
         {
             "example/source.yaml": _valid_source_yaml(
                 "policy_seam_source",
-                enabled=True,
+                enabled=enabled,
                 **overrides,  # type: ignore[arg-type]
             )
         },
+    )
+
+
+def _set_contract_status(project_root: Path, status: str) -> None:
+    contract_path = project_root / DECLARED_CONTRACT_PATH
+    contract = contract_path.read_text(encoding="utf-8")
+    contract_path.write_text(
+        contract.replace("status: active", f"status: {status}"), encoding="utf-8"
     )
 
 
@@ -121,6 +139,70 @@ def test_grouped_file_reports_prefixed_issues_under_a_custom_policy(tmp_path):
         load_registry(project_root, policy=PUBLIC_SOURCES_ALLOWED)
 
     assert [issue.path for issue in exc_info.value.issues] == ["sources[1].strategy_variant"]
+
+
+def test_enabled_draft_contract_is_a_loader_policy_issue(tmp_path):
+    project_root = _project_with_one_source(tmp_path)
+    _set_contract_status(project_root, "draft")
+    source_path = project_root / "conf/sources/example/source.yaml"
+    source_mapping = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+
+    # The mapping layer deliberately does not read the contract or own its status rule.
+    config = SourceConfig.from_mapping(source_mapping, source_path)
+    assert config.enabled is True
+
+    with pytest.raises(SourceConfigValidationError) as exc_info:
+        load_registry(project_root)
+
+    assert [(issue.path, issue.message) for issue in exc_info.value.issues] == [
+        (
+            "schema.contract",
+            "must reference a contract with status 'active' for an enabled source "
+            "in phase 1 (found 'draft')",
+        )
+    ]
+    registry = load_registry(project_root, policy=DRAFT_CONTRACTS_ALLOWED)
+    assert registry.contract_for("policy_seam_source").status == "draft"
+
+
+def test_disabled_source_may_reference_a_draft_contract(tmp_path):
+    project_root = _project_with_one_source(tmp_path, enabled=False)
+    _set_contract_status(project_root, "draft")
+
+    registry = load_registry(project_root)
+
+    assert registry.contract_for("policy_seam_source").status == "draft"
+
+
+def test_loader_consults_contract_policy_once_per_source(tmp_path, monkeypatch):
+    project_root = _create_project(
+        tmp_path,
+        {
+            "example/group.yaml": _grouped_sources_yaml(
+                _valid_source_yaml("first", enabled=True),
+                _valid_source_yaml("second", enabled=True),
+            )
+        },
+    )
+    calls: list[tuple[bool, str | None]] = []
+    original = PhaseValidationPolicy.validate_schema_declaration
+
+    def record_call(
+        self, *, enabled: bool, contract_status: str | None, issues
+    ) -> None:
+        calls.append((enabled, contract_status))
+        original(
+            self,
+            enabled=enabled,
+            contract_status=contract_status,
+            issues=issues,
+        )
+
+    monkeypatch.setattr(PhaseValidationPolicy, "validate_schema_declaration", record_call)
+
+    load_registry(project_root)
+
+    assert calls == [(True, "active"), (True, "active")]
 
 
 def test_policy_does_not_leak_between_loads(tmp_path):

@@ -68,10 +68,10 @@ That last rule is deliberate. If JANUS is going to enforce uniqueness on a key, 
 
 This check validates whether the schema settings are coherent.
 
-It currently enforces that:
-
-- if `allow_schema_evolution` is `false`, the source should use `schema.mode: explicit`;
-- if an explicit schema file is present but malformed, the error is surfaced as a validation failure rather than as a vague downstream read failure.
+It checks whether a declared contract loaded into the plan supplies expected fields. When
+`quality.allow_schema_evolution` is false, a declared schema is required. Contract loading
+errors are collected by the registry before the quality gate runs; legacy schema files still
+convert with a deprecation warning for this order.
 
 ## Data checks
 

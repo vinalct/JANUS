@@ -1,10 +1,13 @@
--- Spark SQL. One row for the first observed config and each subsequent change.
+-- Spark SQL. One row for the first observed config or contract and each subsequent change.
 WITH ranked_runs AS (
     SELECT
         run_id,
         source_id,
         source_name,
         config_version,
+        schema_version,
+        contract_id,
+        contract_version,
         source_config_path,
         started_at,
         emitted_at,
@@ -20,7 +23,11 @@ latest_runs AS (
         LAG(config_version) OVER (
             PARTITION BY source_id
             ORDER BY started_at, emitted_at, run_id
-        ) AS previous_config_version
+        ) AS previous_config_version,
+        LAG(schema_version) OVER (
+            PARTITION BY source_id
+            ORDER BY started_at, emitted_at, run_id
+        ) AS previous_schema_version
     FROM ranked_runs
     WHERE row_rank = 1
 )
@@ -32,8 +39,13 @@ SELECT
     emitted_at,
     previous_config_version,
     config_version,
+    previous_schema_version,
+    schema_version,
+    contract_id,
+    contract_version,
     source_config_path
 FROM latest_runs
 WHERE previous_config_version IS NULL
    OR previous_config_version <> config_version
+   OR NOT (previous_schema_version <=> schema_version)
 ORDER BY source_id, changed_at, emitted_at;

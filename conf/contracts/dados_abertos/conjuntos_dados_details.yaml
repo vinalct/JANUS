@@ -1,0 +1,283 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: dados_abertos.conjuntos_dados_details
+name: Portal Brasileiro de Dados Abertos - Catalogo de conjuntos de dados
+version: 1.0.0
+status: active
+domain: dados_abertos
+description:
+  purpose: Detail responses retrieved from dados.gov.br for dataset entries discovered in the public catalog.
+    Bronze preserves the source fields and serialized response payload.
+team:
+- username: janus
+  role: owner
+tags:
+- dados-gov-br
+- catalog
+- metadata
+- federal
+schema:
+- name: conjuntos_dados_details
+  physicalType: table
+  properties:
+  - name: entity_type
+    businessName: Catalog entity type
+    description: JANUS entity category assigned to the harvested catalog record.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: entity_type
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'false'
+  - name: entity_key
+    businessName: Catalog entity key
+    description: Stable JANUS key used to identify the harvested catalog entity.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: entity_key
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'false'
+  - name: entity_id
+    businessName: Source entity identifier
+    description: Identifier supplied by the source catalog when one is available.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: entity_id
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: parent_entity_type
+    businessName: Parent entity type
+    description: JANUS entity category of the parent catalog record, when present.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: parent_entity_type
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: parent_entity_key
+    businessName: Parent entity key
+    description: Stable JANUS key of the parent catalog entity, when present.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: parent_entity_key
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: parent_entity_id
+    businessName: Parent entity identifier
+    description: Source identifier of the parent catalog record, when present.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: parent_entity_id
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: catalog_collection_path
+    businessName: Catalog collection path
+    description: Path of the raw artifact containing the source collection.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: catalog_collection_path
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'false'
+  - name: catalog_record_path
+    businessName: Catalog record path
+    description: Path identifying this record within its raw catalog artifact.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: catalog_record_path
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'false'
+  - name: catalog_request_url
+    businessName: Catalog request URL
+    description: URL requested from the public catalog API.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: catalog_request_url
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'false'
+  - name: catalog_request_index
+    businessName: Catalog request index
+    description: Zero-based request position recorded by the catalog collector.
+    logicalType: integer
+    physicalType: long
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: catalog_request_index
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'false'
+  - name: catalog_page_number
+    businessName: Catalog page number
+    description: Source page number returned for the catalog request, when present.
+    logicalType: integer
+    physicalType: long
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: catalog_page_number
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: catalog_offset
+    businessName: Catalog result offset
+    description: Source result offset returned for the catalog request, when present.
+    logicalType: integer
+    physicalType: long
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: catalog_offset
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: catalog_cursor
+    businessName: Catalog cursor
+    description: Source pagination cursor returned for the catalog request, when present.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: catalog_cursor
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: catalog_received_at
+    businessName: Catalog response receipt time
+    description: Time the catalog collector received the response, stored as supplied.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: catalog_received_at
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'false'
+  - name: catalog_raw_artifact_path
+    businessName: Raw catalog artifact path
+    description: Path of the immutable raw response artifact for this record.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: catalog_raw_artifact_path
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'false'
+  - name: payload
+    businessName: Raw record payload
+    description: Catalog record payload serialized as a JSON string for source fidelity.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: payload
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient

@@ -5,12 +5,10 @@ from janus.quality.models import (
     ValidationCheck,
     ValidationReport,
 )
+from janus.quality.schema_expectation import SchemaExpectation, resolve_schema_expectation
 from janus.quality.store import PersistedValidationReport, ValidationReportStore
 from janus.quality.validators import (
     QualityGate,
-    SchemaExpectation,
-    load_expected_fields_from_schema_path,
-    resolve_schema_expectation,
     validate_bronze_key_uniqueness,
     validate_materialized_outputs,
     validate_output_columns,
@@ -31,7 +29,6 @@ __all__ = [
     "ValidationCheck",
     "ValidationReport",
     "ValidationReportStore",
-    "load_expected_fields_from_schema_path",
     "resolve_schema_expectation",
     "validate_bronze_key_uniqueness",
     "validate_materialized_outputs",

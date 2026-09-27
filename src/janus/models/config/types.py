@@ -233,8 +233,24 @@ class ExtractionConfig:
 
 @dataclass(frozen=True, slots=True)
 class SchemaConfig:
+    """How one source declares the shape of what it writes."""
+
     mode: str
     path: str | None = None
+    contract: str | None = None
+
+    @property
+    def declares_contract(self) -> bool:
+        return self.contract is not None
+
+    @property
+    def declares_legacy_file(self) -> bool:
+        return self.mode == "explicit" and self.path is not None
+
+    @property
+    def is_declared(self) -> bool:
+        """True when this source names a schema at all — a contract or a legacy file."""
+        return self.declares_contract or self.declares_legacy_file
 
 
 @dataclass(frozen=True, slots=True)

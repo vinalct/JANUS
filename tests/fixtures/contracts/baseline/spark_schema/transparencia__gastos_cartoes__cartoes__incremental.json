@@ -1,0 +1,238 @@
+{
+  "schema_path": "conf/schemas/transparencia/gastos_cartoes_cartoes_schema.json",
+  "schema_sha256": "3c0a9c8b4611cae5a7053336be2a217544f3f50952f68ba6ed2d0d590491cb83",
+  "source_id": "transparencia__gastos_cartoes__cartoes__incremental",
+  "struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "dataTransacao",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "estabelecimento",
+        "nullable": true,
+        "type": {
+          "fields": [
+            {
+              "metadata": {},
+              "name": "cnpjFormatado",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "cpfFormatado",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "id",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "nome",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "nomeFantasiaReceita",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "numeroInscricaoSocial",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "razaoSocialReceita",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "tipo",
+              "nullable": true,
+              "type": "string"
+            }
+          ],
+          "type": "struct"
+        }
+      },
+      {
+        "metadata": {},
+        "name": "id",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "mesExtrato",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "portador",
+        "nullable": true,
+        "type": {
+          "fields": [
+            {
+              "metadata": {},
+              "name": "cpfFormatado",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "nis",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "nome",
+              "nullable": true,
+              "type": "string"
+            }
+          ],
+          "type": "struct"
+        }
+      },
+      {
+        "metadata": {},
+        "name": "tipoCartao",
+        "nullable": true,
+        "type": {
+          "fields": [
+            {
+              "metadata": {},
+              "name": "codigo",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "descricao",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "id",
+              "nullable": true,
+              "type": "string"
+            }
+          ],
+          "type": "struct"
+        }
+      },
+      {
+        "metadata": {},
+        "name": "unidadeGestora",
+        "nullable": true,
+        "type": {
+          "fields": [
+            {
+              "metadata": {},
+              "name": "codigo",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "descricaoPoder",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "nome",
+              "nullable": true,
+              "type": "string"
+            },
+            {
+              "metadata": {},
+              "name": "orgaoMaximo",
+              "nullable": true,
+              "type": {
+                "fields": [
+                  {
+                    "metadata": {},
+                    "name": "codigo",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  {
+                    "metadata": {},
+                    "name": "nome",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  {
+                    "metadata": {},
+                    "name": "sigla",
+                    "nullable": true,
+                    "type": "string"
+                  }
+                ],
+                "type": "struct"
+              }
+            },
+            {
+              "metadata": {},
+              "name": "orgaoVinculado",
+              "nullable": true,
+              "type": {
+                "fields": [
+                  {
+                    "metadata": {},
+                    "name": "cnpj",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  {
+                    "metadata": {},
+                    "name": "codigoSIAFI",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  {
+                    "metadata": {},
+                    "name": "nome",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  {
+                    "metadata": {},
+                    "name": "sigla",
+                    "nullable": true,
+                    "type": "string"
+                  }
+                ],
+                "type": "struct"
+              }
+            }
+          ],
+          "type": "struct"
+        }
+      },
+      {
+        "metadata": {},
+        "name": "valorTransacao",
+        "nullable": false,
+        "type": "string"
+      }
+    ],
+    "type": "struct"
+  }
+}

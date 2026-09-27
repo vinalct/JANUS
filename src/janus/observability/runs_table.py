@@ -79,6 +79,7 @@ class RunsTableTarget:
     def identifier(self) -> str:
         return f"{self.namespace}.{self.table_name}"
 
+
 RUNS_TABLE_SCHEMA = (
     RunsTableColumn(1, "run_id", IcebergType.STRING, False),
     RunsTableColumn(2, "source_id", IcebergType.STRING, False),
@@ -122,6 +123,9 @@ RUNS_TABLE_SCHEMA = (
     RunsTableColumn(40, "checkpoint_history_path", IcebergType.STRING, True),
     RunsTableColumn(41, "validation_report_path", IcebergType.STRING, True),
     RunsTableColumn(42, "record_schema_version", IcebergType.INTEGER, False),
+    RunsTableColumn(44, "schema_version", IcebergType.STRING, True),
+    RunsTableColumn(45, "contract_id", IcebergType.STRING, True),
+    RunsTableColumn(46, "contract_version", IcebergType.STRING, True),
 )
 
 RUNS_TABLE_PARTITION_SPEC = (

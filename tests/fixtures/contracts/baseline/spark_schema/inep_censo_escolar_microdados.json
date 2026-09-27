@@ -1,0 +1,76 @@
+{
+  "schema_path": "conf/schemas/inep/censo_escolar_microdados_schema.json",
+  "schema_sha256": "ddeea70866c1f55e2a46627e98d908b9f9f45d7cd0eabb3fe9343ad86f9080e8",
+  "source_id": "inep_censo_escolar_microdados",
+  "struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "NU_ANO_CENSO",
+        "nullable": false,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "CO_ENTIDADE",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "NO_ENTIDADE",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "CO_UF",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "SG_UF",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "CO_MUNICIPIO",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "NO_MUNICIPIO",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "TP_DEPENDENCIA",
+        "nullable": false,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "TP_LOCALIZACAO",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "TP_SITUACAO_FUNCIONAMENTO",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "QT_MAT_BAS",
+        "nullable": true,
+        "type": "integer"
+      }
+    ],
+    "type": "struct"
+  }
+}

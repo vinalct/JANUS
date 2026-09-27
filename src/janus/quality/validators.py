@@ -13,25 +13,13 @@ from janus.models import (
 )
 from janus.normalizers import NORMALIZATION_METADATA_COLUMNS
 from janus.quality.models import QualityValidationError, ValidationCheck, ValidationReport
+from janus.quality.schema_expectation import SchemaExpectation, resolve_schema_expectation
 from janus.quality.store import PersistedValidationReport, ValidationReportStore
-from janus.schema_contracts import (
-    load_expected_fields_from_schema_path,
-    resolve_schema_path_for_plan,
-)
 from janus.utils.environment import resolve_project_path
 from janus.utils.storage import bronze_table_identifier
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame
-
-
-@dataclass(frozen=True, slots=True)
-class SchemaExpectation:
-    """Resolved schema contract used by schema-related validations."""
-
-    fields: tuple[str, ...] = ()
-    source: str | None = None
-    error: str | None = None
 
 
 @dataclass(slots=True)
@@ -163,7 +151,7 @@ def validate_schema_contract_mode(
 
     if (
         not plan.source_config.quality.allow_schema_evolution
-        and plan.source_config.schema.mode != "explicit"
+        and not plan.source_config.schema.is_declared
     ):
         return ValidationCheck.failed(
             "config",
@@ -537,34 +525,6 @@ def validate_materialized_outputs(
     )
 
 
-def resolve_schema_expectation(
-    plan: ExecutionPlan,
-    *,
-    expected_fields: Sequence[str] | None = None,
-) -> SchemaExpectation:
-    if expected_fields is not None:
-        return SchemaExpectation(
-            fields=_normalize_field_names(expected_fields),
-            source="provided",
-        )
-
-    if plan.source_config.schema.mode != "explicit" or not plan.source_config.schema.path:
-        return SchemaExpectation()
-
-    schema_path = resolve_schema_path_for_plan(plan)
-    assert schema_path is not None
-    if not schema_path.exists():
-        return SchemaExpectation()
-
-    try:
-        return SchemaExpectation(
-            fields=load_expected_fields_from_schema_path(schema_path),
-            source=str(schema_path),
-        )
-    except (ValueError, json.JSONDecodeError) as exc:
-        return SchemaExpectation(source=str(schema_path), error=str(exc))
-
-
 def _required_field_violation_counts(
     dataframe: DataFrame,
     fields: Sequence[str],
@@ -631,17 +591,6 @@ def _duplicate_fields(fields: Sequence[str]) -> list[str]:
             duplicates.append(field)
         seen.add(field)
     return duplicates
-
-
-def _normalize_field_names(fields: Sequence[str]) -> tuple[str, ...]:
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for raw_field in fields:
-        field = str(raw_field).strip()
-        if field and field not in seen:
-            normalized.append(field)
-            seen.add(field)
-    return tuple(normalized)
 
 
 def _expected_zone_path(plan: ExecutionPlan, zone: str) -> str:

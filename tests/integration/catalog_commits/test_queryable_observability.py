@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+import yaml
 
 from janus.lineage import RunObserver, compute_config_version
 from janus.observability import (
@@ -24,6 +25,7 @@ from janus.strategies.api import ApiStrategy
 from janus.strategies.catalog import CatalogStrategy
 from janus.utils.storage import StorageLayout
 from tests.support import observability_baseline as baseline
+from tests.support.contracts import DECLARED_CONTRACT_PATH
 from tests.support.spark_sessions import (
     CatalogTarget,
     catalog_acceptance_prerequisites_available,
@@ -60,6 +62,9 @@ class _RunEvidence:
     source_id: str
     config_path: Path
     status: str
+    schema_version: str | None
+    contract_id: str | None
+    contract_version: str | None
 
 
 def _environment(
@@ -99,6 +104,13 @@ def _planned_case(root: Path, case: str, source_id: str, config: dict[str, Any])
     for zone in ("raw", "bronze", "metadata"):
         document["outputs"][zone]["path"] = f"data/{zone}/{source_id}"
     baseline.write_project(root, document)
+    if document["strategy"] == "catalog":
+        contract_path = root / DECLARED_CONTRACT_PATH
+        contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+        contract["schema"][0]["properties"].append(
+            {"name": "entity_id", "logicalType": "string", "physicalType": "string"}
+        )
+        contract_path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
 
     transport = baseline.OfflineTransport(case, [])
     strategy_type = CatalogStrategy if document["strategy"] == "catalog" else ApiStrategy
@@ -157,12 +169,18 @@ def _execute_case(
 
     assert result.run_event_emission is not None
     assert result.run_event_emission.outcome.value == "emitted"
+    contract = planned.plan.data_contract
     return _RunEvidence(
         case=case,
         run_id=planned.plan.run_context.run_id,
         source_id=source_id,
         config_path=planned.plan.source_config.config_path,
         status=result.status,
+        schema_version=contract.schema_version if contract is not None else None,
+        contract_id=contract.id if contract is not None else None,
+        contract_version=(
+            None if contract is None or contract.id.startswith("legacy:") else contract.version
+        ),
     )
 
 
@@ -202,10 +220,14 @@ def test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources(
 
     for item in evidence:
         row = rows[item.run_id]
-        assert row["started_at"] == STARTED_AT.replace(tzinfo=None)
-        assert row["ended_at"] == FINISHED_AT.replace(tzinfo=None)
+        assert row["started_at"].astimezone(UTC) == STARTED_AT
+        assert row["ended_at"].astimezone(UTC) == FINISHED_AT
         assert row["duration_seconds"] == 5.0
         assert row["config_version"] == compute_config_version(item.config_path)
+        assert row["schema_version"] == item.schema_version
+        assert row["contract_id"] == item.contract_id
+        assert row["contract_version"] == item.contract_version
+        assert row["record_schema_version"] == 2
         assert row["source_config_path"] == str(item.config_path)
 
     by_case = {item.case: rows[item.run_id] for item in evidence}

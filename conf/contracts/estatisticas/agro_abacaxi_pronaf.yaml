@@ -1,0 +1,390 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: estatisticas.agro_abacaxi_pronaf
+name: IBGE - Quantidade produzida de abacaxi em estabelecimentos agropecuarios
+version: 1.0.0
+status: active
+domain: estatisticas
+description:
+  purpose: Pineapple production series from IBGE SIDRA aggregate 1712 with additional agricultural classification
+    dimensions through the public IBGE Aggregates API.
+team:
+- username: janus
+  role: owner
+tags:
+- ibge
+- sidra
+- agropecuaria
+- pronaf
+- api
+- federal
+schema:
+- name: ibge__agro_abacaxi_pronaf
+  physicalType: table
+  properties:
+  - name: aggregate_id
+    businessName: SIDRA aggregate id
+    description: Identifier of the SIDRA aggregate queried by this source.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: true
+    primaryKey: true
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: aggregate_id
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: sidra_attribute_count
+    businessName: SIDRA attribute count
+    description: Number of attributes attached to the returned SIDRA value.
+    logicalType: integer
+    physicalType: long
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: sidra_attribute_count
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: sidra_attributes
+    businessName: SIDRA attributes
+    description: Attribute key, label and value pairs returned with the observation.
+    logicalType: array
+    physicalType: array
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: sidra_attributes
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+    items:
+      name: element
+      businessName: Array element
+      description: Nested value returned in this array.
+      logicalType: object
+      physicalType: struct
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: element
+      - property: sourceFormat
+        value: jsonl
+      - property: sourceNullable
+        value: 'true'
+      properties:
+      - name: key
+        businessName: Attribute key
+        description: Identifier of the SIDRA response attribute.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: key
+        - property: sourceFormat
+          value: jsonl
+        - property: sourceNullable
+          value: 'true'
+      - name: label
+        businessName: Label
+        description: Human-readable label supplied with the SIDRA response value.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: label
+        - property: sourceFormat
+          value: jsonl
+        - property: sourceNullable
+          value: 'true'
+      - name: value
+        businessName: SIDRA value
+        description: Observed value from SIDRA; kept as upstream text to preserve Bronze inference.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: value
+        - property: sourceFormat
+          value: jsonl
+        - property: sourceNullable
+          value: 'true'
+  - name: sidra_dimension_count
+    businessName: SIDRA dimension count
+    description: Number of dimensions attached to the SIDRA observation.
+    logicalType: integer
+    physicalType: long
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: sidra_dimension_count
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: sidra_dimensions
+    businessName: SIDRA dimensions
+    description: Dimension identifiers, values and labels returned with the observation.
+    logicalType: array
+    physicalType: array
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: sidra_dimensions
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+    items:
+      name: element
+      businessName: Array element
+      description: Nested value returned in this array.
+      logicalType: object
+      physicalType: struct
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: element
+      - property: sourceFormat
+        value: jsonl
+      - property: sourceNullable
+        value: 'true'
+      properties:
+      - name: code
+        businessName: Dimension code
+        description: Code value for this SIDRA dimension, retained as text.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: code
+        - property: sourceFormat
+          value: jsonl
+        - property: sourceNullable
+          value: 'true'
+      - name: code_label
+        businessName: Dimension code label
+        description: Header label for the SIDRA dimension code.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: code_label
+        - property: sourceFormat
+          value: jsonl
+        - property: sourceNullable
+          value: 'true'
+      - name: id
+        businessName: Dimension id
+        description: SIDRA dimension identifier such as D1 or D2.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: id
+        - property: sourceFormat
+          value: jsonl
+        - property: sourceNullable
+          value: 'true'
+      - name: label
+        businessName: Label
+        description: Human-readable label supplied with the SIDRA response value.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: label
+        - property: sourceFormat
+          value: jsonl
+        - property: sourceNullable
+          value: 'true'
+      - name: name
+        businessName: Dimension name
+        description: Labelled value for this SIDRA dimension.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: name
+        - property: sourceFormat
+          value: jsonl
+        - property: sourceNullable
+          value: 'true'
+      - name: position
+        businessName: Dimension position
+        description: One-based position of this dimension in the aggregate.
+        logicalType: integer
+        physicalType: long
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: position
+        - property: sourceFormat
+          value: jsonl
+        - property: sourceNullable
+          value: 'true'
+  - name: sidra_period_code
+    businessName: SIDRA period code
+    description: Code for the period dimension, retained as upstream text.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: true
+    primaryKey: true
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: sidra_period_code
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: sidra_period_name
+    businessName: SIDRA period name
+    description: Label for the period dimension.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: sidra_period_name
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: sidra_value_label
+    businessName: SIDRA value label
+    description: Label for the value field in the SIDRA response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: sidra_value_label
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: sidra_variable_code
+    businessName: SIDRA variable code
+    description: Code for the variable dimension, retained as upstream text.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: true
+    primaryKey: true
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: sidra_variable_code
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: sidra_variable_name
+    businessName: SIDRA variable name
+    description: Label for the variable dimension.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: sidra_variable_name
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+  - name: value
+    businessName: SIDRA value
+    description: Observed value from SIDRA; kept as upstream text to preserve Bronze inference.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: value
+    - property: sourceFormat
+      value: jsonl
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient
+- property: janus.draftedFrom
+  value: fixture tests/fixtures/ibge/agro_abacaxi_pronaf_2006_flat.json, tests/fixtures/ibge/sidra_flat_without_nc_nn.json
+    (2 normalized rows); field names, types, nested structure and order matched the TASK-01 inferred golden;
+    reviewed against official SIDRA API docs https://servicodados.ibge.gov.br/api/docs/agregados?versao=3
+    on 2026-09-23.

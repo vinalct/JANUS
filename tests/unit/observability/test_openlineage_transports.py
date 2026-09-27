@@ -554,6 +554,32 @@ def test_the_total_emission_budget_holds_with_the_slowest_transport(tmp_path):
     assert emitter.last_result.stage == "budget"
 
 
+def test_terminal_emission_uses_the_contract_carried_by_the_plan(tmp_path):
+    registry = load_registry(PROJECT_ROOT)
+    contract = registry.contract_for("federal_open_data_example")
+    plan = _plan(tmp_path, "task14-contract").with_data_contract(contract)
+    emitter = build_run_event_emitter(
+        _config(transport="file"),
+        _paths(tmp_path),
+        runs_table_sink=_emitting_sink,
+    )
+    persisted = RunObserver().record_success(
+        plan,
+        _extraction(plan),
+        _writes(plan),
+        finished_at=FINISHED_AT,
+    )
+
+    emitter.emit_succeeded(plan, persisted)
+
+    event = _emitted_events(tmp_path)[0]
+    bronze = next(output for output in event["outputs"] if output["name"] == "bronze.task")
+    assert event["job"]["facets"]["documentation"]["description"] == contract.purpose
+    assert [field["name"] for field in bronze["facets"]["schema"]["fields"]] == list(
+        contract.column_names
+    )
+
+
 def test_start_emits_one_event_and_no_row(tmp_path):
     appends: list[Any] = []
 

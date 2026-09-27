@@ -42,6 +42,8 @@ jobs:
           python -I -c "import importlib.util; assert all(importlib.util.find_spec(name) is None for name in ('dagster', 'pyspark', 'pyiceberg', 'pyarrow'))"
           python -I -c "import sys, janus, janus.main; assert not any(name == 'dagster' or name.startswith('dagster.') for name in sys.modules)"
           python -I -m janus.main --help >/dev/null
+      - name: Validate every checked-in data contract against the pinned ODCS schema
+        run: make test-contract-schema PYTHON=python
       - name: Assert required jobs configure no HTTP lineage destination
         run: python -m pytest -q tests/unit/observability/test_architecture_guardrails.py::test_required_ci_jobs_do_not_configure_http_openlineage
       - name: Lint (ruff, pinned 0.11.6)
@@ -196,7 +198,10 @@ jobs:
             exit 1
           fi
           docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_queryable_observability --test-name test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources --minimum-passed 1
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_runs_table_append_sink --minimum-passed 2
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_runs_table_append_sink --minimum-passed 3
+      - name: Assert the contracts bronze differential executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.contracts.test_bronze_unchanged_after_migration --minimum-passed 23
       - name: Assert the AC-2 seeded-query suite executed
         run: |
           if grep -Fq "AC2_SEEDED_QUERY_SUITE_UNAVAILABLE" data/pytest-output.txt; then

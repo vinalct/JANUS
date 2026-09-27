@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from janus.utils.storage import bronze_table_identifier
+from tests.support.contracts import CONTRACT_SCHEMA_BLOCK, write_minimal_contract
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,7 @@ def source_payload(spec: SourceSpec) -> dict[str, Any]:
             "checkpoint_strategy": "none",
             "retry": {"max_attempts": 1, "backoff_seconds": 1},
         },
-        "schema": {"mode": "infer"},
+        "schema": dict(CONTRACT_SCHEMA_BLOCK),
         "spark": {
             "input_format": "jsonl" if spec.family == "catalog" else "json",
             "write_mode": "overwrite",
@@ -164,6 +165,7 @@ def write_project(root: Path, documents: list[dict[str, Any]], *, grouped: bool 
     (root / "conf" / "app.yaml").write_text(
         "registry:\n  sources_dir: conf/sources\n  file_pattern: '*.yaml'\n", encoding="utf-8"
     )
+    write_minimal_contract(root)
     if grouped:
         (sources_dir / "sources.yaml").write_text(
             yaml.safe_dump({"sources": documents}, sort_keys=False), encoding="utf-8"

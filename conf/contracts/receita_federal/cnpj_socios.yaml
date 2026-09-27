@@ -1,0 +1,203 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: receita_federal.cnpj_socios
+name: Receita Federal - CNPJ Socios
+version: 1.0.0
+status: active
+domain: receita_federal
+description:
+  purpose: Company partner and legal representative fields from the Receita Federal CNPJ registry.
+team:
+- username: janus
+  role: owner
+tags:
+- receita-federal
+- cnpj
+- socios
+- bulk-file
+- federal
+schema:
+- name: cnpj_socios
+  physicalType: table
+  properties:
+  - name: cnpj_basico
+    businessName: CNPJ base
+    description: Eight-digit base identifier shared by the establishments of a CNPJ.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnpj_basico
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: identificador_de_socio
+    businessName: Partner identifier type
+    description: Indicator describing the partner's identifier type.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: identificador_de_socio
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: nome_socio_ou_razao_social
+    businessName: Partner name or corporate name
+    description: Partner name or company name recorded for the partnership.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: personal
+    customProperties:
+    - property: sourceField
+      value: nome_socio_ou_razao_social
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: cpf_cnpj_socio
+    businessName: Partner CPF or CNPJ
+    description: CPF or CNPJ identifier recorded for the partner.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: personal
+    customProperties:
+    - property: sourceField
+      value: cpf_cnpj_socio
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: qualificacao_socio
+    businessName: Partner qualification code
+    description: Qualification code assigned to the partner.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: qualificacao_socio
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: data_entrada_sociedade
+    businessName: Partnership entry date
+    description: Date the partner entered the company.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: data_entrada_sociedade
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: pais
+    businessName: Country code
+    description: Country code supplied by the source record.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: pais
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: representante_legal
+    businessName: Legal representative identifier
+    description: Identifier of the partner's legal representative.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: representante_legal
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: nome_representante
+    businessName: Legal representative name
+    description: Name of the partner's legal representative, when present.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: nome_representante
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: qualificacao_representante_legal
+    businessName: Legal representative qualification code
+    description: Qualification code of the legal representative.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: qualificacao_representante_legal
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: faixa_etaria
+    businessName: Partner age band
+    description: Age band code recorded for the partner.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: faixa_etaria
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient

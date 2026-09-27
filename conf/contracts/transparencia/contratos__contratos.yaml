@@ -1,0 +1,941 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: transparencia.contratos__contratos
+name: Portal da Transparencia - Contratos
+version: 0.1.0
+status: draft
+domain: transparencia
+description:
+  purpose: Draft contract for Portal da Transparencia - Contratos; sample semantics remain pending review.
+team:
+- username: janus
+  role: owner
+tags:
+- transparencia
+- federal
+- api
+- contratos
+schema:
+- name: contratos__contratos
+  physicalType: table
+  properties:
+  - name: compra
+    businessName: Compra
+    description: Portal da Transparencia response field compra; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: object
+    physicalType: struct
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: compra
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+    properties:
+    - name: contatoResponsavel
+      businessName: Contato Responsavel
+      description: Portal da Transparencia response field contatoResponsavel; field meaning and observed
+        nullability remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: contatoResponsavel
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: numero
+      businessName: Numero
+      description: Portal da Transparencia response field numero; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: numero
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: numeroProcesso
+      businessName: Numero Processo
+      description: Portal da Transparencia response field numeroProcesso; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: numeroProcesso
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: objeto
+      businessName: Objeto
+      description: Portal da Transparencia response field objeto; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: objeto
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+  - name: dataAssinatura
+    businessName: Data Assinatura
+    description: Portal da Transparencia response field dataAssinatura; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: dataAssinatura
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: dataFimVigencia
+    businessName: Data Fim Vigencia
+    description: Portal da Transparencia response field dataFimVigencia; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: dataFimVigencia
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: dataInicioVigencia
+    businessName: Data Inicio Vigencia
+    description: Portal da Transparencia response field dataInicioVigencia; field meaning and observed
+      nullability remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: dataInicioVigencia
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: dataPublicacaoDOU
+    businessName: Data Publicacao DOU
+    description: Portal da Transparencia response field dataPublicacaoDOU; field meaning and observed
+      nullability remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: dataPublicacaoDOU
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: fornecedor
+    businessName: Fornecedor
+    description: Portal da Transparencia response field fornecedor; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: object
+    physicalType: struct
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: fornecedor
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+    properties:
+    - name: cnpjFormatado
+      businessName: CNPJ Formatado
+      description: Portal da Transparencia response field cnpjFormatado; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: cnpjFormatado
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: cpfFormatado
+      businessName: CPF Formatado
+      description: Portal da Transparencia response field cpfFormatado; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: personal
+      customProperties:
+      - property: sourceField
+        value: cpfFormatado
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: id
+      businessName: ID
+      description: Portal da Transparencia response field id; field meaning and observed nullability remain
+        pending review against a sampled response.
+      logicalType: integer
+      physicalType: long
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: id
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: nome
+      businessName: Nome
+      description: Portal da Transparencia response field nome; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: nome
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: nomeFantasiaReceita
+      businessName: Nome Fantasia Receita
+      description: Portal da Transparencia response field nomeFantasiaReceita; field meaning and observed
+        nullability remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: nomeFantasiaReceita
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: numeroInscricaoSocial
+      businessName: Numero Inscricao Social
+      description: Portal da Transparencia response field numeroInscricaoSocial; field meaning and observed
+        nullability remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: numeroInscricaoSocial
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: razaoSocialReceita
+      businessName: Razao Social Receita
+      description: Portal da Transparencia response field razaoSocialReceita; field meaning and observed
+        nullability remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: razaoSocialReceita
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: tipo
+      businessName: Tipo
+      description: Portal da Transparencia response field tipo; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: tipo
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+  - name: fundamentoLegal
+    businessName: Fundamento Legal
+    description: Portal da Transparencia response field fundamentoLegal; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: fundamentoLegal
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: id
+    businessName: ID
+    description: Portal da Transparencia response field id; field meaning and observed nullability remain
+      pending review against a sampled response.
+    logicalType: integer
+    physicalType: long
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: id
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: modalidadeCompra
+    businessName: Modalidade Compra
+    description: Portal da Transparencia response field modalidadeCompra; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: modalidadeCompra
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: numero
+    businessName: Numero
+    description: Portal da Transparencia response field numero; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: numero
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: numeroProcesso
+    businessName: Numero Processo
+    description: Portal da Transparencia response field numeroProcesso; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: numeroProcesso
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: objeto
+    businessName: Objeto
+    description: Portal da Transparencia response field objeto; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: objeto
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: situacaoContrato
+    businessName: Situacao Contrato
+    description: Portal da Transparencia response field situacaoContrato; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: situacaoContrato
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: unidadeGestora
+    businessName: Unidade Gestora
+    description: Portal da Transparencia response field unidadeGestora; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: object
+    physicalType: struct
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: unidadeGestora
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+    properties:
+    - name: codigo
+      businessName: Codigo
+      description: Portal da Transparencia response field codigo; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: codigo
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: descricaoPoder
+      businessName: Descricao Poder
+      description: Portal da Transparencia response field descricaoPoder; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: descricaoPoder
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: nome
+      businessName: Nome
+      description: Portal da Transparencia response field nome; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: nome
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: orgaoMaximo
+      businessName: Orgao Maximo
+      description: Portal da Transparencia response field orgaoMaximo; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: object
+      physicalType: struct
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: orgaoMaximo
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+      properties:
+      - name: codigo
+        businessName: Codigo
+        description: Portal da Transparencia response field codigo; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: codigo
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: nome
+        businessName: Nome
+        description: Portal da Transparencia response field nome; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: nome
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: sigla
+        businessName: Sigla
+        description: Portal da Transparencia response field sigla; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: sigla
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+    - name: orgaoVinculado
+      businessName: Orgao Vinculado
+      description: Portal da Transparencia response field orgaoVinculado; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: object
+      physicalType: struct
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: orgaoVinculado
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+      properties:
+      - name: cnpj
+        businessName: CNPJ
+        description: Portal da Transparencia response field cnpj; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: cnpj
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: codigoSIAFI
+        businessName: Codigo SIAFI
+        description: Portal da Transparencia response field codigoSIAFI; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: codigoSIAFI
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: nome
+        businessName: Nome
+        description: Portal da Transparencia response field nome; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: nome
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: sigla
+        businessName: Sigla
+        description: Portal da Transparencia response field sigla; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: sigla
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+  - name: unidadeGestoraCompras
+    businessName: Unidade Gestora Compras
+    description: Portal da Transparencia response field unidadeGestoraCompras; field meaning and observed
+      nullability remain pending review against a sampled response.
+    logicalType: object
+    physicalType: struct
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: unidadeGestoraCompras
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+    properties:
+    - name: codigo
+      businessName: Codigo
+      description: Portal da Transparencia response field codigo; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: codigo
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: descricaoPoder
+      businessName: Descricao Poder
+      description: Portal da Transparencia response field descricaoPoder; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: descricaoPoder
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: nome
+      businessName: Nome
+      description: Portal da Transparencia response field nome; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: string
+      physicalType: string
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: nome
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+    - name: orgaoMaximo
+      businessName: Orgao Maximo
+      description: Portal da Transparencia response field orgaoMaximo; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: object
+      physicalType: struct
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: orgaoMaximo
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+      properties:
+      - name: codigo
+        businessName: Codigo
+        description: Portal da Transparencia response field codigo; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: codigo
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: nome
+        businessName: Nome
+        description: Portal da Transparencia response field nome; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: nome
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: sigla
+        businessName: Sigla
+        description: Portal da Transparencia response field sigla; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: sigla
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+    - name: orgaoVinculado
+      businessName: Orgao Vinculado
+      description: Portal da Transparencia response field orgaoVinculado; field meaning and observed nullability
+        remain pending review against a sampled response.
+      logicalType: object
+      physicalType: struct
+      required: false
+      unique: false
+      primaryKey: false
+      classification: public
+      customProperties:
+      - property: sourceField
+        value: orgaoVinculado
+      - property: sourceFormat
+        value: json
+      - property: sourceNullable
+        value: 'true'
+      properties:
+      - name: cnpj
+        businessName: CNPJ
+        description: Portal da Transparencia response field cnpj; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: cnpj
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: codigoSIAFI
+        businessName: Codigo SIAFI
+        description: Portal da Transparencia response field codigoSIAFI; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: codigoSIAFI
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: nome
+        businessName: Nome
+        description: Portal da Transparencia response field nome; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: nome
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+      - name: sigla
+        businessName: Sigla
+        description: Portal da Transparencia response field sigla; field meaning and observed nullability
+          remain pending review against a sampled response.
+        logicalType: string
+        physicalType: string
+        required: false
+        unique: false
+        primaryKey: false
+        classification: public
+        customProperties:
+        - property: sourceField
+          value: sigla
+        - property: sourceFormat
+          value: json
+        - property: sourceNullable
+          value: 'true'
+  - name: valorFinalCompra
+    businessName: Valor Final Compra
+    description: Portal da Transparencia response field valorFinalCompra; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: number
+    physicalType: double
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: valorFinalCompra
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: valorInicialCompra
+    businessName: Valor Inicial Compra
+    description: Portal da Transparencia response field valorInicialCompra; field meaning and observed
+      nullability remain pending review against a sampled response.
+    logicalType: number
+    physicalType: double
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: valorInicialCompra
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient
+- property: janus.draftedFrom
+  value: official OpenAPI response model ContratoDTO at https://api.portaldatransparencia.gov.br/v3/api-docs
+    for GET /api-de-dados/contratos; no sample payload, fixture or saved raw run was available on 2026-09-23,
+    and TRANSPARENCIA_API_TOKEN was not present in the process environment. This is a documentation-shaped
+    draft only; inferred field types/order, nullability, business descriptions and quality agreement require
+    a bounded live run and human review before activation.

@@ -16,6 +16,7 @@ from janus.scripts import ingest_raw_to_bronze
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.strategies.files import FileStrategy
 from janus.utils.storage import StorageLayout
+from tests.support.contracts import with_registry_contract
 from tests.support.spark_sessions import build_iceberg_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -110,7 +111,7 @@ def file_family_runs(spark, tmp_path_factory):
         sleeper=lambda seconds: None,
         clock=lambda: 0.0,
     )
-    plan = strategy.plan(source_config, run_context)
+    plan = with_registry_contract(strategy.plan(source_config, run_context))
     planned_run = PlannedRun(plan=plan, strategy=strategy)
 
     executed = SourceExecutor().execute(
@@ -186,7 +187,7 @@ def test_api_family_replay_produces_identical_bronze(spark, tmp_path, monkeypatc
     )
     monkeypatch.setenv("TRANSPARENCIA_API_TOKEN", "super-secret-token")
 
-    plan = strategy.plan(source_config, run_context)
+    plan = with_registry_contract(strategy.plan(source_config, run_context))
     planned_run = PlannedRun(plan=plan, strategy=strategy)
 
     executed = SourceExecutor().execute(
@@ -277,16 +278,12 @@ def _member_csv(member_index: int) -> str:
 def _cloned_file_source_config(project_root: Path, *, archive_path: Path) -> SourceConfig:
     source_config = load_registry(PROJECT_ROOT).get_source(FILE_SOURCE_ID, include_disabled=True)
     config_path = PROJECT_ROOT / "conf" / "sources" / "inep" / "inep.yaml"
-    schema_path = (
-        PROJECT_ROOT / "conf" / "schemas" / "inep" / "censo_escolar_microdados_schema.json"
-    )
+    contract_path = PROJECT_ROOT / source_config.schema.contract
 
     copied_config_path = project_root / "conf" / "sources" / "inep" / "inep.yaml"
-    copied_schema_path = (
-        project_root / "conf" / "schemas" / "inep" / "censo_escolar_microdados_schema.json"
-    )
+    copied_contract_path = project_root / source_config.schema.contract
     copied_config_path.parent.mkdir(parents=True, exist_ok=True)
-    copied_schema_path.parent.mkdir(parents=True, exist_ok=True)
+    copied_contract_path.parent.mkdir(parents=True, exist_ok=True)
 
     config_payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config_payload["access"].pop("url", None)
@@ -296,15 +293,11 @@ def _cloned_file_source_config(project_root: Path, *, archive_path: Path) -> Sou
         yaml.safe_dump(config_payload, sort_keys=False),
         encoding="utf-8",
     )
-    copied_schema_path.write_text(schema_path.read_text(encoding="utf-8"), encoding="utf-8")
+    copied_contract_path.write_bytes(contract_path.read_bytes())
 
     return replace(
         source_config,
         config_path=copied_config_path,
-        schema=replace(
-            source_config.schema,
-            path="conf/schemas/inep/censo_escolar_microdados_schema.json",
-        ),
         access=replace(
             source_config.access,
             url=None,
@@ -317,12 +310,12 @@ def _cloned_file_source_config(project_root: Path, *, archive_path: Path) -> Sou
 def _cloned_api_source_config(project_root: Path, *, page_size: int) -> SourceConfig:
     source_config = load_registry(PROJECT_ROOT).get_source(API_SOURCE_ID, include_disabled=True)
     config_path = PROJECT_ROOT / source_config.config_path.relative_to(PROJECT_ROOT)
-    schema_path = PROJECT_ROOT / source_config.schema.path
+    contract_path = PROJECT_ROOT / source_config.schema.contract
 
     copied_config_path = project_root / source_config.config_path.relative_to(PROJECT_ROOT)
-    copied_schema_path = project_root / source_config.schema.path
+    copied_contract_path = project_root / source_config.schema.contract
     copied_config_path.parent.mkdir(parents=True, exist_ok=True)
-    copied_schema_path.parent.mkdir(parents=True, exist_ok=True)
+    copied_contract_path.parent.mkdir(parents=True, exist_ok=True)
 
     config_payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if "sources" in config_payload:
@@ -339,15 +332,11 @@ def _cloned_api_source_config(project_root: Path, *, page_size: int) -> SourceCo
         yaml.safe_dump(config_payload, sort_keys=False),
         encoding="utf-8",
     )
-    copied_schema_path.write_text(schema_path.read_text(encoding="utf-8"), encoding="utf-8")
+    copied_contract_path.write_bytes(contract_path.read_bytes())
 
     return replace(
         source_config,
         config_path=copied_config_path,
-        schema=replace(
-            source_config.schema,
-            path=str(source_config.schema.path),
-        ),
         access=replace(
             source_config.access,
             pagination=replace(source_config.access.pagination, page_size=page_size),

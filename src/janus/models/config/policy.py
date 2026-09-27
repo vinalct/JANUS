@@ -12,7 +12,7 @@ from janus.models.config.strategy_registry import STRATEGY_REGISTRY
 
 @runtime_checkable
 class ValidationPolicy(Protocol):
-    """What ``from_mapping`` needs from a phase-scope policy."""
+    """What source parsing and the registry loader need from phase-scope policy."""
 
     @property
     def allowed_source_types(self) -> frozenset[str]: ...
@@ -31,6 +31,10 @@ class ValidationPolicy(Protocol):
         self, public_access: bool, issues: list[ValidationIssue]
     ) -> None: ...
 
+    def validate_schema_declaration(
+        self, *, enabled: bool, contract_status: str | None, issues: list[ValidationIssue]
+    ) -> None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class PhaseValidationPolicy:
@@ -41,6 +45,7 @@ class PhaseValidationPolicy:
     federation_levels: frozenset[str] = SUPPORTED_FEDERATION_LEVELS
     require_strategy_matches_source_type: bool = True
     require_public_access: bool = True
+    require_active_contract: bool = True
 
     @property
     def allowed_source_types(self) -> frozenset[str]:
@@ -101,6 +106,26 @@ class PhaseValidationPolicy:
                 ValidationIssue(
                     "public_access",
                     "must be true because JANUS only supports public federal sources in phase 1",
+                )
+            )
+
+    def validate_schema_declaration(
+        self, *, enabled: bool, contract_status: str | None, issues: list[ValidationIssue]
+    ) -> None:
+
+        if not self.require_active_contract or not enabled:
+            return
+        if contract_status != "active":
+            issues.append(
+                ValidationIssue(
+                    "schema.contract",
+                    "must reference a contract with status 'active' for an enabled "
+                    "source in phase 1"
+                    + (
+                        f" (found {contract_status!r})"
+                        if contract_status
+                        else " (no contract declared)"
+                    ),
                 )
             )
 

@@ -33,6 +33,13 @@
       "strategy_metadata": {}
     },
     "planned_run": {
+      "contract": {
+        "id": "example.minimal",
+        "path": "conf/contracts/test/minimal_contract.yaml",
+        "schema_version": "36b064711c0849a241baa4eb3a5af56c7b8c40c1bb394413797146324b996583",
+        "status": "active",
+        "version": "1.0.0"
+      },
       "execution": {
         "checkpoint_field": "updated_at",
         "checkpoint_strategy": "max_value",

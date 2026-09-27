@@ -1,0 +1,139 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: receita_federal.cnpj_empresas
+name: Receita Federal - CNPJ Empresas
+version: 1.0.0
+status: active
+domain: receita_federal
+description:
+  purpose: Company registration and ownership metadata from the Receita Federal CNPJ registry.
+team:
+- username: janus
+  role: owner
+tags:
+- receita-federal
+- cnpj
+- empresas
+- bulk-file
+- federal
+schema:
+- name: cnpj_empresas
+  physicalType: table
+  properties:
+  - name: cnpj_basico
+    businessName: CNPJ base
+    description: Eight-digit base identifier shared by the establishments of a CNPJ.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: true
+    primaryKey: true
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnpj_basico
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: razao_social
+    businessName: Corporate name
+    description: Registered corporate name supplied in the CNPJ company record.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: razao_social
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: natureza_juridica
+    businessName: Legal nature code
+    description: Legal nature code associated with the registered company.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: natureza_juridica
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: qualificacao_do_responsavel
+    businessName: Responsible party qualification code
+    description: Qualification code for the company's responsible party.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: qualificacao_do_responsavel
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: capital_social
+    businessName: Share capital
+    description: Registered share capital, preserved in its source string representation.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: capital_social
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: porte_empresa
+    businessName: Company size category
+    description: Company size category code.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: porte_empresa
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: ente_federativo_responsavel
+    businessName: Responsible federative entity
+    description: Federative entity identified as responsible for the company.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: ente_federativo_responsavel
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient

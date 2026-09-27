@@ -1,4 +1,3 @@
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,9 +7,10 @@ pytest.importorskip("pyspark.sql")
 from pyspark.sql import SparkSession
 
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext
+from janus.models.data_contracts import load_data_contract
 from janus.readers import SparkDatasetReader
 from janus.registry import load_registry
-from janus.schema_contracts import load_spark_schema_from_schema_path
+from janus.schema_contracts import spark_schema_from_contract
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 
@@ -94,13 +94,6 @@ def test_spark_dataset_reader_applies_explicit_schema_to_headerless_cnpj_csv(
         "receita_federal__cnpj__empresas_full_refresh",
         include_disabled=True,
     )
-    source_config = replace(
-        source_config,
-        schema=replace(
-            source_config.schema,
-            path=str(PROJECT_ROOT / source_config.schema.path),
-        ),
-    )
     run_context = RunContext.create(
         run_id="run-reader-cnpj-001",
         environment="local",
@@ -123,7 +116,9 @@ def test_spark_dataset_reader_applies_explicit_schema_to_headerless_cnpj_csv(
         spark,
         extraction_result,
         format_name="csv",
-        schema=load_spark_schema_from_schema_path(Path(source_config.schema.path)),
+        schema=spark_schema_from_contract(
+            load_data_contract(PROJECT_ROOT / source_config.schema.contract)
+        ),
         options=source_config.spark.read_options,
     )
 

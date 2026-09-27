@@ -60,8 +60,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: infer
-      
+      contract: conf/contracts/transparencia/contratos__contratos.yaml
     spark:
       input_format: json
       write_mode: overwrite

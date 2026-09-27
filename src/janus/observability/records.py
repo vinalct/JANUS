@@ -81,6 +81,9 @@ class RunRecord:
     validation_report_path: str | None = None
     # Schema versioning
     record_schema_version: int = RUN_RECORD_SCHEMA_VERSION
+    schema_version: str | None = None
+    contract_id: str | None = None
+    contract_version: str | None = None
 
     def __post_init__(self) -> None:
         if self.status not in RUN_RECORD_STATUSES:
@@ -199,6 +202,9 @@ class RunRecord:
             emitted_at=emitted_at,
             duration_seconds=run_metadata.duration_seconds,
             config_version=lineage_record.config_version,
+            schema_version=lineage_record.schema_version,
+            contract_id=lineage_record.contract_id,
+            contract_version=lineage_record.contract_version,
             source_config_path=run_metadata.source_config_path,
             records_extracted=run_metadata.records_extracted,
             artifact_count=len(lineage_record.artifacts),
@@ -278,6 +284,9 @@ class RunRecord:
             "checkpoint_history_path": self.checkpoint_history_path,
             "validation_report_path": self.validation_report_path,
             "record_schema_version": self.record_schema_version,
+            "schema_version": self.schema_version,
+            "contract_id": self.contract_id,
+            "contract_version": self.contract_version,
         }
 
 

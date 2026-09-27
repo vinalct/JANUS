@@ -19,7 +19,7 @@ import janus
 import janus.observability.iceberg_sink as sink
 import janus.observability.runs_table as runs_table
 from janus.observability import IcebergAppendOutcome, RunRecord, append_run_record
-from janus.observability.runs_table import IcebergType
+from janus.observability.runs_table import RUNS_TABLE_SCHEMA, IcebergType
 
 
 class FakeNamespaceAlreadyExistsError(Exception):
@@ -41,8 +41,42 @@ class FakeValue:
 
 
 @dataclass(frozen=True)
+class FakePrimitive:
+    type_name: str
+
+    def __str__(self) -> str:
+        return self.type_name
+
+
+@dataclass(frozen=True)
+class FakeListType:
+    element_id: int
+    element: FakePrimitive
+    element_required: bool = True
+
+    def __str__(self) -> str:
+        return f"list<{self.element}>"
+
+
+@dataclass(frozen=True)
+class FakeField:
+    field_id: int
+    name: str
+    field_type: Any
+    required: bool
+
+
+@dataclass(frozen=True)
 class FakeSchema:
-    fields: tuple[Any, ...]
+    fields: tuple[FakeField, ...]
+
+    def as_arrow(self) -> str:
+        return "arrow-schema"
+
+
+@dataclass(frozen=True)
+class FakeSchemaView:
+    fields: tuple[FakeField, ...]
 
     def as_arrow(self) -> str:
         return "arrow-schema"
@@ -59,14 +93,54 @@ class FakeArrowTable:
         return ("arrow-table", rows, schema)
 
 
+class FakeSchemaUpdate:
+    def __init__(self, table: FakeTable):
+        self.table = table
+        self.added: list[FakeField] = []
+
+    def __enter__(self):
+        self.table.schema_update_count += 1
+        if self.table.schema_update_wait is not None:
+            release = self.table.schema_update_wait
+            release.wait(timeout=1)
+        if self.table.schema_update_error is not None:
+            raise self.table.schema_update_error
+        return self
+
+    def add_column(self, name: str, field_type: Any, *, required: bool):
+        existing_ids = [field.field_id for field in self.table.live_schema.fields]
+        existing_ids.extend(field.field_id for field in self.added)
+        existing_ids.extend(
+            field.field_type.element_id
+            for field in self.table.live_schema.fields
+            if isinstance(field.field_type, FakeListType)
+        )
+        field_id = max(existing_ids, default=0) + 1
+        if not self.added:
+            field_id += self.table.assigned_id_offset
+        self.added.append(FakeField(field_id, name, field_type, required))
+
+    def __exit__(self, exception_type, exception, traceback):
+        if exception_type is None:
+            self.table.live_schema = FakeSchema((*self.table.live_schema.fields, *self.added))
+        return False
+
+
 class FakeTable:
     def __init__(self, schema: Any):
         self.live_schema = schema
         self.appended: list[Any] = []
         self.append_error: Exception | None = None
+        self.schema_update_error: Exception | None = None
+        self.schema_update_wait: threading.Event | None = None
+        self.schema_update_count = 0
+        self.assigned_id_offset = 0
 
     def schema(self):
         return self.live_schema
+
+    def update_schema(self):
+        return FakeSchemaUpdate(self)
 
     def append(self, arrow_table):
         if self.append_error is not None:
@@ -81,6 +155,7 @@ class FakeCatalog:
         self.namespace_error: Exception | None = None
         self.table_error: Exception | None = None
         self.created_partition_spec: Any = None
+        self.loaded_tables: list[str] = []
 
     def create_namespace(self, namespace: str):
         if self.namespace_error is not None:
@@ -100,6 +175,7 @@ class FakeCatalog:
         return table
 
     def load_table(self, identifier: str):
+        self.loaded_tables.append(identifier)
         return self.tables[identifier]
 
 
@@ -109,6 +185,10 @@ class CapturingLogger:
 
     def warning(self, event: str, **fields: Any) -> None:
         self.warnings.append((event, fields))
+
+
+def _v1_schema(dependencies):
+    return sink._declared_schema(dependencies, RUNS_TABLE_SCHEMA[:42])
 
 
 def _record(run_id: str = "run-001") -> RunRecord:
@@ -161,11 +241,7 @@ def _dependencies(catalog: FakeCatalog, *, load_error: Exception | None = None):
         return catalog
 
     primitive_types = {
-        iceberg_type: type(
-            f"Fake{iceberg_type.value.title()}",
-            (),
-            {"__eq__": lambda self, other: type(self) is type(other)},
-        )
+        iceberg_type: (lambda type_name=iceberg_type.value: FakePrimitive(type_name))
         for iceberg_type in IcebergType
         if iceberg_type is not IcebergType.STRING_LIST
     }
@@ -173,16 +249,104 @@ def _dependencies(catalog: FakeCatalog, *, load_error: Exception | None = None):
         load_catalog=load_catalog,
         pyarrow=SimpleNamespace(Table=FakeArrowTable),
         schema_type=lambda *fields: FakeSchema(fields),
-        nested_field_type=FakeValue.build,
+        nested_field_type=lambda **values: FakeField(**values),
         partition_field_type=FakeValue.build,
         partition_spec_type=FakeValue.build,
         day_transform_type=lambda: "day",
         primitive_types=primitive_types,
-        list_type=FakeValue.build,
+        list_type=lambda **values: FakeListType(**values),
         namespace_already_exists=FakeNamespaceAlreadyExistsError,
         table_already_exists=FakeTableAlreadyExistsError,
     )
     return dependencies, captured
+
+
+def test_additive_plan_contains_only_missing_nullable_fields():
+    declared = (
+        (1, "run_id", "string", True),
+        (44, "schema_version", "string", False),
+        (45, "contract_id", "string", False),
+    )
+
+    plan = sink._plan_additive_evolution(declared[:1], declared)
+
+    assert plan is not None
+    assert plan.columns == tuple((*field, None, None) for field in declared[1:])
+
+
+def test_a_fresh_table_is_created_at_the_prefix_pyiceberg_numbers_as_declared():
+    pytest.importorskip("pyarrow")
+    schema_module = pytest.importorskip("pyiceberg.schema")
+    dependencies = sink._load_engine_dependencies()
+    creation = sink._creation_columns()
+    created = schema_module.assign_fresh_schema_ids(
+        sink._declared_schema(dependencies, creation)
+    )
+    declared = sink._schema_field_signatures(sink._declared_schema(dependencies))
+
+    assert sink._schema_field_signatures(created) == declared[: len(creation)]
+    plan = sink._plan_additive_evolution(sink._schema_field_signatures(created), declared)
+    assert plan is not None
+    assert [field[1] for field in plan.columns] == [
+        "schema_version",
+        "contract_id",
+        "contract_version",
+    ]
+
+
+def test_additive_plan_for_an_empty_difference_has_no_columns():
+    fields = ((1, "run_id", "string", True),)
+
+    plan = sink._plan_additive_evolution(fields, fields)
+
+    assert plan is not None
+    assert plan.columns == ()
+
+
+@pytest.mark.parametrize(
+    "live,declared",
+    (
+        (
+            ((1, "run_id", "string", True),),
+            ((1, "run_id", "string", True), (2, "required", "string", True)),
+        ),
+        (((1, "run_id", "int", True),), ((1, "run_id", "string", True),)),
+        (((1, "renamed", "string", True),), ((1, "run_id", "string", True),)),
+        (
+            ((1, "run_id", "string", True), (2, "extra", "string", False)),
+            ((1, "run_id", "string", True),),
+        ),
+        (((9, "run_id", "string", True),), ((1, "run_id", "string", True),)),
+        (
+            ((1, "run_id", "string", True), (3, "later", "string", True)),
+            (
+                (1, "run_id", "string", True),
+                (2, "dropped_nullable", "string", False),
+                (3, "later", "string", True),
+            ),
+        ),
+        (
+            ((33, "quality_failed_checks", "list<string>", False, 88),),
+            ((33, "quality_failed_checks", "list<string>", False, 43),),
+        ),
+        (
+            ((33, "quality_failed_checks", "list<string>", False, 43, False),),
+            ((33, "quality_failed_checks", "list<string>", False, 43, True),),
+        ),
+    ),
+    ids=(
+        "missing-required",
+        "type-change",
+        "rename",
+        "extra-live",
+        "id-mismatch",
+        "dropped-old-nullable",
+        "element-id-mismatch",
+        "element-requiredness",
+    ),
+)
+def test_additive_plan_refuses_every_conflicting_schema(live, declared):
+    assert sink._plan_additive_evolution(live, declared) is None
 
 
 def test_importing_observability_and_lineage_loads_neither_engine():
@@ -301,9 +465,7 @@ def test_each_guarded_step_returns_failed(monkeypatch, tmp_path, failure, expect
         catalog.table_error = RuntimeError("table detail")
     if failure == "arrow_conversion":
         dependencies.pyarrow.Table = SimpleNamespace(
-            from_pylist=lambda *args, **kwargs: (_ for _ in ()).throw(
-                RuntimeError("arrow detail")
-            )
+            from_pylist=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("arrow detail"))
         )
     if failure == "append":
         original_create_table = catalog.create_table
@@ -338,10 +500,99 @@ def test_hadoop_profile_is_a_named_skip(monkeypatch, tmp_path):
     assert result.exception_type == "HadoopCatalogUnrepresentableError"
 
 
+def test_empty_evolution_plan_treats_the_declared_fields_as_equal(monkeypatch, tmp_path):
+    catalog = FakeCatalog()
+    dependencies, _captured = _dependencies(catalog)
+    declared = sink._declared_schema(dependencies)
+    table = FakeTable(FakeSchemaView(tuple(reversed(declared.fields))))
+    catalog.tables["metadata.runs"] = table
+    monkeypatch.setattr(sink, "_load_engine_dependencies", lambda: dependencies)
+
+    result = append_run_record(_record(), _config(), _paths(tmp_path))
+
+    assert result.outcome is IcebergAppendOutcome.EMITTED
+    assert table.schema_update_count == 0
+    assert len(table.appended) == 1
+
+
+def test_v1_schema_evolves_once_reloads_and_appends(monkeypatch, tmp_path):
+    catalog = FakeCatalog()
+    dependencies, _captured = _dependencies(catalog)
+    table = FakeTable(_v1_schema(dependencies))
+    catalog.tables["metadata.runs"] = table
+    monkeypatch.setattr(sink, "_load_engine_dependencies", lambda: dependencies)
+
+    result = append_run_record(_record(), _config(), _paths(tmp_path))
+
+    assert result.outcome is IcebergAppendOutcome.EMITTED
+    assert table.schema_update_count == 1
+    assert catalog.loaded_tables == ["metadata.runs", "metadata.runs"]
+    assert [field.field_id for field in table.schema().fields[-3:]] == [44, 45, 46]
+    assert [field.name for field in table.schema().fields[-3:]] == [
+        "schema_version",
+        "contract_id",
+        "contract_version",
+    ]
+    assert len(table.appended) == 1
+
+
+def test_schema_evolution_failure_is_reported_at_its_own_step(monkeypatch, tmp_path):
+    catalog = FakeCatalog()
+    dependencies, _captured = _dependencies(catalog)
+    table = FakeTable(_v1_schema(dependencies))
+    table.schema_update_error = RuntimeError("commit conflict")
+    catalog.tables["metadata.runs"] = table
+    monkeypatch.setattr(sink, "_load_engine_dependencies", lambda: dependencies)
+
+    result = append_run_record(_record(), _config(), _paths(tmp_path))
+
+    assert result.outcome is IcebergAppendOutcome.FAILED
+    assert result.reason == "schema_evolution_failed"
+    assert result.step == "schema_evolution"
+    assert result.exception_type == "RuntimeError"
+    assert table.appended == []
+
+
+def test_schema_evolution_refuses_unexpected_assigned_field_ids(monkeypatch, tmp_path):
+    catalog = FakeCatalog()
+    dependencies, _captured = _dependencies(catalog)
+    table = FakeTable(_v1_schema(dependencies))
+    table.assigned_id_offset = 1
+    catalog.tables["metadata.runs"] = table
+    monkeypatch.setattr(sink, "_load_engine_dependencies", lambda: dependencies)
+
+    result = append_run_record(_record(), _config(), _paths(tmp_path))
+
+    assert result.outcome is IcebergAppendOutcome.SKIPPED
+    assert result.reason == "live_schema_does_not_match_declaration_after_evolution"
+    assert result.step == "schema_validation"
+    assert [field.field_id for field in table.schema().fields[-3:]] == [45, 46, 47]
+    assert table.appended == []
+
+
+def test_schema_evolution_work_remains_inside_the_append_budget(monkeypatch, tmp_path):
+    catalog = FakeCatalog()
+    dependencies, _captured = _dependencies(catalog)
+    table = FakeTable(_v1_schema(dependencies))
+    release = threading.Event()
+    table.schema_update_wait = release
+    catalog.tables["metadata.runs"] = table
+    monkeypatch.setattr(sink, "_load_engine_dependencies", lambda: dependencies)
+
+    result = append_run_record(_record(), _config(), _paths(tmp_path), timeout_seconds=0.02)
+    release.set()
+
+    assert result.outcome is IcebergAppendOutcome.FAILED
+    assert result.step == "budget"
+    assert result.exception_type == "AppendTimeoutError"
+
+
 def test_schema_mismatch_skips_without_altering_or_appending(monkeypatch, tmp_path):
     catalog = FakeCatalog()
     dependencies, _captured = _dependencies(catalog)
-    mismatched = FakeTable(FakeSchema(("unexpected",)))
+    mismatched = FakeTable(
+        FakeSchema((FakeField(999, "unexpected", FakePrimitive("string"), False),))
+    )
     catalog.tables["metadata.runs"] = mismatched
     monkeypatch.setattr(sink, "_load_engine_dependencies", lambda: dependencies)
 
@@ -349,7 +600,9 @@ def test_schema_mismatch_skips_without_altering_or_appending(monkeypatch, tmp_pa
 
     assert result.outcome is IcebergAppendOutcome.SKIPPED
     assert result.reason == "live_schema_does_not_match_declaration"
-    assert mismatched.live_schema == FakeSchema(("unexpected",))
+    assert mismatched.live_schema == FakeSchema(
+        (FakeField(999, "unexpected", FakePrimitive("string"), False),)
+    )
     assert mismatched.appended == []
 
 

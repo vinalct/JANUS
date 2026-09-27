@@ -6,6 +6,7 @@ from janus.lineage.models import (
     MaterializedOutput,
     RunMetadata,
     compute_config_version,
+    compute_schema_version,
     configured_outputs_from_plan,
 )
 from janus.lineage.persistence import MetadataZonePaths, read_json_mapping, write_json_atomic
@@ -25,6 +26,7 @@ __all__ = [
     "RunMetadataStore",
     "RunObserver",
     "compute_config_version",
+    "compute_schema_version",
     "configured_outputs_from_plan",
     "read_json_mapping",
     "write_json_atomic",

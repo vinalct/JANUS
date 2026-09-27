@@ -1,7 +1,9 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from janus.models.config.policy import DEFAULT_VALIDATION_POLICY
 from janus.models.source_config import (
     CombinedRequestInputsConfig,
     DateWindowRequestInputsConfig,
@@ -10,8 +12,10 @@ from janus.models.source_config import (
     SourceConfigValidationError,
 )
 from janus.registry import SourceNotFoundError, load_registry
+from tests.support.contracts import DECLARED_CONTRACT_PATH, write_minimal_contract
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+LEGACY_POLICY = replace(DEFAULT_VALIDATION_POLICY, require_active_contract=False)
 
 
 def test_checked_in_registry_lists_enabled_sources():
@@ -39,6 +43,7 @@ def test_checked_in_registry_returns_typed_source_config():
 
 
 def test_checked_in_registry_loads_cnpj_entity_source_contracts():
+    """The CNPJ entries resolve their migrated active data contracts."""
     registry = load_registry(PROJECT_ROOT)
 
     source = registry.get_source(
@@ -48,9 +53,13 @@ def test_checked_in_registry_loads_cnpj_entity_source_contracts():
 
     assert source.enabled is False
     assert source.source_hook is None
+    contract = registry.contract_for(source.source_id)
+
     assert source.access.remote_file_pattern == "Empresas*.zip"
-    assert source.schema.mode == "explicit"
-    assert source.schema.path == "conf/schemas/receita_federal/cnpj/empresas_schema.json"
+    assert source.schema.mode == "contract"
+    assert source.schema.contract == "conf/contracts/receita_federal/cnpj_empresas.yaml"
+    assert contract is not None
+    assert contract.status == "active"
     assert source.outputs.raw.path == "data/raw/receita_federal/cnpj/empresas"
     assert source.outputs.bronze.namespace == "bronze__receita_federal"
     assert source.outputs.bronze.table_name == "cnpj_empresas"
@@ -540,6 +549,40 @@ def test_registry_rejects_concurrency_above_one_without_speculative_pagination(t
     assert "'cursor' pagination" in message
 
 
+def test_a_legacy_declaration_warns_once_per_config_file(tmp_path):
+    """Ten entries in one file repeat one declaration; the operator reads one warning."""
+    legacy_schema = _valid_source_yaml("legacy_source", enabled=True).replace(
+        f"schema:\n  contract: {DECLARED_CONTRACT_PATH}\n",
+        "schema:\n  mode: infer\n",
+    )
+    project_root = _create_project(
+        tmp_path,
+        {
+            "legacy.yaml": _grouped_sources_yaml(
+                legacy_schema,
+                _valid_source_yaml("legacy_peer", enabled=True).replace(
+                    f"schema:\n  contract: {DECLARED_CONTRACT_PATH}\n",
+                    "schema:\n  mode: infer\n",
+                ),
+            ),
+            "declared.yaml": _valid_source_yaml("declared_source", enabled=True),
+        },
+    )
+
+    with pytest.warns(DeprecationWarning) as records:
+        registry = load_registry(project_root, policy=LEGACY_POLICY)
+
+    assert len(records) == 1
+    assert str(records[0].message) == (
+        f"{project_root / 'conf' / 'sources' / 'legacy.yaml'}: schema: "
+        "`schema.mode`/`schema.path` are deprecated and will be removed; "
+        "declare `schema.contract: conf/contracts/<domain>/<table>.yaml` instead "
+        "(see docs/data-contracts.md)."
+    )
+    assert registry.get_source("declared_source").deprecations == ()
+    assert registry.get_source("legacy_source").deprecations != ()
+
+
 def _create_project(tmp_path: Path, sources: dict[str, str]) -> Path:
     conf_dir = tmp_path / "conf"
     sources_dir = conf_dir / "sources"
@@ -548,6 +591,7 @@ def _create_project(tmp_path: Path, sources: dict[str, str]) -> Path:
         "registry:\n  sources_dir: conf/sources\n  file_pattern: \"*.yaml\"\n",
         encoding="utf-8",
     )
+    write_minimal_contract(tmp_path)
     for file_name, content in sources.items():
         file_path = sources_dir / file_name
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -659,7 +703,7 @@ extraction:
     backoff_seconds: 1
 
 schema:
-  mode: infer
+  contract: {DECLARED_CONTRACT_PATH}
 
 spark:
   input_format: json

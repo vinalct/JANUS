@@ -9,7 +9,7 @@
   "checkpoint_field": "updated_at",
   "checkpoint_strategy": "max_value",
   "checkpoint_value": "2026-07-02",
-  "config_version": "2927743411e01919b574d2c9e4002b6840796f046a24dd8b8afeecef9814fa0d",
+  "config_version": "1d12cde16fee1ca2f5e565240c28e7ca6762ecc2999db6c119717998ecc95ed1",
   "configured_outputs": [
     {
       "format": "json",
@@ -27,6 +27,8 @@
       "zone": "metadata"
     }
   ],
+  "contract_id": "example.minimal",
+  "contract_version": "1.0.0",
   "emitted_at": "2026-07-04T12:00:05+00:00",
   "environment": "local",
   "extraction_metadata": {
@@ -96,6 +98,7 @@
     "trigger": "baseline"
   },
   "run_id": "order15-empty_handoff",
+  "schema_version": "36b064711c0849a241baa4eb3a5af56c7b8c40c1bb394413797146324b996583",
   "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
   "source_hook": "order15.empty",
   "source_id": "baseline_api",

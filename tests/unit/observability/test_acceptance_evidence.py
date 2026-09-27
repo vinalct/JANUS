@@ -66,6 +66,25 @@ def _authoritative_files(root: Path) -> dict[Path, bytes]:
 
 
 @pytest.mark.parametrize("case", baseline.BASELINE_CASES)
+def test_contract_identity_is_additive_in_run_and_lineage_artifacts(case, tmp_path):
+    root = tmp_path / "project"
+    manifest = baseline.capture_case(root, case)
+    contract = manifest["summary"]["planned_run"]["contract"]
+    metadata_root = root / "data" / "metadata" / manifest["source_id"]
+    expected = {
+        "schema_version": contract["schema_version"],
+        "contract_id": contract["id"],
+        "contract_version": contract["version"],
+    }
+
+    for directory in ("runs", "lineage"):
+        records = sorted((metadata_root / directory).glob("*.json"))
+        assert len(records) == 1
+        payload = json.loads(records[0].read_text(encoding="utf-8"))
+        assert {key: payload[key] for key in expected} == expected
+
+
+@pytest.mark.parametrize("case", baseline.BASELINE_CASES)
 def test_enabled_emission_preserves_goldens_and_emits_valid_lifecycle_events(
     case,
     tmp_path,
@@ -159,7 +178,14 @@ def test_every_captured_terminal_shape_carries_the_ac1_fields(tmp_path, monkeypa
                 )
 
         monkeypatch.setattr(baseline, "FixedObserver", EmittingFixedObserver)
-        baseline.capture_case(root, case)
+        manifest = baseline.capture_case(root, case)
+        contract = manifest["summary"]["planned_run"]["contract"]
+        assert records[case].schema_version == contract["schema_version"]
+        assert records[case].contract_id == contract["id"]
+        expected_contract_version = (
+            None if contract["id"].startswith("legacy:") else contract["version"]
+        )
+        assert records[case].contract_version == expected_contract_version
 
     assert set(records) == set(baseline.BASELINE_CASES)
     assert {record.source_id for record in records.values()} == {

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
 
+from janus.models.data_contracts.model import DataContract
 from janus.models.source_config import OutputTarget, SourceConfig
 
 SUPPORTED_OUTPUT_ZONES = frozenset({"bronze", "metadata", "raw"})
@@ -103,14 +104,27 @@ class ExecutionPlan:
     metadata_output: OutputTarget
     checkpoint_field: str | None = None
     notes: tuple[str, ...] = ()
+    data_contract: DataContract | None = None
 
     def __post_init__(self) -> None:
         if self.source.source_id != self.source_config.source_id:
             raise ValueError("source.source_id must match source_config.source_id")
 
     @classmethod
-    def from_source_config(cls, source_config: SourceConfig, run_context: RunContext) -> Self:
-        """Build the strategy-agnostic execution plan shape expected by planner code."""
+    def from_source_config(
+        cls,
+        source_config: SourceConfig,
+        run_context: RunContext,
+        *,
+        data_contract: DataContract | None = None,
+    ) -> Self:
+        """Build the strategy-agnostic execution plan shape expected by planner code.
+
+        ``data_contract`` is the declaration the registry already read; the plan carries
+        it so nothing downstream has to open the file again. It is keyword-only and
+        defaulted because a plan built without one is still a valid plan — an inferred
+        source has no contract to carry.
+        """
         return cls(
             run_context=run_context,
             source=SourceReference.from_source_config(source_config),
@@ -121,6 +135,7 @@ class ExecutionPlan:
             raw_output=source_config.outputs.raw,
             bronze_output=source_config.outputs.bronze,
             metadata_output=source_config.outputs.metadata,
+            data_contract=data_contract,
         )
 
     def with_note(self, note: str) -> Self:
@@ -129,6 +144,15 @@ class ExecutionPlan:
         if not normalized_note:
             raise ValueError("note must not be empty")
         return replace(self, notes=(*self.notes, normalized_note))
+
+    def with_data_contract(self, data_contract: DataContract | None) -> Self:
+        """Return a new execution plan carrying the snapshot's contract for this source.
+
+        The planner attaches it after the strategy and any hook have shaped the plan, so
+        a hook that rebuilds a plan cannot drop or substitute the declaration the
+        registry validated.
+        """
+        return replace(self, data_contract=data_contract)
 
 
 @dataclass(frozen=True, slots=True)

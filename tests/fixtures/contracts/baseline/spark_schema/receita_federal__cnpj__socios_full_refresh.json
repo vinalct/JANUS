@@ -1,0 +1,76 @@
+{
+  "schema_path": "conf/schemas/receita_federal/cnpj/socios_schema.json",
+  "schema_sha256": "99764326ecc443425448074efe1147c92846ceed746a808de3467ecab53be429",
+  "source_id": "receita_federal__cnpj__socios_full_refresh",
+  "struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "cnpj_basico",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "identificador_de_socio",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "nome_socio_ou_razao_social",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "cpf_cnpj_socio",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "qualificacao_socio",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "data_entrada_sociedade",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "pais",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "representante_legal",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "nome_representante",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "qualificacao_representante_legal",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "faixa_etaria",
+        "nullable": true,
+        "type": "string"
+      }
+    ],
+    "type": "struct"
+  }
+}

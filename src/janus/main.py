@@ -10,6 +10,7 @@ from typing import Any
 from janus.cli.common import (
     default_project_root,
     format_runtime_permission_error,
+    log_source_config_deprecations,
     parse_started_at,
 )
 from janus.cli.run_all import main as run_all_main
@@ -119,10 +120,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def _dispatch_subcommand(argv: tuple[str, ...]) -> int | None:
+    if argv and argv[0] == "run-all":
+        return run_all_main(argv[1:])
+    if argv and argv[0] == "contract":
+        from janus.cli.contract import main as contract_main
+
+        return contract_main(argv[1:])
+    return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     resolved_argv = tuple(sys.argv[1:] if argv is None else argv)
-    if resolved_argv and resolved_argv[0] == "run-all":
-        return run_all_main(resolved_argv[1:])
+    dispatch_result = _dispatch_subcommand(resolved_argv)
+    if dispatch_result is not None:
+        return dispatch_result
 
     args = parse_args(resolved_argv)
     project_root = args.project_root.resolve()
@@ -169,6 +181,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (FileNotFoundError, PlannerError, SourceNotFoundError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 2
+        log_source_config_deprecations(
+            build_structured_logger(
+                "janus.config",
+                level=config.get("runtime", {}).get("log_level", "INFO"),
+            ).bind(environment=config.get("name", args.environment)),
+            (planned_run.plan.source_config,),
+        )
         summary["planned_run"] = planned_run.to_summary()
 
     if args.execute:

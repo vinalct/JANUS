@@ -1,0 +1,52 @@
+{
+  "schema_path": "conf/schemas/receita_federal/cnpj/empresas_schema.json",
+  "schema_sha256": "d46a62af8d9613c438918ccf803b3cc73dc29c7636c34f07adaf5c19bc641fc3",
+  "source_id": "receita_federal__cnpj__empresas_full_refresh",
+  "struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "cnpj_basico",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "razao_social",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "natureza_juridica",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "qualificacao_do_responsavel",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "capital_social",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "porte_empresa",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "ente_federativo_responsavel",
+        "nullable": true,
+        "type": "string"
+      }
+    ],
+    "type": "struct"
+  }
+}

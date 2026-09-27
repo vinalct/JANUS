@@ -1,0 +1,259 @@
+{
+  "case": "transparencia_servidores_por_orgao",
+  "lineage_keys": [
+    "artifacts",
+    "checkpoint_strategy",
+    "config_version",
+    "configured_outputs",
+    "emitted_at",
+    "environment",
+    "extraction_metadata",
+    "extraction_mode",
+    "materialized_outputs",
+    "metadata",
+    "plan_notes",
+    "records_extracted",
+    "run_attributes",
+    "run_id",
+    "source_config_path",
+    "source_id",
+    "source_name",
+    "status",
+    "strategy_family",
+    "strategy_variant"
+  ],
+  "quality_report": {
+    "checks": [
+      {
+        "name": "quality_contract",
+        "outcome": "passed"
+      },
+      {
+        "name": "schema_contract_mode",
+        "outcome": "passed"
+      },
+      {
+        "name": "required_fields",
+        "outcome": "passed"
+      },
+      {
+        "name": "unique_fields",
+        "outcome": "skipped"
+      },
+      {
+        "name": "schema_expectations",
+        "outcome": "passed"
+      },
+      {
+        "name": "output_columns",
+        "outcome": "passed"
+      },
+      {
+        "name": "materialized_outputs",
+        "outcome": "passed"
+      },
+      {
+        "name": "bronze_key_uniqueness",
+        "outcome": "skipped"
+      }
+    ],
+    "schema_expectation_source": "<PROJECT>/conf/schemas/transparencia/servidores_por_orgao_schema.json"
+  },
+  "read_schema_source": "explicit",
+  "read_struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "qntPessoas",
+        "nullable": false,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "qntVinculos",
+        "nullable": false,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "skSituacao",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "descSituacao",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "skTipoVinculo",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "descTipoVinculo",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "skTipoServidor",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "descTipoServidor",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "licenca",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "codOrgaoExercicioSiape",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "nomOrgaoExercicioSiape",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "codOrgaoSuperiorExercicioSiape",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "nomOrgaoSuperiorExercicioSiape",
+        "nullable": true,
+        "type": "string"
+      }
+    ],
+    "type": "struct"
+  },
+  "row_count": 3,
+  "row_digest": "40cef5729e38e3a23afa963c8eccd79f89de6f8e7967f0b0654b1e7c06c8fefd",
+  "row_digest_algorithm": "sha256(canonical-json-array(sorted(canonical-json-row)))",
+  "schema": [
+    {
+      "name": "janus_run_id",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_source_id",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_source_name",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_environment",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_strategy_family",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "janus_strategy_variant",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "ingestion_timestamp",
+      "nullable": true,
+      "type": "timestamp"
+    },
+    {
+      "name": "ingestion_date",
+      "nullable": true,
+      "type": "date"
+    },
+    {
+      "name": "qntPessoas",
+      "nullable": true,
+      "type": "int"
+    },
+    {
+      "name": "qntVinculos",
+      "nullable": true,
+      "type": "int"
+    },
+    {
+      "name": "skSituacao",
+      "nullable": true,
+      "type": "int"
+    },
+    {
+      "name": "descSituacao",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "skTipoVinculo",
+      "nullable": true,
+      "type": "int"
+    },
+    {
+      "name": "descTipoVinculo",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "skTipoServidor",
+      "nullable": true,
+      "type": "int"
+    },
+    {
+      "name": "descTipoServidor",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "licenca",
+      "nullable": true,
+      "type": "int"
+    },
+    {
+      "name": "codOrgaoExercicioSiape",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "nomOrgaoExercicioSiape",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "codOrgaoSuperiorExercicioSiape",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "name": "nomOrgaoSuperiorExercicioSiape",
+      "nullable": true,
+      "type": "string"
+    }
+  ],
+  "source_id": "transparencia__poder_executivo_federal__servidores_por_orgao__full_refresh",
+  "spark_session_timezone": "UTC",
+  "table_identifier": "bronze__transparencia.poder_executivo_federal__servidores_por_orgao"
+}

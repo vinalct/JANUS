@@ -14,7 +14,7 @@
         }
       ],
       "checkpoint_strategy": "none",
-      "config_version": "6020efc6bbc5e17b710b56ecb21a6dc8482337fbe1636e98f7733dbdc5d1ddc9",
+      "config_version": "702d3272a5339ef5382f32e283a08705eaab2ea111696518d5d1fc227951bbb7",
       "configured_outputs": [
         {
           "format": "json",
@@ -32,6 +32,8 @@
           "zone": "metadata"
         }
       ],
+      "contract_id": "example.minimal",
+      "contract_version": "1.0.0",
       "emitted_at": "2026-09-13T12:00:05+00:00",
       "environment": "local",
       "extraction_metadata": {
@@ -100,6 +102,7 @@
         "trigger": "baseline"
       },
       "run_id": "order14-empty",
+      "schema_version": "36b064711c0849a241baa4eb3a5af56c7b8c40c1bb394413797146324b996583",
       "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
       "source_hook": "order14.empty",
       "source_id": "C",
@@ -127,6 +130,8 @@
           "zone": "metadata"
         }
       ],
+      "contract_id": "example.minimal",
+      "contract_version": "1.0.0",
       "duration_seconds": 5.0,
       "ended_at": "2026-09-13T12:00:05+00:00",
       "environment": "local",
@@ -181,6 +186,7 @@
         "trigger": "baseline"
       },
       "run_id": "order14-empty",
+      "schema_version": "36b064711c0849a241baa4eb3a5af56c7b8c40c1bb394413797146324b996583",
       "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
       "source_id": "C",
       "source_name": "Synthetic C",
@@ -203,9 +209,10 @@
         },
         {
           "details": {
-            "schema_mode": "infer"
+            "expected_field_count": "1",
+            "schema_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
           },
-          "message": "Schema evolution is enabled; unexpected columns will be tolerated.",
+          "message": "Schema validation will use an explicit field contract.",
           "name": "schema_contract_mode",
           "outcome": "passed",
           "phase": "config"
@@ -259,7 +266,7 @@
       "environment": "local",
       "metadata": {
         "allow_schema_evolution": "True",
-        "schema_expectation_source": ""
+        "schema_expectation_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
       },
       "run_id": "order14-empty",
       "source_id": "C",
@@ -358,6 +365,13 @@
       }
     },
     "planned_run": {
+      "contract": {
+        "id": "example.minimal",
+        "path": "conf/contracts/test/minimal_contract.yaml",
+        "schema_version": "36b064711c0849a241baa4eb3a5af56c7b8c40c1bb394413797146324b996583",
+        "status": "active",
+        "version": "1.0.0"
+      },
       "execution": {
         "checkpoint_field": null,
         "checkpoint_strategy": "none",

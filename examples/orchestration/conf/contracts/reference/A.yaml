@@ -1,0 +1,38 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: orchestration.A
+name: Orchestration reference rows
+version: 1.0.0
+status: active
+domain: reference
+description:
+  purpose: Reference identifiers and labels written by source A and read by source B.
+tags: [example, orchestration, reference]
+team:
+  - username: janus-example
+    role: owner
+schema:
+  - name: orchestration_example.reference_a
+    physicalType: table
+    properties:
+      - name: reference_id
+        businessName: Reference id
+        description: Identifier used to join detail rows.
+        logicalType: string
+        physicalType: string
+        required: true
+        unique: true
+        primaryKey: true
+        classification: public
+      - name: label
+        businessName: Reference label
+        description: Human-readable region label.
+        logicalType: string
+        physicalType: string
+        required: true
+        classification: public
+customProperties:
+  - property: janus.compatibility
+    value: additive
+  - property: janus.enforcement
+    value: lenient

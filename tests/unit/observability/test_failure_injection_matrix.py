@@ -39,6 +39,7 @@ RUNS_TABLE_FAILURES = (
     "namespace_create",
     "table_create",
     "schema_validation",
+    "schema_evolution",
     "append",
     "budget",
     "catalog_properties",
@@ -112,8 +113,18 @@ def _sink_failure(
         catalog.table_error = RuntimeError("secret table detail")
     if failure == "schema_validation":
         catalog.tables["metadata.runs"] = sink_fakes.FakeTable(
-            sink_fakes.FakeSchema(("unexpected",))
+            sink_fakes.FakeSchema(
+                (
+                    sink_fakes.FakeField(
+                        999, "unexpected", sink_fakes.FakePrimitive("string"), False
+                    ),
+                )
+            )
         )
+    if failure == "schema_evolution":
+        table = sink_fakes.FakeTable(sink_fakes._v1_schema(dependencies))
+        table.schema_update_error = RuntimeError("secret commit conflict")
+        catalog.tables["metadata.runs"] = table
     if failure == "append":
         original_create_table = catalog.create_table
 

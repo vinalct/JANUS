@@ -1,0 +1,508 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: receita_federal.cnpj_estabelecimentos
+name: Receita Federal - CNPJ Estabelecimentos
+version: 1.0.0
+status: active
+domain: receita_federal
+description:
+  purpose: Business establishment registration, address, and contact fields from the Receita Federal CNPJ
+    registry.
+team:
+- username: janus
+  role: owner
+tags:
+- receita-federal
+- cnpj
+- estabelecimentos
+- bulk-file
+- federal
+schema:
+- name: cnpj_estabelecimentos
+  physicalType: table
+  properties:
+  - name: cnpj_basico
+    businessName: CNPJ base
+    description: Eight-digit base identifier shared by the establishments of a CNPJ.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: true
+    primaryKey: true
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnpj_basico
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: cnpj_ordem
+    businessName: CNPJ branch order
+    description: Four-digit establishment order within the CNPJ registration.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: true
+    primaryKey: true
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnpj_ordem
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: cnpj_dv
+    businessName: CNPJ check digits
+    description: CNPJ verification digits supplied by Receita Federal.
+    logicalType: string
+    physicalType: string
+    required: true
+    unique: true
+    primaryKey: true
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnpj_dv
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: identificador_matriz_filial
+    businessName: Head office or branch indicator
+    description: Indicator distinguishing a head office from a branch.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: identificador_matriz_filial
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: nome_fantasia
+    businessName: Trade name
+    description: Trade name registered for the establishment.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: nome_fantasia
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: situacao_cadastral
+    businessName: Registration status
+    description: Current registration status code of the establishment.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: situacao_cadastral
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: data_situacao_cadastral
+    businessName: Registration status date
+    description: Date associated with the establishment's registration status.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: data_situacao_cadastral
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: motivo_situacao_cadastral
+    businessName: Registration status reason code
+    description: Reason code associated with the registration status.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: motivo_situacao_cadastral
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: nome_cidade_exterior
+    businessName: Foreign city name
+    description: City name for an address located outside Brazil.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: nome_cidade_exterior
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: pais
+    businessName: Country code
+    description: Country code supplied by the source record.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: pais
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: data_inicio_atividade
+    businessName: Activity start date
+    description: Date the establishment began its activity.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: data_inicio_atividade
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: cnae_fiscal_principal
+    businessName: Primary CNAE code
+    description: Primary CNAE economic activity code.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnae_fiscal_principal
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: cnae_fiscal_secundaria
+    businessName: Secondary CNAE codes
+    description: Secondary CNAE economic activity codes as supplied by the source.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cnae_fiscal_secundaria
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: tipo_logradouro
+    businessName: Street type
+    description: Type of street in the establishment address.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: tipo_logradouro
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: logradouro
+    businessName: Street name
+    description: Street name in the establishment address.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: logradouro
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: numero
+    businessName: Street number
+    description: Street number in the establishment address.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: numero
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: complemento
+    businessName: Address complement
+    description: Additional address details supplied for the establishment.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: complemento
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: bairro
+    businessName: Neighborhood
+    description: Neighborhood in the establishment address.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: bairro
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: cep
+    businessName: Postal code
+    description: Postal code of the establishment address.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: cep
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: uf
+    businessName: State abbreviation
+    description: Brazilian state abbreviation for the establishment.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: uf
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: municipio
+    businessName: Municipality code
+    description: Municipality code for the establishment.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: municipio
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: ddd_1
+    businessName: First telephone area code
+    description: Area code for the first listed telephone number.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: ddd_1
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: telefone_1
+    businessName: First telephone number
+    description: First telephone number supplied for the establishment.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: telefone_1
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: ddd_2
+    businessName: Second telephone area code
+    description: Area code for the second listed telephone number.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: ddd_2
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: telefone_2
+    businessName: Second telephone number
+    description: Second telephone number supplied for the establishment.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: telefone_2
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: ddd_fax
+    businessName: Fax area code
+    description: Fax area code supplied for the establishment.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: ddd_fax
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: fax
+    businessName: Fax number
+    description: Fax number supplied for the establishment.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: fax
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: correio_eletronico
+    businessName: Email address
+    description: Electronic mail address listed for the establishment.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: correio_eletronico
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: situacao_especial
+    businessName: Special registration status
+    description: Special registration status description, when present.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: situacao_especial
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+  - name: data_situacao_especial
+    businessName: Special status date
+    description: Date associated with the special registration status.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: data_situacao_especial
+    - property: sourceFormat
+      value: csv
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient

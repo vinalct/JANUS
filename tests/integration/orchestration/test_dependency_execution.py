@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import yaml
 
 from janus.lineage import RunObserver
 from janus.normalizers import NORMALIZATION_METADATA_COLUMNS
@@ -24,6 +25,7 @@ from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.strategies.catalog import CatalogStrategy
 from janus.utils.storage import StorageLayout
+from tests.support.contracts import DECLARED_CONTRACT_PATH
 from tests.support.orchestration import GraphCase, SourceSpec, source_documents, write_project
 from tests.support.orchestration_capture import EmptyHandoffHook
 from tests.support.spark_sessions import (
@@ -503,6 +505,21 @@ def _execute_graph(
     raise_sources: set[str] | None = None,
 ) -> _HarnessResult:
     write_project(root, documents or source_documents(GraphCase(specs)))
+    contract_path = root / DECLARED_CONTRACT_PATH
+    contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    for name, physical_type, logical_type in (
+        ("value", "long", "integer"),
+        ("upstream_id", "string", "string"),
+        ("consumer", "string", "string"),
+        ("title", "string", "string"),
+        ("a_id", "string", "string"),
+        ("c_id", "string", "string"),
+        ("day", "string", "string"),
+    ):
+        contract["schema"][0]["properties"].append(
+            {"name": name, "logicalType": logical_type, "physicalType": physical_type}
+        )
+    contract_path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
     environment_config = {
         "name": "local",
         "storage": {

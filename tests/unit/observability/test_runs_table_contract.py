@@ -24,12 +24,13 @@ from janus.observability import (
     resolve_runs_table,
     resolve_runs_table_identifier,
 )
+from janus.observability.vocabulary import RUN_RECORD_SCHEMA_VERSION
 from janus.utils.environment import load_environment_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REST_ENV_PATH = PROJECT_ROOT / "conf" / "environments" / "cluster-rest.env.example"
 FORBIDDEN_IMPORT_ROOTS = ("pyspark", "pyiceberg", "pyarrow")
-EXPECTED_COLUMN_COUNT = 42
+EXPECTED_COLUMN_COUNT = 45
 
 EXPECTED_SCHEMA = (
     ("run_id", "string", False),
@@ -74,6 +75,9 @@ EXPECTED_SCHEMA = (
     ("checkpoint_history_path", "string", True),
     ("validation_report_path", "string", True),
     ("record_schema_version", "int", False),
+    ("schema_version", "string", True),
+    ("contract_id", "string", True),
+    ("contract_version", "string", True),
 )
 
 
@@ -151,11 +155,15 @@ def test_field_ids_are_stable_unique_and_include_the_list_element():
     )
     all_ids = [*field_ids, failed_checks.element_id]
 
-    assert field_ids == list(range(1, EXPECTED_COLUMN_COUNT + 1))
+    assert field_ids == [*range(1, 43), 44, 45, 46]
     assert failed_checks.iceberg_type is IcebergType.STRING_LIST
-    assert failed_checks.element_id == EXPECTED_COLUMN_COUNT + 1
+    assert failed_checks.element_id == 43
     assert None not in all_ids
     assert len(all_ids) == len(set(all_ids))
+
+
+def test_new_run_records_use_schema_version_two():
+    assert RUN_RECORD_SCHEMA_VERSION == 2
 
 
 def test_required_is_exactly_the_inverse_of_nullable():
