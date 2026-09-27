@@ -45,7 +45,7 @@ spark:
     inferSchema: "false"
 ```
 
-Column names come from explicit schema files under `conf/schemas/receita_federal/cnpj/`. During execution, JANUS passes those schemas to the Spark reader, so bronze tables get stable business column names instead of Spark's default positional names for headerless CSV.
+Column names come from active contracts under `conf/contracts/receita_federal/cnpj_<entity>.yaml`. During execution, JANUS generates the Spark read schema from each contract, so bronze tables get stable business column names instead of Spark's default positional names for headerless CSV.
 
 ## Output Layout
 

@@ -1,0 +1,45 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: orchestration.B
+name: Orchestration detail rows
+version: 1.0.0
+status: active
+domain: reporting
+description:
+  purpose: Detail rows returned for the reference identifiers written by source A.
+tags: [example, orchestration, reporting]
+team:
+  - username: janus-example
+    role: owner
+schema:
+  - name: orchestration_example.details_b
+    physicalType: table
+    properties:
+      - name: detail_id
+        businessName: Detail id
+        description: Unique identifier for a detail row.
+        logicalType: string
+        physicalType: string
+        required: true
+        unique: true
+        primaryKey: true
+        classification: public
+      - name: reference_id
+        businessName: Reference id
+        description: Identifier of the source A row associated with the detail.
+        logicalType: string
+        physicalType: string
+        required: true
+        classification: public
+      - name: amount
+        businessName: Amount
+        description: Integer amount reported for the detail.
+        logicalType: integer
+        physicalType: long
+        required: true
+        classification: public
+customProperties:
+  - property: janus.compatibility
+    value: additive
+  - property: janus.enforcement
+    value: lenient

@@ -1,0 +1,28 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: test.catalog_commits_round_trip
+name: Cross-engine round-trip fixture
+version: 1.0.0
+status: active
+domain: test
+description:
+  purpose: Rows Spark and pyiceberg each commit to the cross-engine round-trip table.
+team:
+  - username: janus-tests
+    role: owner
+schema:
+  - name: bronze.pyiceberg_round_trip
+    physicalType: table
+    properties:
+      - name: id
+        logicalType: integer
+        physicalType: long
+        required: true
+      - name: name
+        logicalType: string
+        physicalType: string
+customProperties:
+  - property: janus.compatibility
+    value: additive
+  - property: janus.enforcement
+    value: lenient

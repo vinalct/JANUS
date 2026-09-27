@@ -61,9 +61,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: explicit
-      path: conf/schemas/transparencia/gastos_cartoes_cartoes_schema.json
-      
+      contract: conf/contracts/transparencia/gastos_cartoes__cartoes.yaml
     spark:
       input_format: json
       write_mode: overwrite
@@ -157,9 +155,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: explicit
-      path: conf/schemas/transparencia/gastos_cartoes_cartoes_schema.json
-      
+      contract: conf/contracts/transparencia/gastos_cartoes__cartoes.yaml
     spark:
       input_format: json
       write_mode: append

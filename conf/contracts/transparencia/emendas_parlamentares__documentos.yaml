@@ -1,0 +1,151 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: transparencia.emendas_parlamentares__documentos
+name: Portal da Transparencia - Emendas parlamentares - Documentos
+version: 0.1.0
+status: draft
+domain: transparencia
+description:
+  purpose: Consulta os documentos relacionados a emenda parlamentar.
+team:
+- username: janus
+  role: owner
+tags:
+- transparencia
+- federal
+- api
+- emendas parlamentares
+schema:
+- name: emendas_parlamentares__documentos
+  physicalType: table
+  properties:
+  - name: codigoDocumento
+    businessName: Codigo Documento
+    description: Portal da Transparencia response field codigoDocumento; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: codigoDocumento
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: codigoDocumentoResumido
+    businessName: Codigo Documento Resumido
+    description: Portal da Transparencia response field codigoDocumentoResumido; field meaning and observed
+      nullability remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: codigoDocumentoResumido
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: data
+    businessName: Data
+    description: Portal da Transparencia response field data; field meaning and observed nullability remain
+      pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: data
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: especieTipo
+    businessName: Especie Tipo
+    description: Portal da Transparencia response field especieTipo; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: especieTipo
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: fase
+    businessName: Fase
+    description: Portal da Transparencia response field fase; field meaning and observed nullability remain
+      pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: fase
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: id
+    businessName: ID
+    description: Portal da Transparencia response field id; field meaning and observed nullability remain
+      pending review against a sampled response.
+    logicalType: integer
+    physicalType: long
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: id
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+  - name: tipoEmenda
+    businessName: Tipo Emenda
+    description: Portal da Transparencia response field tipoEmenda; field meaning and observed nullability
+      remain pending review against a sampled response.
+    logicalType: string
+    physicalType: string
+    required: false
+    unique: false
+    primaryKey: false
+    classification: public
+    customProperties:
+    - property: sourceField
+      value: tipoEmenda
+    - property: sourceFormat
+      value: json
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient
+- property: janus.draftedFrom
+  value: official OpenAPI response model DocumentoRelacionadoEmendaDTO at https://api.portaldatransparencia.gov.br/v3/api-docs
+    for GET /api-de-dados/emendas/documentos/{codigo}; no sample payload, fixture or saved raw run was
+    available on 2026-09-23, and TRANSPARENCIA_API_TOKEN was not present in the process environment. This
+    is a documentation-shaped draft only; inferred field types/order, nullability, business descriptions
+    and quality agreement require a bounded live run and human review before activation.

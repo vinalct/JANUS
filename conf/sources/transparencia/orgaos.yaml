@@ -49,8 +49,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: infer
-      
+      contract: conf/contracts/transparencia/orgaos__siape.yaml
     spark:
       input_format: json
       write_mode: overwrite
@@ -131,8 +130,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: infer
-      
+      contract: conf/contracts/transparencia/orgaos__siafi.yaml
     spark:
       input_format: json
       write_mode: overwrite

@@ -89,7 +89,7 @@ The supported formats are the formats we need for the early source work:
 - `text`
 - `binary`
 
-The reader can also receive a Spark schema object from the runtime. During normal execution, JANUS resolves `schema.mode: explicit` into a reader schema when the normalization handoff format matches `spark.input_format`. That is what lets headerless CSV file sources land with contract-defined column names instead of anonymous `_c0`, `_c1`, and so on.
+The reader can also receive a Spark schema object from the runtime. During normal execution, JANUS generates a reader schema from `schema.contract` when the normalization handoff format matches `spark.input_format`. That is what lets headerless CSV file sources land with contract-defined column names instead of anonymous `_c0`, `_c1`, and so on.
 
 One behavior worth calling out is JSON handling.
 

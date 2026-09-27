@@ -282,6 +282,7 @@ class PlannedRun:
                     "format": self.plan.metadata_output.format,
                 },
             },
+            "contract": _contract_summary(self.plan),
             "plan_notes": list(self.plan.notes),
             "pre_run_metadata": self.pre_run_metadata_as_dict(),
         }
@@ -324,8 +325,10 @@ class Planner:
             source_id=source_config.source_id,
         )
         run_context = _build_run_context(request, source_config)
-        plan = strategy_binding.strategy.plan(source_config, run_context, hook).with_note(
-            f"dispatch:{strategy_binding.dispatch_path}"
+        plan = (
+            strategy_binding.strategy.plan(source_config, run_context, hook)
+            .with_note(f"dispatch:{strategy_binding.dispatch_path}")
+            .with_data_contract(snapshot.contract_for(source_config.source_id))
         )
         _validate_planned_dispatch(plan, strategy_binding)
         return PlannedRun(
@@ -400,6 +403,28 @@ class PlanningStrategy(BaseStrategy):
             f"Dispatch {plan.source.strategy!r}/{plan.source.strategy_variant!r} is planned, "
             "but metadata emission is not implemented yet"
         )
+
+
+def _contract_summary(plan: ExecutionPlan) -> dict[str, Any] | None:
+    """Describe the contract this plan was built against, or ``None`` for none."""
+    contract = plan.data_contract
+    if contract is None:
+        return None
+    return {
+        "id": contract.id,
+        "version": contract.version,
+        "status": contract.status,
+        "schema_version": contract.schema_version,
+        "path": _project_relative(contract.contract_path, plan.run_context.project_root),
+    }
+
+
+def _project_relative(path: Path, project_root: Path) -> str:
+    """Render a contract path relative to the project, or as written when it is outside."""
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _build_run_context(request: PlanningRequest, source_config: SourceConfig) -> RunContext:

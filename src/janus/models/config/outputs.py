@@ -6,6 +6,7 @@ written result — and none of them depends on how the data was fetched.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from janus.models.config.coercion import (
@@ -19,6 +20,8 @@ from janus.models.config.coercion import (
     _require_string,
 )
 from janus.models.config.constants import (
+    DEPRECATED_SCHEMA_MODES,
+    SCHEMA_DECLARATION_DEPRECATION_MESSAGE,
     SUPPORTED_DATA_FORMATS,
     SUPPORTED_SCHEMA_MODES,
     SUPPORTED_WRITE_MODES,
@@ -33,9 +36,48 @@ from janus.models.config.types import (
 )
 
 
-def _build_schema_config(raw_value: Any, issues: list[ValidationIssue]) -> SchemaConfig:
-    """Validate the schema block and require a path when explicit schemas are declared."""
+def _build_schema_config(
+    raw_value: Any,
+    issues: list[ValidationIssue],
+    *,
+    deprecations: list[ValidationIssue],
+) -> SchemaConfig:
+    """Validate the schema block: one data contract, or the legacy file it replaces."""
     data = _require_mapping(raw_value, "schema", issues)
+    contract = _optional_string(data, "contract", issues, "schema")
+    if contract is not None:
+        return _build_contract_schema_config(data, contract, issues)
+    return _build_legacy_schema_config(data, issues, deprecations)
+
+
+def _build_contract_schema_config(
+    data: Mapping[str, Any], contract: str, issues: list[ValidationIssue]
+) -> SchemaConfig:
+    declared_mode = data.get("mode")
+    if declared_mode is not None and declared_mode != "contract":
+        issues.append(
+            ValidationIssue(
+                "schema.mode",
+                "must be 'contract' or omitted when schema.contract is set",
+            )
+        )
+    if data.get("path") is not None:
+        issues.append(
+            ValidationIssue(
+                "schema.path",
+                "must not be set together with schema.contract",
+            )
+        )
+
+    return SchemaConfig(mode="contract", contract=contract or None)
+
+
+def _build_legacy_schema_config(
+    data: Mapping[str, Any],
+    issues: list[ValidationIssue],
+    deprecations: list[ValidationIssue],
+) -> SchemaConfig:
+
     mode = _require_enum(data, "mode", SUPPORTED_SCHEMA_MODES, issues, "schema")
     path = _optional_string(data, "path", issues, "schema")
 
@@ -45,6 +87,17 @@ def _build_schema_config(raw_value: Any, issues: list[ValidationIssue]) -> Schem
                 "schema.path",
                 "is required when schema.mode is 'explicit'",
             )
+        )
+    if mode == "contract":
+        issues.append(
+            ValidationIssue(
+                "schema.contract",
+                "is required when schema.mode is 'contract'",
+            )
+        )
+    elif mode in DEPRECATED_SCHEMA_MODES:
+        deprecations.append(
+            ValidationIssue("schema", SCHEMA_DECLARATION_DEPRECATION_MESSAGE)
         )
 
     return SchemaConfig(mode=mode, path=path)

@@ -45,9 +45,7 @@ extraction:
     backoff_seconds: 30
 
 schema:
-  mode: explicit
-  path: conf/schemas/receita_federal/cnpj/qualificacoes_schema.json
-
+  contract: conf/contracts/receita_federal/cnpj_qualificacoes.yaml
 spark:
   input_format: csv
   write_mode: overwrite

@@ -71,8 +71,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: infer
-      
+      contract: conf/contracts/transparencia/licitacoes__licitacoes.yaml
     spark:
       input_format: json
       write_mode: overwrite
@@ -151,8 +150,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: infer
-      
+      contract: conf/contracts/transparencia/licitacoes__unidades_gestoras.yaml
     spark:
       input_format: json
       write_mode: overwrite
@@ -229,8 +227,7 @@ sources:
         backoff_seconds: 5
 
     schema:
-      mode: infer
-      
+      contract: conf/contracts/transparencia/licitacoes__modalidades.yaml
     spark:
       input_format: json
       write_mode: overwrite

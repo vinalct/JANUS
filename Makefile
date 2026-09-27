@@ -28,6 +28,10 @@ DAGSTER_TESTS := tests/unit/adapters/test_dagster_adapter.py \
 FAST_TEST_ARGS := tests/unit \
 	--ignore=tests/unit/adapters/test_dagster_adapter.py \
 	--deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
+CONTRACT_SCHEMA_TESTS := \
+	tests/unit/models/data_contracts/test_contract_loader.py::test_pinned_odcs_schema_sha256_matches_the_sidecar \
+	tests/unit/models/data_contracts/test_contract_loader.py::test_every_checked_in_contract_validates_against_the_pinned_odcs_schema \
+	tests/unit/models/data_contracts/test_contract_loader.py::test_odcs_validator_rejects_the_hostile_fixtures
 FAST_OBSERVABILITY_CLASSES := \
 	tests.unit.observability.test_acceptance_evidence \
 	tests.unit.observability.test_architecture_guardrails \
@@ -58,6 +62,7 @@ SPARK_ORCHESTRATION_CLASS := tests.integration.orchestration.test_dependency_exe
 QUERYABLE_CLASS := tests.integration.catalog_commits.test_queryable_observability
 RUNS_SINK_CLASS := tests.integration.catalog_commits.test_runs_table_append_sink
 CROSS_ENGINE_CLASS := tests.integration.catalog_commits.test_pyiceberg_round_trip
+CONTRACTS_GOLDEN_CLASS := tests.integration.contracts.test_bronze_unchanged_after_migration
 AC1_TEST := test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources
 AC2_TEST := test_published_ac2_queries_execute_verbatim_with_retry_and_window_boundaries
 CROSS_ENGINE_TEST := test_spark_reads_the_row_pyiceberg_committed
@@ -96,7 +101,7 @@ define RUN_COMPOSE
 	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-adapter ci run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
+.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-contract-schema test-adapter ci run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
 
 seed-ivy:
 	@mkdir -p "$(IVY_JAR_DEST_DIR)" "$(ICEBERG_CATALOG_DIR)"; \
@@ -217,6 +222,9 @@ test-fast:
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
 
+test-contract-schema:
+	$(PYTHON) -m pytest -q $(CONTRACT_SCHEMA_TESTS)
+
 test-adapter:
 	@mkdir -p "$(dir $(DAGSTER_TEST_REPORT))"
 	$(PYTHON) -c "import dagster; from importlib.metadata import version; actual = version('dagster'); assert actual == '$(DAGSTER_VERSION)', f'expected dagster $(DAGSTER_VERSION), found {actual}'"
@@ -230,10 +238,11 @@ ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
 	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage $(SERVICE) python -m pytest -ra -m 'not cluster' --cov=janus --cov-report=term-missing --cov-report=xml:data/coverage.xml --junitxml=$(CI_TEST_REPORT))
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_SINK_CLASS) --minimum-passed 2)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_SINK_CLASS) --minimum-passed 3)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CONTRACTS_GOLDEN_CLASS) --minimum-passed 23)
 
 run-local: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main --environment $(ENVIRONMENT) --with-spark)

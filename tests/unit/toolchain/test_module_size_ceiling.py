@@ -17,8 +17,14 @@ SOFT_TARGET = 600
 #: Each entry is a decision, not a backlog: state why the module is not being split.
 SOFT_CEILING_ALLOWANCES: dict[str, str] = {
     "quality/validators.py": (
-        "662 LOC; neither a strategy core nor a config module, so outside"
-        "scope. Cohesive: one validator class per quality rule."
+        "613 LOC; neither a strategy core nor a config module, so outside"
+        "scope. Cohesive: one validator per quality rule, with the plan-scoped schema "
+        "expectation already split out into quality/schema_expectation.py."
+    ),
+    "observability/iceberg_sink.py": (
+        "626 LOC; one bounded append path. Additive schema evolution is a step of "
+        "that path, on the same worker thread inside the same five-second emission budget, "
+        "and a fresh table bootstraps through it too."
     ),
     "strategies/http/transport.py": (
         "AC-8 pins the opener, the redirect handler and the byte cap to this one module"

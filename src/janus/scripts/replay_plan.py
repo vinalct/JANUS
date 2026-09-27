@@ -49,12 +49,37 @@ def _override_bronze_output(plan: ExecutionPlan, bronze_table: str) -> Execution
     )
 
 
-def _plan_with_active_raw_root(plan: ExecutionPlan) -> ExecutionPlan:
+def _plan_with_active_raw_root(
+    plan: ExecutionPlan, *, run_id: str | None = None
+) -> ExecutionPlan:
     raw_root = Path(plan.raw_output.path)
-    latest_run_root = _latest_raw_run_root(raw_root)
-    if latest_run_root is None:
+    selected_run_root = (
+        _raw_run_root_for_id(raw_root, run_id)
+        if run_id is not None
+        else _latest_raw_run_root(raw_root)
+    )
+    if selected_run_root is None:
         return plan
-    return replace(plan, raw_output=replace(plan.raw_output, path=str(latest_run_root)))
+    return replace(plan, raw_output=replace(plan.raw_output, path=str(selected_run_root)))
+
+
+def _raw_run_root_for_id(raw_root: Path, run_id: str) -> Path:
+    """Find one exact historical run id without interpreting it as a glob pattern."""
+    if not run_id.strip():
+        raise ValueError("raw run_id must not be empty")
+
+    runs_root = raw_root / "runs"
+    matches = tuple(
+        path
+        for path in runs_root.glob("ingestion_date=*/run_id=*")
+        if path.is_dir() and path.name == f"run_id={run_id}"
+    )
+    if not matches:
+        raise FileNotFoundError(f"Raw run {run_id!r} was not found under {runs_root}")
+    if len(matches) > 1:
+        locations = ", ".join(str(path) for path in sorted(matches))
+        raise ValueError(f"Raw run id {run_id!r} is ambiguous: {locations}")
+    return matches[0]
 
 
 def _latest_raw_run_root(raw_root: Path) -> Path | None:

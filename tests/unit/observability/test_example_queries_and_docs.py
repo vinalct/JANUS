@@ -78,6 +78,16 @@ def test_the_query_set_gives_every_declared_column_an_operational_use():
     assert schema_columns <= used_identifiers
 
 
+def test_config_version_drift_query_includes_contract_identity_changes():
+    sql = _queries()["config-version-drift.sql"]
+
+    assert "LAG(schema_version)" in sql
+    assert "previous_schema_version" in sql
+    assert "contract_id" in sql
+    assert "contract_version" in sql
+    assert "NOT (previous_schema_version <=> schema_version)" in sql
+
+
 def test_operator_column_register_matches_the_schema_in_both_directions():
     guide = OPERATOR_GUIDE.read_text(encoding="utf-8")
     column_register = guide.split("## Column register", 1)[1].split("## Published Spark SQL", 1)[0]
@@ -91,12 +101,16 @@ def test_operator_column_register_matches_the_schema_in_both_directions():
 
 
 def test_every_local_link_in_the_operator_guide_resolves():
-    guide = OPERATOR_GUIDE.read_text(encoding="utf-8")
-    targets = re.findall(r"\[[^]]+\]\(([^)]+)\)", guide)
-
-    assert targets
-    for target in targets:
-        path_text = target.split("#", 1)[0]
-        if not path_text or "://" in path_text:
-            continue
-        assert (OPERATOR_GUIDE.parent / path_text).resolve().exists(), target
+    guides = (
+        OPERATOR_GUIDE,
+        PROJECT_ROOT / "docs" / "openlineage.md",
+        PROJECT_ROOT / "docs" / "data-contracts.md",
+    )
+    for guide_path in guides:
+        targets = re.findall(r"\[[^]]+\]\(([^)]+)\)", guide_path.read_text(encoding="utf-8"))
+        assert targets, guide_path
+        for target in targets:
+            path_text = target.split("#", 1)[0]
+            if not path_text or "://" in path_text:
+                continue
+            assert (guide_path.parent / path_text).resolve().exists(), (guide_path, target)

@@ -17,12 +17,15 @@ from pathlib import Path
 import pytest
 
 import janus.models.source_config as source_config_module
+import janus.registry as registry_module
+from janus.models.data_contracts import SUPPORTED_CONTRACT_STATUSES
 
-POLICY_MODULE = "policy.py"
+POLICY_MODULE = "config/policy.py"
 
 FEDERATION_LEVEL_SCOPE = frozenset({"federal"})
+CONTRACT_STATUS_SCOPE = SUPPORTED_CONTRACT_STATUSES
 
-FEDERATION_LITERAL_EXEMPT_MODULES = frozenset({"constants.py"})
+FEDERATION_LITERAL_EXEMPT_MODULES = frozenset({"constants.py", "config/constants.py"})
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,22 @@ def _is_source_type_strategy_pairing(node: ast.Compare) -> bool:
     )
 
 
+def _is_contract_status_decision(node: ast.Compare) -> bool:
+    """(d) ``contract.status == "active"`` — contract lifecycle is phase policy."""
+    operands = [node.left, *node.comparators]
+    reads_status = any(
+        (tail := _operand_tail(operand)) is not None and tail.endswith("status")
+        for operand in operands
+    )
+    compares_status_literal = any(
+        isinstance(operand, ast.Constant)
+        and isinstance(operand.value, str)
+        and operand.value in CONTRACT_STATUS_SCOPE
+        for operand in operands
+    )
+    return reads_status and compares_status_literal
+
+
 def _docstring_constant_ids(tree: ast.Module) -> set[int]:
     """Docstrings describe a rule; they do not decide one. Excluded from the literal case."""
     holders = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
@@ -108,6 +127,12 @@ def phase_scope_decisions(tree: ast.Module, *, module: str) -> list[PhaseScopeFi
                         module, node.lineno, "strategy==source_type", ast.unparse(node)
                     )
                 )
+            if _is_contract_status_decision(node):
+                findings.append(
+                    PhaseScopeFinding(
+                        module, node.lineno, "contract_status", ast.unparse(node)
+                    )
+                )
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
@@ -126,15 +151,28 @@ def phase_scope_decisions(tree: ast.Module, *, module: str) -> list[PhaseScopeFi
 
 
 def _swept_modules() -> dict[str, ast.Module]:
-    """``source_config.py`` plus every module of ``janus.models.config``, parsed.
-
-    Package-scoped by construction: a module added by a later split joins the sweep
-    without anyone remembering to add it.
-    """
+    """Parse config, contract-model and registry packages into one guarded surface."""
     models_dir = Path(inspect.getfile(source_config_module)).parent
-    paths = [models_dir / "source_config.py", *sorted((models_dir / "config").glob("*.py"))]
+    registry_dir = Path(inspect.getfile(registry_module)).parent
+    paths = {
+        "source_config.py": models_dir / "source_config.py",
+        **{
+            f"config/{path.name}": path
+            for path in sorted((models_dir / "config").glob("*.py"))
+        },
+        **{
+            f"data_contracts/{path.name}": path
+            for path in sorted((models_dir / "data_contracts").glob("*.py"))
+        },
+        **{
+            f"registry/{path.name}": path
+            for path in sorted(registry_dir.glob("*.py"))
+        },
+    }
     return {
-        path.name: ast.parse(path.read_text(encoding="utf-8")) for path in paths if path.exists()
+        module: ast.parse(path.read_text(encoding="utf-8"))
+        for module, path in paths.items()
+        if path.exists()
     }
 
 
@@ -147,7 +185,14 @@ def test_the_sweep_actually_covers_the_config_package():
         f"the phase-policy sweep found {sorted(modules)} — it must always read "
         "source_config.py, which is where the phase-1 rules live today"
     )
-    known_builders = {"access.py", "request_inputs.py", "contracts.py", "constants.py"}
+    known_builders = {
+        "config/access.py",
+        "config/request_inputs.py",
+        "config/contracts.py",
+        "config/constants.py",
+        "data_contracts/model.py",
+        "registry/loader.py",
+    }
     assert known_builders <= set(modules), (
         f"the phase-policy sweep is missing modules it must cover: "
         f"{sorted(known_builders - set(modules))} (found {sorted(modules)})"
@@ -192,6 +237,13 @@ DELIBERATE_VIOLATIONS: dict[str, tuple[str, str]] = {
         "    if source_type and strategy and source_type != strategy:\n"
         "        issues.append(ValidationIssue('strategy', 'must match source_type'))\n",
     ),
+    "contract_status": (
+        "contract_status",
+        "def check(contract, issues):\n"
+        "    if contract.status == 'active':\n"
+        "        return True\n"
+        "    return False\n",
+    ),
 }
 
 
@@ -225,7 +277,10 @@ def test_phase_policy_detector_does_not_flag_clean_code(tmp_path: Path):
         "        return None\n"
         "    if strategy_variant == 'page_number_api':\n"
         "        return 1\n"
-        "    return 0\n",
+        "    return 0\n"
+        "def check(status: str):\n"
+        "    \"\"\"Contract status == 'active' is descriptive text.\"\"\"\n"
+        "    return status\n",
         encoding="utf-8",
     )
 
@@ -237,7 +292,7 @@ def test_phase_policy_detector_does_not_flag_clean_code(tmp_path: Path):
     )
 
     coercion_findings = phase_scope_decisions(
-        _swept_modules()["coercion.py"], module="coercion.py"
+        _swept_modules()["config/coercion.py"], module="coercion.py"
     )
     assert not coercion_findings, (
         "the detector flags models/config/coercion.py, which decides no phase scope: "
@@ -251,7 +306,7 @@ def test_the_constants_exemption_is_load_bearing_and_narrow():
     If ``constants.py`` stopped holding the federation-level set, this test would fail and
     the exemption would have to be deleted rather than left behind as dead licence.
     """
-    constants_tree = _swept_modules()["constants.py"]
+    constants_tree = _swept_modules()["config/constants.py"]
 
     exempted = phase_scope_decisions(constants_tree, module="constants.py")
     assert not exempted, f"constants.py is exempt yet still flagged: {list(map(str, exempted))}"

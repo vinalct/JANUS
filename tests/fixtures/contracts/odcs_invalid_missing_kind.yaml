@@ -1,0 +1,23 @@
+apiVersion: v3.2.0
+id: example.missing_kind
+name: Missing kind
+version: 1.0.0
+status: draft
+domain: example
+description:
+  purpose: Hostile fixture without the required ODCS kind key.
+team:
+  - username: janus-tests
+    role: owner
+schema:
+  - name: missing_kind
+    physicalType: table
+    properties:
+      - name: id
+        logicalType: string
+        physicalType: string
+customProperties:
+  - property: janus.compatibility
+    value: additive
+  - property: janus.enforcement
+    value: lenient

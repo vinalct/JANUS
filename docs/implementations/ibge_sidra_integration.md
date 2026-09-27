@@ -16,7 +16,7 @@ Both sources are modeled as:
 - `strategy: api`
 - `strategy_variant: date_window_api`
 - `source_hook: ibge.sidra_flat`
-- `schema.mode: infer`
+- `schema.contract` pointing to the reviewed IBGE table contract
 
 Both write to the standard JANUS zones:
 

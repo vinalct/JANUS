@@ -63,6 +63,14 @@ class SpyPolicy:
         self.calls.append("validate_public_access")
         self._inner.validate_public_access(public_access, issues)
 
+    def validate_schema_declaration(
+        self, *, enabled, contract_status, issues
+    ) -> None:
+        self.calls.append("validate_schema_declaration")
+        self._inner.validate_schema_declaration(
+            enabled=enabled, contract_status=contract_status, issues=issues
+        )
+
 
 def _source_mapping(**access_overrides: Any) -> dict[str, Any]:
     access: dict[str, Any] = {

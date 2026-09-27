@@ -30,6 +30,10 @@ OUTPUT_STATISTICS_FACET_SCHEMA_URL = (
     "https://openlineage.io/spec/facets/1-0-2/OutputStatisticsOutputDatasetFacet.json"
     "#/$defs/OutputStatisticsOutputDatasetFacet"
 )
+SCHEMA_DATASET_FACET_SCHEMA_URL = (
+    "https://openlineage.io/spec/facets/1-1-1/SchemaDatasetFacet.json"
+    "#/$defs/SchemaDatasetFacet"
+)
 SOURCE_CODE_LOCATION_JOB_FACET_SCHEMA_URL = (
     "https://openlineage.io/spec/facets/1-1-0/SourceCodeLocationJobFacet.json"
     "#/$defs/SourceCodeLocationJobFacet"

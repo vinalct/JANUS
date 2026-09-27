@@ -1,0 +1,88 @@
+{
+  "schema_path": "conf/schemas/transparencia/servidores_por_orgao_schema.json",
+  "schema_sha256": "8a5bdea7105b55da0027202f248b2ba63f5b2193f45dd4103c2e8d42c358a315",
+  "source_id": "transparencia__poder_executivo_federal__servidores_por_orgao__full_refresh",
+  "struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "qntPessoas",
+        "nullable": false,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "qntVinculos",
+        "nullable": false,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "skSituacao",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "descSituacao",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "skTipoVinculo",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "descTipoVinculo",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "skTipoServidor",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "descTipoServidor",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "licenca",
+        "nullable": true,
+        "type": "integer"
+      },
+      {
+        "metadata": {},
+        "name": "codOrgaoExercicioSiape",
+        "nullable": false,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "nomOrgaoExercicioSiape",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "codOrgaoSuperiorExercicioSiape",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "nomOrgaoSuperiorExercicioSiape",
+        "nullable": true,
+        "type": "string"
+      }
+    ],
+    "type": "struct"
+  }
+}

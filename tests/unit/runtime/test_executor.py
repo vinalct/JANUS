@@ -10,6 +10,7 @@ from typing import Any
 
 from janus.lineage import RunObserver
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext, WriteResult
+from janus.models.data_contracts import load_data_contract
 from janus.models.source_config import IcebergRowsRequestInputsConfig
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
@@ -376,7 +377,11 @@ def test_source_executor_passes_explicit_schema_for_headerless_csv_sources(tmp_p
         started_at=datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=ExecutionPlan.from_source_config(
+            source_config, run_context
+        ).with_data_contract(
+            load_data_contract(PROJECT_ROOT / source_config.schema.contract)
+        ),
         strategy=CnpjCsvStrategy(calls),
         hook=None,
     )

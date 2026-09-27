@@ -18,6 +18,7 @@ from janus.models.source_config import (
     _parse_request_input_entry,
 )
 from janus.registry import load_registry
+from tests.support.contracts import CONTRACT_SCHEMA_BLOCK, write_minimal_contract
 
 CONFIG_PATH = Path("conf/sources/example/upstream_declaration.yaml")
 
@@ -297,6 +298,7 @@ def _write_grouped_project(tmp_path: Path, documents: list[dict[str, Any]]) -> P
     (tmp_path / "conf" / "app.yaml").write_text(
         "registry:\n  sources_dir: conf/sources\n  file_pattern: '*.yaml'\n", encoding="utf-8"
     )
+    write_minimal_contract(tmp_path)
     (sources_dir / "grouped.yaml").write_text(
         yaml.safe_dump({"sources": documents}, sort_keys=False), encoding="utf-8"
     )
@@ -335,7 +337,7 @@ def _base_mapping(**overrides: Any) -> dict[str, Any]:
             "mode": "full_refresh",
             "retry": {"max_attempts": 3, "backoff_strategy": "fixed", "backoff_seconds": 1},
         },
-        "schema": {"mode": "infer"},
+        "schema": dict(CONTRACT_SCHEMA_BLOCK),
         "spark": {"input_format": "json", "write_mode": "append"},
         "outputs": {
             "raw": {"path": "data/raw/example/upstream_declaration", "format": "json"},

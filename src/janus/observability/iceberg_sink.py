@@ -6,10 +6,10 @@ import logging
 import math
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from janus.observability.records import RunRecord
 from janus.observability.runs_table import (
@@ -17,6 +17,7 @@ from janus.observability.runs_table import (
     RUNS_TABLE_PARTITION_SPEC,
     RUNS_TABLE_SCHEMA,
     IcebergType,
+    RunsTableColumn,
     RunsTableTarget,
     resolve_runs_table,
 )
@@ -31,6 +32,23 @@ DEFAULT_APPEND_TIMEOUT_SECONDS = 5.0
 _UNRESOLVED_TABLE_IDENTIFIER = DEFAULT_RUNS_TABLE_IDENTIFIER
 _PARTITION_FIELD_ID_START = 1000
 _LOG = logging.getLogger(__name__)
+
+
+SchemaFieldSignature = tuple[int, str, str, bool, int | None, bool | None]
+_SCHEMA_FIELD_WITHOUT_NESTED_IDS_LENGTH = 4
+_SCHEMA_FIELD_WITH_ELEMENT_ID_LENGTH = 5
+_SCHEMA_FIELD_SIGNATURE_LENGTH = 6
+SchemaFieldInput = (
+    tuple[int, str, str, bool] | tuple[int, str, str, bool, int | None] | SchemaFieldSignature
+)
+
+
+class IcebergAppendReason(StrEnum):
+    """Stable reasons reported by the runs-table sink."""
+
+    LIVE_SCHEMA_MISMATCH = "live_schema_does_not_match_declaration"
+    LIVE_SCHEMA_MISMATCH_AFTER_EVOLUTION = "live_schema_does_not_match_declaration_after_evolution"
+    SCHEMA_EVOLUTION_FAILED = "schema_evolution_failed"
 
 
 class IcebergAppendOutcome(StrEnum):
@@ -58,6 +76,13 @@ class IcebergAppendResult:
 
 class _WarningLogger(Protocol):
     def warning(self, event: str, **fields: Any) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AdditivePlan:
+    """Nullable declared columns that may be added to a live schema."""
+
+    columns: tuple[SchemaFieldSignature, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,22 +258,12 @@ def _append_unbounded(
             exception_type="TableBootstrapReturnedNoTable",
         )
 
-    try:
-        declared_schema = _declared_schema(dependencies)
-        live_schema = table.schema()
-        if live_schema != declared_schema:
-            return _skipped(
-                identifier,
-                reason="live_schema_does_not_match_declaration",
-                step="schema_validation",
-                exception_type="RunsTableSchemaMismatch",
-            )
-    except Exception as exc:
-        return _failed(
-            identifier,
-            step="schema_validation",
-            exception_type=type(exc).__name__,
-        )
+    live_schema, schema_result = _validate_or_evolve_schema(
+        catalog, table, identifier, dependencies
+    )
+    if schema_result is not None:
+        return schema_result
+    assert live_schema is not None
 
     try:
         arrow_table = dependencies.pyarrow.Table.from_pylist(
@@ -263,6 +278,74 @@ def _append_unbounded(
     except Exception as exc:
         return _failed(identifier, step="append", exception_type=type(exc).__name__)
     return IcebergAppendResult(IcebergAppendOutcome.EMITTED, identifier)
+
+
+def _validate_or_evolve_schema(
+    catalog: Any,
+    table: Any,
+    identifier: str,
+    dependencies: _EngineDependencies,
+) -> tuple[Any | None, IcebergAppendResult | None]:
+    try:
+        declared_schema = _declared_schema(dependencies)
+        live_schema = table.schema()
+        live_fields = _schema_field_signatures(live_schema)
+        declared_fields = _schema_field_signatures(declared_schema)
+        if live_fields == declared_fields:
+            return live_schema, None
+
+        plan = _plan_additive_evolution(live_fields, declared_fields)
+        if plan is None:
+            return None, _skipped(
+                identifier,
+                reason=IcebergAppendReason.LIVE_SCHEMA_MISMATCH.value,
+                step="schema_validation",
+                exception_type="RunsTableSchemaMismatch",
+            )
+        if not plan.columns:
+            return live_schema, None
+
+        declared_columns = {column.field_id: column for column in RUNS_TABLE_SCHEMA}
+        try:
+            with table.update_schema() as update:
+                for (
+                    field_id,
+                    name,
+                    _type_name,
+                    required,
+                    _element_id,
+                    _element_required,
+                ) in plan.columns:
+                    column = declared_columns[field_id]
+                    update.add_column(
+                        name,
+                        _iceberg_column_type(column, dependencies),
+                        required=required,
+                    )
+            table = catalog.load_table(identifier)
+            live_schema = table.schema()
+        except Exception as exc:
+            return None, _failed(
+                identifier,
+                step="schema_evolution",
+                exception_type=type(exc).__name__,
+                reason=IcebergAppendReason.SCHEMA_EVOLUTION_FAILED.value,
+            )
+
+        if _schema_field_signatures(live_schema) != declared_fields:
+            return None, _skipped(
+                identifier,
+                reason=IcebergAppendReason.LIVE_SCHEMA_MISMATCH_AFTER_EVOLUTION.value,
+                step="schema_validation",
+                exception_type="RunsTableSchemaMismatch",
+            )
+        return live_schema, None
+    except Exception as exc:
+        return None, _failed(
+            identifier,
+            step="schema_validation",
+            exception_type=type(exc).__name__,
+        )
 
 
 def _ensure_namespace(
@@ -289,7 +372,7 @@ def _ensure_table(
     dependencies: _EngineDependencies,
 ) -> tuple[Any | None, IcebergAppendResult | None]:
     try:
-        schema = _declared_schema(dependencies)
+        schema = _declared_schema(dependencies, _creation_columns())
         partition_spec = _declared_partition_spec(dependencies)
         table = catalog.create_table(
             target.identifier,
@@ -314,26 +397,113 @@ def _ensure_table(
     return table, None
 
 
-def _declared_schema(dependencies: _EngineDependencies) -> Any:
+def _creation_columns(
+    columns: Sequence[RunsTableColumn] = RUNS_TABLE_SCHEMA,
+) -> tuple[RunsTableColumn, ...]:
+    """The longest declared prefix a fresh ``create_table`` numbers exactly as declared."""
+    for size in range(len(columns), 0, -1):
+        prefix = tuple(columns[:size])
+        element_ids = [column.element_id for column in prefix if column.element_id is not None]
+        if all(column.field_id == index for index, column in enumerate(prefix, 1)) and (
+            element_ids == list(range(size + 1, size + 1 + len(element_ids)))
+        ):
+            return prefix
+    return tuple(columns)
+
+
+def _declared_schema(
+    dependencies: _EngineDependencies,
+    columns: Sequence[RunsTableColumn] = RUNS_TABLE_SCHEMA,
+) -> Any:
     fields = []
-    for column in RUNS_TABLE_SCHEMA:
-        if column.iceberg_type is IcebergType.STRING_LIST:
-            field_type = dependencies.list_type(
-                element_id=column.element_id,
-                element=dependencies.primitive_types[IcebergType.STRING](),
-                element_required=True,
-            )
-        else:
-            field_type = dependencies.primitive_types[column.iceberg_type]()
+    for column in columns:
         fields.append(
             dependencies.nested_field_type(
                 field_id=column.field_id,
                 name=column.name,
-                field_type=field_type,
+                field_type=_iceberg_column_type(column, dependencies),
                 required=column.required,
             )
         )
     return dependencies.schema_type(*fields)
+
+
+def _iceberg_column_type(column: RunsTableColumn, dependencies: _EngineDependencies) -> Any:
+    if column.iceberg_type is IcebergType.STRING_LIST:
+        return dependencies.list_type(
+            element_id=column.element_id,
+            element=dependencies.primitive_types[IcebergType.STRING](),
+            element_required=True,
+        )
+    return dependencies.primitive_types[column.iceberg_type]()
+
+
+def _schema_field_signatures(schema: Any) -> tuple[SchemaFieldSignature, ...]:
+    """Return the field identity needed to decide whether a change is additive."""
+    return tuple(
+        (
+            field.field_id,
+            field.name,
+            str(field.field_type),
+            field.required,
+            getattr(field.field_type, "element_id", None),
+            getattr(field.field_type, "element_required", None),
+        )
+        for field in schema.fields
+    )
+
+
+def _plan_additive_evolution(
+    live: Sequence[SchemaFieldInput],
+    declared: Sequence[SchemaFieldInput],
+) -> AdditivePlan | None:
+    """Plan only newer nullable IDs from 4/5/6-item host tuples; reject conflicts."""
+    live_fields = tuple(_normalize_schema_field(field) for field in live)
+    declared_fields = tuple(_normalize_schema_field(field) for field in declared)
+    live_by_id = {field[0]: field for field in live_fields}
+    declared_by_id = {field[0]: field for field in declared_fields}
+    live_by_name = {field[1]: field for field in live_fields}
+    declared_by_name = {field[1]: field for field in declared_fields}
+    if (
+        len(live_by_id) != len(live)
+        or len(declared_by_id) != len(declared)
+        or len(live_by_name) != len(live)
+        or len(declared_by_name) != len(declared)
+    ):
+        return None
+
+    for field in live_fields:
+        expected = declared_by_id.get(field[0])
+        same_name = declared_by_name.get(field[1])
+        if expected != field or same_name != field:
+            return None
+
+    missing = tuple(field for field in declared_fields if field[0] not in live_by_id)
+    highest_live_id = max(
+        (max(field[0], field[4] or 0) for field in live_fields),
+        default=0,
+    )
+    if any(field[3] or field[0] <= highest_live_id for field in missing):
+        return None
+    return AdditivePlan(columns=missing)
+
+
+def _normalize_schema_field(field: SchemaFieldInput) -> SchemaFieldSignature:
+    values = cast(tuple[Any, ...], field)
+    if len(values) not in {
+        _SCHEMA_FIELD_WITHOUT_NESTED_IDS_LENGTH,
+        _SCHEMA_FIELD_WITH_ELEMENT_ID_LENGTH,
+        _SCHEMA_FIELD_SIGNATURE_LENGTH,
+    }:
+        raise ValueError("schema field signatures must contain four, five, or six items")
+    return (
+        values[0],
+        values[1],
+        values[2],
+        values[3],
+        values[4] if len(values) > _SCHEMA_FIELD_WITHOUT_NESTED_IDS_LENGTH else None,
+        values[5] if len(values) > _SCHEMA_FIELD_WITH_ELEMENT_ID_LENGTH else None,
+    )
 
 
 def _declared_partition_spec(dependencies: _EngineDependencies) -> Any:
@@ -395,11 +565,17 @@ def _timed_out(identifier: str) -> IcebergAppendResult:
     return _failed(identifier, step="budget", exception_type="AppendTimeoutError")
 
 
-def _failed(identifier: str, *, step: str, exception_type: str) -> IcebergAppendResult:
+def _failed(
+    identifier: str,
+    *,
+    step: str,
+    exception_type: str,
+    reason: str | None = None,
+) -> IcebergAppendResult:
     return IcebergAppendResult(
         IcebergAppendOutcome.FAILED,
         identifier,
-        reason=f"{step}_failed",
+        reason=reason or f"{step}_failed",
         step=step,
         exception_type=exception_type,
     )

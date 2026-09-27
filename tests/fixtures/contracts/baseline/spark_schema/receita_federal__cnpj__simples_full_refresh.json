@@ -1,0 +1,52 @@
+{
+  "schema_path": "conf/schemas/receita_federal/cnpj/simples_schema.json",
+  "schema_sha256": "5520f89457d56eac993dd5bf9a1d38b2270dcf41f8f8df2bbaca6be6dc551f3e",
+  "source_id": "receita_federal__cnpj__simples_full_refresh",
+  "struct_type": {
+    "fields": [
+      {
+        "metadata": {},
+        "name": "cnpj_basico",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "opcao_simples",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "data_opcao_simples",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "data_exclusao_simples",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "opcao_mei",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "data_opcao_mei",
+        "nullable": true,
+        "type": "string"
+      },
+      {
+        "metadata": {},
+        "name": "data_exclusao_mei",
+        "nullable": true,
+        "type": "string"
+      }
+    ],
+    "type": "struct"
+  }
+}

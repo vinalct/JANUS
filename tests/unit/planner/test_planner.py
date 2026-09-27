@@ -19,6 +19,7 @@ from janus.planner import (
     StrategyResolutionError,
 )
 from janus.strategies.base import BaseStrategy, SourceHook
+from tests.support.contracts import write_minimal_contract
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -818,6 +819,7 @@ def _create_project(
         encoding="utf-8",
     )
     (sources_dir / "source.yaml").write_text(source_yaml.lstrip(), encoding="utf-8")
+    write_minimal_contract(tmp_path)
 
     if include_environment:
         environments_dir = conf_dir / "environments"
@@ -890,7 +892,7 @@ extraction:
     backoff_seconds: 1
 
 schema:
-  mode: infer
+  contract: conf/contracts/test/minimal_contract.yaml
 
 spark:
   input_format: json

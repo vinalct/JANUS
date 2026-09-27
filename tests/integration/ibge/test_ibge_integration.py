@@ -19,6 +19,7 @@ from janus.hooks.ibge import (
 )
 from janus.lineage import RunObserver
 from janus.models import RunContext, SourceConfig
+from janus.models.data_contracts import spark_struct_json
 from janus.normalizers import BaseNormalizer
 from janus.planner import Planner, PlanningRequest
 from janus.quality import QualityGate
@@ -82,7 +83,7 @@ def test_ibge_hook_catalog_registers_generic_and_legacy_sidra_ids():
     assert LEGACY_HOOK_IDS[0] in bindings
 
 
-def test_ibge_pib_source_contract_uses_generic_sidra_hook_without_explicit_schema():
+def test_ibge_pib_source_contract_uses_generic_sidra_hook_with_active_contract():
     source_config = load_registry(PROJECT_ROOT).get_source(PIB_SOURCE_ID, include_disabled=True)
 
     _assert_generic_sidra_source_contract(
@@ -103,7 +104,7 @@ def test_ibge_pib_source_contract_uses_generic_sidra_hook_without_explicit_schem
     assert planned_run.pre_run_metadata_as_dict()["hook_id"] == HOOK_ID
 
 
-def test_ibge_agro_source_contract_uses_generic_sidra_hook_with_more_dimensions():
+def test_ibge_agro_source_contract_uses_generic_sidra_hook_with_active_contract():
     source_config = load_registry(PROJECT_ROOT).get_source(AGRO_SOURCE_ID, include_disabled=True)
 
     _assert_generic_sidra_source_contract(
@@ -431,8 +432,34 @@ def _assert_generic_sidra_source_contract(
     assert source_config.extraction.mode == "incremental"
     assert source_config.extraction.checkpoint_field == "sidra_period_code"
     assert source_config.extraction.checkpoint_strategy == "max_value"
-    assert source_config.schema.mode == "infer"
+    table_name = expected_bronze_path.rsplit("/", 1)[-1]
+    expected_contract_path = f"conf/contracts/estatisticas/{table_name}.yaml"
+    assert source_config.schema.mode == "contract"
+    assert source_config.schema.contract == expected_contract_path
     assert source_config.schema.path is None
+
+    planned_run = _planned_run_for(expected_source_id)
+    contract = planned_run.plan.data_contract
+    assert contract is not None
+    assert contract.id == f"estatisticas.{table_name}"
+    assert contract.schema.name == bronze_table_identifier(
+        expected_bronze_path,
+        fallback_name=expected_source_id,
+    ).rsplit(".", 1)[-1]
+    assert contract.status == "active"
+    inferred_golden = json.loads(
+        (
+            PROJECT_ROOT
+            / "tests"
+            / "fixtures"
+            / "contracts"
+            / "baseline"
+            / "bronze"
+            / f"{expected_source_id}.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert spark_struct_json(contract.schema.properties) == inferred_golden["inferred_struct_type"]
+
     assert source_config.spark.input_format == "jsonl"
     assert source_config.spark.write_mode == "append"
     assert source_config.outputs.bronze.path == expected_bronze_path
@@ -648,9 +675,7 @@ def _expected_agro_normalized_record() -> dict:
 
 
 def _cloned_source_config(tmp_path: Path, source_id: str, config_file_name: str) -> SourceConfig:
-    source_config = load_registry(PROJECT_ROOT).get_source(source_id, include_disabled=True)
     config_path = PROJECT_ROOT / "conf" / "sources" / config_file_name
-
     copied_config_path = tmp_path / "conf" / "sources" / config_file_name
     copied_config_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -661,15 +686,25 @@ def _cloned_source_config(tmp_path: Path, source_id: str, config_file_name: str)
             for entry in config_payload["sources"]
             if entry.get("source_id") == source_id
         )
+    # These direct strategy tests retain coverage for the deprecated inference declaration.
+    config_payload["schema"] = {"mode": "infer"}
     copied_config_path.write_text(
         yaml.safe_dump(config_payload, sort_keys=False),
         encoding="utf-8",
     )
+    (tmp_path / "conf" / "app.yaml").write_text(
+        "registry:\n  sources_dir: conf/sources\n",
+        encoding="utf-8",
+    )
+
+    with pytest.warns(DeprecationWarning, match="schema.contract") as warnings:
+        source_config = load_registry(tmp_path).get_source(source_id, include_disabled=True)
+    assert len(warnings) == 1
+    assert source_config.schema.mode == "infer"
+    assert source_config.deprecations[0].path == "schema"
 
     return replace(
         source_config,
-        config_path=copied_config_path,
-        schema=replace(source_config.schema, mode="infer", path=None),
         extraction=replace(source_config.extraction, checkpoint_field="sidra_period_code"),
         quality=replace(
             source_config.quality,

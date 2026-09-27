@@ -24,6 +24,7 @@ from janus.lineage.store import (
     RunObserver,
 )
 from janus.models import ExecutionPlan
+from janus.models.data_contracts import DataContract
 from janus.observability.iceberg_sink import (
     IcebergAppendOutcome,
     IcebergAppendResult,
@@ -151,7 +152,7 @@ class GuardedRunEventEmitter:
             table_identifier,
             started_at,
             lambda results: self._run_started_worker(
-                results, persisted, started_at, table_identifier
+                results, persisted, plan.data_contract, started_at, table_identifier
             ),
         )
         completed = replace(result, duration_seconds=_elapsed(started_at))
@@ -159,14 +160,17 @@ class GuardedRunEventEmitter:
         _report_lifecycle(self.logger, completed, run_id=plan.run_context.run_id)
 
     def emit_succeeded(self, plan: ExecutionPlan, persisted: PersistedArtifacts) -> None:
-        del plan
-        self._emit_terminal("succeeded", persisted)
+        self._emit_terminal("succeeded", persisted, plan.data_contract)
 
     def emit_failed(self, plan: ExecutionPlan, persisted: PersistedArtifacts) -> None:
-        del plan
-        self._emit_terminal("failed", persisted)
+        self._emit_terminal("failed", persisted, plan.data_contract)
 
-    def _emit_terminal(self, lifecycle: str, persisted: PersistedArtifacts) -> None:
+    def _emit_terminal(
+        self,
+        lifecycle: str,
+        persisted: PersistedArtifacts,
+        data_contract: DataContract | None,
+    ) -> None:
         started_at = time.monotonic()
         table_identifier = _safe_table_identifier(self.config)
         result = self._bounded(
@@ -174,7 +178,7 @@ class GuardedRunEventEmitter:
             table_identifier,
             started_at,
             lambda results: self._run_terminal_worker(
-                results, lifecycle, persisted, started_at, table_identifier
+                results, lifecycle, persisted, data_contract, started_at, table_identifier
             ),
         )
         self._finish(result, started_at)
@@ -244,10 +248,13 @@ class GuardedRunEventEmitter:
         self,
         results: list[RunEmissionResult],
         persisted: PersistedArtifacts,
+        data_contract: DataContract | None,
         started_at: float,
         table_identifier: str,
     ) -> None:
-        openlineage = self._emit_openlineage(persisted.run_metadata, started_at)
+        openlineage = self._emit_openlineage(
+            persisted.run_metadata, started_at, data_contract=data_contract
+        )
         results.append(
             RunEmissionResult(
                 lifecycle="started",
@@ -265,6 +272,7 @@ class GuardedRunEventEmitter:
         results: list[RunEmissionResult],
         lifecycle: str,
         persisted: PersistedArtifacts,
+        data_contract: DataContract | None,
         started_at: float,
         table_identifier: str,
     ) -> None:
@@ -287,6 +295,7 @@ class GuardedRunEventEmitter:
             started_at,
             lineage_record=persisted.lineage_record,
             run_record=record,
+            data_contract=data_contract,
         )
 
         remaining = self.timeout_seconds - (time.monotonic() - started_at)
@@ -329,6 +338,7 @@ class GuardedRunEventEmitter:
         *,
         lineage_record: LineageRecord | None = None,
         run_record: RunRecord | None = None,
+        data_contract: DataContract | None = None,
     ) -> OpenLineageEmissionResult:
         """Deliver one event with what is left of the budget; a defective sink is data too."""
         remaining = self.timeout_seconds - (time.monotonic() - started_at)
@@ -343,6 +353,7 @@ class GuardedRunEventEmitter:
                 run_metadata,
                 lineage_record=lineage_record,
                 run_record=run_record,
+                data_contract=data_contract,
                 budget_seconds=remaining,
                 logger=self.logger,
             )

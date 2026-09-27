@@ -9,12 +9,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 from janus.models import ExecutionPlan, RunContext, SourceConfig, WriteResult
+from janus.models.data_contracts import DataContract, contract_from_legacy_schema_file
 from janus.normalizers import BaseNormalizer
 from janus.quality import (
     QualityGate,
     QualityValidationError,
     ValidationReportStore,
-    load_expected_fields_from_schema_path,
+    resolve_schema_expectation,
     validate_bronze_key_uniqueness,
 )
 from janus.registry import load_registry
@@ -52,6 +53,7 @@ def test_quality_gate_persists_successful_validation_report(spark: SparkSession,
         run_id="run-quality-001",
         started_at=datetime(2026, 4, 9, 13, 0, tzinfo=UTC),
         source_config=_source_config_with_schema_path(schema_path, tmp_path),
+        data_contract=_legacy_contract(schema_path, tmp_path),
     )
     dataframe = BaseNormalizer().normalize(
         spark.createDataFrame(
@@ -221,7 +223,8 @@ def test_quality_gate_uses_configured_bronze_iceberg_namespace_and_table(tmp_pat
     assert report.is_successful is True
 
 
-def test_schema_field_loader_supports_spark_style_schema_json(tmp_path):
+def test_a_spark_style_schema_file_still_names_the_expected_columns(tmp_path):
+    """The names the gate compares against now come from the converted contract."""
     schema_path = tmp_path / "schema.json"
     schema_path.write_text(
         json.dumps(
@@ -236,7 +239,46 @@ def test_schema_field_loader_supports_spark_style_schema_json(tmp_path):
         encoding="utf-8",
     )
 
-    assert load_expected_fields_from_schema_path(schema_path) == ("id", "updated_at")
+    contract = _legacy_contract(schema_path, tmp_path)
+
+    assert contract.column_names == ("id", "updated_at")
+
+
+def test_the_schema_expectation_is_the_contract_the_plan_carries(tmp_path):
+    """Its source stays the declared file, so the persisted report reads as it always did."""
+    schema_path = tmp_path / "contracts" / "source_schema.json"
+    schema_path.parent.mkdir(parents=True)
+    schema_path.write_text(
+        json.dumps({"fields": [{"name": "id"}, {"name": "updated_at"}]}),
+        encoding="utf-8",
+    )
+    contract = _legacy_contract(schema_path, tmp_path)
+    plan = _build_plan(
+        tmp_path,
+        run_id="run-quality-expectation-001",
+        started_at=datetime(2026, 4, 9, 13, 5, tzinfo=UTC),
+        source_config=_source_config_with_schema_path(schema_path, tmp_path),
+        data_contract=contract,
+    )
+
+    expectation = resolve_schema_expectation(plan)
+
+    assert expectation.fields == ("id", "updated_at")
+    assert expectation.source == str(schema_path)
+    assert expectation.error is None
+
+
+def test_a_plan_without_a_contract_expects_nothing(tmp_path):
+    plan = _build_plan(
+        tmp_path,
+        run_id="run-quality-expectation-002",
+        started_at=datetime(2026, 4, 9, 13, 10, tzinfo=UTC),
+    )
+
+    expectation = resolve_schema_expectation(plan)
+
+    assert expectation.fields == ()
+    assert expectation.source is None
 
 
 def test_bronze_key_uniqueness_skips_without_unique_fields(tmp_path):
@@ -308,12 +350,24 @@ def _source_config_with_schema_path(schema_path: Path, project_root: Path) -> So
     )
 
 
+def _legacy_contract(schema_path: Path, project_root: Path) -> DataContract:
+    """What the registry snapshot builds for an entry that still declares a legacy file."""
+    return contract_from_legacy_schema_file(
+        schema_path,
+        source_id="federal_open_data_example",
+        bronze_table="bronze.federal_open_data_example",
+        domain="example",
+        project_root=project_root,
+    )
+
+
 def _build_plan(
     tmp_path: Path,
     *,
     run_id: str,
     started_at: datetime,
     source_config: SourceConfig | None = None,
+    data_contract: DataContract | None = None,
 ) -> ExecutionPlan:
     run_context = RunContext.create(
         run_id=run_id,
@@ -321,7 +375,11 @@ def _build_plan(
         project_root=tmp_path,
         started_at=started_at,
     )
-    return ExecutionPlan.from_source_config(source_config or _base_source_config(), run_context)
+    return ExecutionPlan.from_source_config(
+        source_config or _base_source_config(),
+        run_context,
+        data_contract=data_contract,
+    )
 
 
 def _bronze_write_result(

@@ -38,7 +38,7 @@ extraction:
     backoff_seconds: 1
 
 schema:
-  mode: infer
+  contract: conf/contracts/test/catalog_commits_round_trip.yaml
 
 spark:
   input_format: json

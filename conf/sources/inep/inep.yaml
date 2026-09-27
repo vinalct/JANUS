@@ -42,9 +42,7 @@ extraction:
     backoff_seconds: 5
 
 schema:
-  mode: explicit
-  path: conf/schemas/inep/censo_escolar_microdados_schema.json
-
+  contract: conf/contracts/educacao/censo_escolar_microdados.yaml
 spark:
   input_format: csv
   write_mode: overwrite

@@ -11,6 +11,7 @@ import pytest
 
 import janus.scripts.checksums as checksums
 from janus.models import ExecutionPlan, RunContext, WriteResult
+from janus.models.data_contracts import load_data_contract
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
 from janus.registry import load_registry
@@ -772,7 +773,11 @@ def test_raw_to_bronze_loader_rehydrates_file_archive_members_from_raw_downloads
         started_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=ExecutionPlan.from_source_config(
+            source_config, run_context
+        ).with_data_contract(
+            load_data_contract(PROJECT_ROOT / source_config.schema.contract)
+        ),
         strategy=FileStrategy(),
         hook=None,
     )

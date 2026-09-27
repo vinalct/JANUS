@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -7,9 +8,17 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Self
 
-from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, WriteResult
+from janus.models import (
+    ExecutionPlan,
+    ExtractedArtifact,
+    ExtractionResult,
+    WriteResult,
+)
+from janus.models import compute_schema_version as _compute_schema_version
 
 SUPPORTED_RUN_STATUSES = frozenset({"failed", "running", "succeeded"})
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_SEMVER_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +155,9 @@ class RunMetadata:
     run_attributes: tuple[tuple[str, str], ...] = ()
     plan_notes: tuple[str, ...] = ()
     metadata: tuple[tuple[str, str], ...] = ()
+    schema_version: str | None = None
+    contract_id: str | None = None
+    contract_version: str | None = None
 
     def __post_init__(self) -> None:
         if self.status not in SUPPORTED_RUN_STATUSES:
@@ -172,6 +184,9 @@ class RunMetadata:
             raise ValueError("checkpoint_strategy must not be empty")
         if not self.source_config_path.strip():
             raise ValueError("source_config_path must not be empty")
+        _validate_contract_identity(
+            self.schema_version, self.contract_id, self.contract_version
+        )
 
     @classmethod
     def started(
@@ -197,6 +212,7 @@ class RunMetadata:
             run_attributes=plan.run_context.attributes,
             plan_notes=plan.notes,
             metadata=_freeze_string_mapping(metadata),
+            **_contract_identity(plan),
         )
 
     @classmethod
@@ -235,6 +251,7 @@ class RunMetadata:
             run_attributes=plan.run_context.attributes,
             plan_notes=plan.notes,
             metadata=_freeze_string_mapping(metadata),
+            **_contract_identity(plan),
         )
 
     @classmethod
@@ -285,6 +302,7 @@ class RunMetadata:
             run_attributes=plan.run_context.attributes,
             plan_notes=plan.notes,
             metadata=_freeze_string_mapping(metadata),
+            **_contract_identity(plan),
         )
 
     def metadata_as_dict(self) -> dict[str, str]:
@@ -328,6 +346,7 @@ class RunMetadata:
             payload["failure_reason"] = self.failure_reason
         if self.error_type is not None:
             payload["error_type"] = self.error_type
+        _append_contract_identity(payload, self)
         return payload
 
 
@@ -360,6 +379,9 @@ class LineageRecord:
     plan_notes: tuple[str, ...] = ()
     extraction_metadata: tuple[tuple[str, str], ...] = ()
     metadata: tuple[tuple[str, str], ...] = ()
+    schema_version: str | None = None
+    contract_id: str | None = None
+    contract_version: str | None = None
 
     def __post_init__(self) -> None:
         if self.status not in SUPPORTED_RUN_STATUSES:
@@ -386,6 +408,9 @@ class LineageRecord:
             raise ValueError("source_config_path must not be empty")
         if not self.config_version.strip():
             raise ValueError("config_version must not be empty")
+        _validate_contract_identity(
+            self.schema_version, self.contract_id, self.contract_version
+        )
 
     @classmethod
     def from_runtime(
@@ -441,6 +466,7 @@ class LineageRecord:
                 extraction_result.metadata if extraction_result is not None else ()
             ),
             metadata=_freeze_string_mapping(metadata),
+            **_contract_identity(plan),
         )
 
     def extraction_metadata_as_dict(self) -> dict[str, str]:
@@ -488,6 +514,7 @@ class LineageRecord:
             payload["failure_reason"] = self.failure_reason
         if self.error_type is not None:
             payload["error_type"] = self.error_type
+        _append_contract_identity(payload, self)
         return payload
 
 
@@ -510,6 +537,41 @@ def configured_outputs_from_plan(plan: ExecutionPlan) -> tuple[ConfiguredOutput,
 def compute_config_version(config_path: Path) -> str:
     """Hash the checked-in source config so lineage can pin one exact config version."""
     return sha256(config_path.read_bytes()).hexdigest()
+
+
+def compute_schema_version(contract_path: Path) -> str:
+    """Compute a contract digest for callers; runtime records use the plan's loaded value."""
+    return _compute_schema_version(contract_path)
+
+
+def _contract_identity(plan: ExecutionPlan) -> dict[str, Any]:
+    """Project identity from the contract already loaded into this plan."""
+    contract = plan.data_contract
+    if contract is None:
+        return {}
+    return {
+        "schema_version": contract.schema_version,
+        "contract_id": contract.id,
+        "contract_version": None if contract.id.startswith("legacy:") else contract.version,
+    }
+
+
+def _append_contract_identity(payload: dict[str, Any], record: Any) -> None:
+    """Append identity keys only when present, preserving legacy JSON shapes."""
+    for name in ("schema_version", "contract_id", "contract_version"):
+        if (value := getattr(record, name)) is not None:
+            payload[name] = value
+
+
+def _validate_contract_identity(
+    schema_version: str | None, contract_id: str | None, contract_version: str | None
+) -> None:
+    if schema_version is not None and _SHA256_PATTERN.fullmatch(schema_version) is None:
+        raise ValueError("schema_version must be 64 lowercase hexadecimal characters")
+    if contract_id is not None and not contract_id.strip():
+        raise ValueError("contract_id must not be empty")
+    if contract_version is not None and _SEMVER_PATTERN.fullmatch(contract_version) is None:
+        raise ValueError("contract_version must be MAJOR.MINOR.PATCH using digits only")
 
 
 def _duration_seconds(started_at: datetime, ended_at: datetime) -> float:

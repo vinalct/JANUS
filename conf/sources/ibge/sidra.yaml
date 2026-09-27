@@ -46,7 +46,7 @@ sources:
       backoff_strategy: exponential
       backoff_seconds: 2
   schema:
-    mode: infer
+    contract: conf/contracts/estatisticas/pib_brasil.yaml
   spark:
     input_format: jsonl
     # append resolves to merge_on_keys under: bronze now accumulates windows
@@ -126,7 +126,7 @@ sources:
       backoff_strategy: exponential
       backoff_seconds: 2
   schema:
-    mode: infer
+    contract: conf/contracts/estatisticas/agro_abacaxi_pronaf.yaml
   spark:
     input_format: jsonl
     write_mode: append

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ from janus.utils.environment import (
     prepare_runtime,
 )
 from janus.utils.storage import StorageLayout
+from tests.support.contracts import with_registry_contract
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 IVY_JARS_DIR = PROJECT_ROOT / "data" / "metadata" / "ivy" / "jars"
@@ -185,6 +187,9 @@ def catalogs(tmp_path_factory):
         patch.undo()
         pytest.skip("SQLite JDBC driver jar is not available in the local Ivy cache")
 
+    patch.setenv("TZ", "UTC")
+    time.tzset()
+
     resolved_paths = prepare_runtime(config, project_root)
     options = dict(build_spark_options(config, resolved_paths))
     options.pop("spark.jars.packages", None)
@@ -211,6 +216,7 @@ def catalogs(tmp_path_factory):
     finally:
         session.stop()
         patch.undo()
+        time.tzset()
 
 
 @pytest.fixture(scope="module")
@@ -455,7 +461,7 @@ def materialize_into(
         clock=lambda: 0.0,
     )
 
-    plan = strategy.plan(source_config, run_context)
+    plan = with_registry_contract(strategy.plan(source_config, run_context))
     executed = SourceExecutor().execute(
         PlannedRun(plan=plan, strategy=strategy),
         SparkSessionProvider.wrapping(session),
@@ -515,12 +521,12 @@ def cloned_api_source_config(project_root: Path) -> SourceConfig:
 
     source_config = load_registry(PROJECT_ROOT).get_source(API_SOURCE_ID, include_disabled=True)
     config_path = PROJECT_ROOT / source_config.config_path.relative_to(PROJECT_ROOT)
-    schema_path = PROJECT_ROOT / source_config.schema.path
+    contract_path = PROJECT_ROOT / source_config.schema.contract
 
     copied_config_path = project_root / source_config.config_path.relative_to(PROJECT_ROOT)
-    copied_schema_path = project_root / source_config.schema.path
+    copied_contract_path = project_root / source_config.schema.contract
     copied_config_path.parent.mkdir(parents=True, exist_ok=True)
-    copied_schema_path.parent.mkdir(parents=True, exist_ok=True)
+    copied_contract_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if "sources" in payload:
@@ -534,7 +540,7 @@ def cloned_api_source_config(project_root: Path) -> SourceConfig:
         payload["access"]["pagination"]["page_size"] = PAGE_SIZE
 
     copied_config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    copied_schema_path.write_text(schema_path.read_text(encoding="utf-8"), encoding="utf-8")
+    copied_contract_path.write_bytes(contract_path.read_bytes())
 
     return replace(
         source_config,
