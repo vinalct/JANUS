@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<!--
+  Hostile listing fixture.
+
+  The page pretends to be a directory listing for a source whose access.url is
+      https://example.gov.br/dados/
+  so the origin every verdict below is measured against is (https, example.gov.br, 443).
+
+  Each anchor carries the verdict the *default* policy (same origin, http(s) only) must
+  reach, and the reason. `urljoin` is applied before the verdict, exactly as
+  `_extract_anchor_hrefs` applies it today, so the "after urljoin" column is what the
+  policy actually sees.
+
+  Audit proof 3 is the reason this file exists: today every one of these becomes a
+  DiscoveredFile, is fetched through the shared transport with the source's auth
+  injected, and is persisted when the extension matches access.format.
+-->
+<html lang="pt-br">
+  <head><title>Dados abertos — listagem</title></head>
+  <body>
+    <h1>Arquivos</h1>
+    <ul>
+      <!-- keep | same origin, relative
+           -> https://example.gov.br/dados/dados_2024.csv -->
+      <li><a href="dados_2024.csv">dados_2024.csv</a></li>
+
+      <!-- keep | same origin, absolute
+           -> https://example.gov.br/dados/dados_2023.csv -->
+      <li><a href="https://example.gov.br/dados/dados_2023.csv">dados_2023.csv</a></li>
+
+      <!-- keep | host compares case-insensitively; urljoin keeps the literal case
+           -> https://EXAMPLE.GOV.BR/dados/upper.csv -->
+      <li><a href="HTTPS://EXAMPLE.GOV.BR/dados/upper.csv">upper.csv</a></li>
+
+      <!-- drop: host | scheme differs, so the origin differs (http:80 vs https:443)
+           -> http://example.gov.br/dados/plain.csv -->
+      <li><a href="http://example.gov.br/dados/plain.csv">plain.csv</a></li>
+
+      <!-- drop: host | port differs
+           -> https://example.gov.br:8443/dados/port.csv -->
+      <li><a href="https://example.gov.br:8443/dados/port.csv">port.csv</a></li>
+
+      <!-- drop: host | different host; admitted only when allowed_hosts names it
+           -> https://cdn.example.gov.br/dados/cdn.csv -->
+      <li><a href="https://cdn.example.gov.br/dados/cdn.csv">cdn.csv</a></li>
+
+      <!-- drop: host | protocol-relative href inherits the origin scheme, not its host
+           -> https://evil.example/dados/proto_relative.csv -->
+      <li><a href="//evil.example/dados/proto_relative.csv">proto_relative.csv</a></li>
+
+      <!-- drop: host | the userinfo trick: the host is evil.example, not example.gov.br
+           -> https://example.gov.br@evil.example/dados/userinfo.csv -->
+      <li><a href="https://example.gov.br@evil.example/dados/userinfo.csv">userinfo.csv</a></li>
+
+      <!-- drop: host | cloud instance metadata endpoint
+           -> http://169.254.169.254/latest/meta-data/ -->
+      <li><a href="http://169.254.169.254/latest/meta-data/">meta-data</a></li>
+
+      <!-- drop: host | a service name that only resolves inside the compose network
+           -> http://minio:9000/janus-bronze/warehouse/x.csv -->
+      <li><a href="http://minio:9000/janus-bronze/warehouse/x.csv">x.csv</a></li>
+
+      <!-- drop: scheme | local file read; urljoin preserves a foreign scheme
+           -> file:///etc/passwd -->
+      <li><a href="file:///etc/passwd">passwd</a></li>
+
+      <!-- drop: scheme | inline payload
+           -> data:text/csv;base64,YSxiCg== -->
+      <li><a href="data:text/csv;base64,YSxiCg==">inline.csv</a></li>
+
+      <!-- drop: scheme | ftp is neither http nor https
+           -> ftp://example.gov.br/dados/x.csv -->
+      <li><a href="ftp://example.gov.br/dados/x.csv">ftp x.csv</a></li>
+
+      <!-- drop (already today) | the three prefixes the pre-existing filter removes -->
+      <li><a href="javascript:void(0)">javascript</a></li>
+      <li><a href="mailto:x@y">mailto</a></li>
+      <li><a href="#top">top</a></li>
+
+      <!-- keep | same origin; the *log line* and every rendered URL must show
+           token=***REDACTED***
+           -> https://example.gov.br/dados/secret.csv?token=abc -->
+      <li><a href="https://example.gov.br/dados/secret.csv?token=abc">secret.csv</a></li>
+    </ul>
+  </body>
+</html>

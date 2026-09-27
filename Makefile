@@ -41,6 +41,19 @@ FAST_OBSERVABILITY_CLASSES := \
 	tests.unit.observability.test_pyiceberg_append_sink \
 	tests.unit.observability.test_run_record_projection \
 	tests.unit.observability.test_runs_table_contract
+GUARDRAIL_CLASSES := \
+	tests.unit.strategies.http.test_transport_boundary \
+	tests.unit.strategies.http.test_no_second_opener \
+	tests.unit.strategies.http.test_secret_scrubber \
+	tests.unit.strategies.files.test_hostile_listing \
+	tests.unit.strategies.files.test_payload_and_archive_limits \
+	tests.unit.writers.test_write_stream \
+	tests.unit.utils.test_redaction_gaps \
+	tests.unit.utils.test_runtime_fallback \
+	tests.unit.checkpoints.test_progress_prefix_containment \
+	tests.unit.models.test_access_limits_and_allowed_hosts \
+	tests.unit.toolchain.test_container_hardening \
+	tests.unit.toolchain.test_ci_supply_chain
 SPARK_ORCHESTRATION_CLASS := tests.integration.orchestration.test_dependency_execution
 QUERYABLE_CLASS := tests.integration.catalog_commits.test_queryable_observability
 RUNS_SINK_CLASS := tests.integration.catalog_commits.test_runs_table_append_sink
@@ -83,7 +96,7 @@ define RUN_COMPOSE
 	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-adapter ci run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
+.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-adapter ci run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
 
 seed-ivy:
 	@mkdir -p "$(IVY_JAR_DEST_DIR)" "$(ICEBERG_CATALOG_DIR)"; \
@@ -102,14 +115,21 @@ check-compose:
 	printf 'Using %s\n' "$$compose_cmd"; \
 	case "$$compose_cmd" in podman* ) printf 'Using Podman keep-id user namespace for writable bind mounts\n' ;; esac
 
-bootstrap: check-compose
+# Warn when the local secrets file is readable by group/other. A warning, not an error:
+# the file is optional and CI has none.
+check-env:
+	@if [ -f .env ] && [ -n "$$(find .env -maxdepth 0 -perm /077 2>/dev/null)" ]; then \
+		echo "warning: .env is readable by group/other — run: chmod 600 .env" >&2; \
+	fi
+
+bootstrap: check-compose check-env
 	$(call RUN_COMPOSE,build $(SERVICE))
 
 # Explicit fresh restart — stops and recreates the container.
-up: check-compose seed-ivy
+up: check-compose check-env seed-ivy
 	$(call RUN_COMPOSE,up -d --force-recreate $(SERVICE))
 
-ensure-up: check-compose seed-ivy
+ensure-up: check-compose check-env seed-ivy
 	$(call RUN_COMPOSE,up -d $(SERVICE))
 
 down: check-compose
@@ -189,6 +209,10 @@ test-fast:
 	@mkdir -p "$(dir $(FAST_TEST_REPORT))"
 	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --junitxml="$(FAST_TEST_REPORT)"
 	@for class_name in $(FAST_OBSERVABILITY_CLASSES); do \
+		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
+			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
+	done
+	@for class_name in $(GUARDRAIL_CLASSES); do \
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done

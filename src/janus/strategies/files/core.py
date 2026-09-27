@@ -36,6 +36,7 @@ from janus.strategies.common import _default_storage_layout
 from janus.strategies.files.formats import SUPPORTED_FILE_INPUT_FORMATS
 from janus.strategies.http import (
     ApiResponse,
+    ApiStreamedResponse,
     ApiTransport,
     HttpStrategyError,
     UrllibApiTransport,
@@ -110,10 +111,18 @@ class FileHook(SourceHook):
         formato: str | None,
         transport: ApiTransport,
     ) -> Sequence[DiscoveredFile]:
+        from janus.strategies.files.link_policy import RemoteLinkPolicy
         from janus.strategies.files.resolvers import build_resolver_chain, resolve_link
 
+        policy = RemoteLinkPolicy.from_access(plan.source_config.access)
+        if policy is None:
+            return ()
         return resolve_link(
-            url, formato, transport, build_resolver_chain(plan.source_config.access.link_resolver)
+            url,
+            formato,
+            transport,
+            build_resolver_chain(plan.source_config.access.link_resolver),
+            policy=policy,
         )
 
     def resolve_version(
@@ -140,8 +149,15 @@ class FileHook(SourceHook):
         discovered_file: DiscoveredFile,
         payload: bytes,
         *,
-        response: ApiResponse | None = None,
+        response: ApiResponse | ApiStreamedResponse | None = None,
     ) -> bytes:
+        """Transform downloaded bytes before versioning and persistence.
+
+        The file loop calls this method only when a subclass overrides it. Payloads larger
+        than the spool threshold normally stay on disk; an override keeps this byte-oriented
+        contract for compatibility, but forces materialization and emits the
+        ``file_payload_materialized_for_hook`` warning before the hook runs.
+        """
         del plan
         del discovered_file
         del response

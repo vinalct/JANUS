@@ -100,6 +100,16 @@ That means:
 - local and cluster-shaped environments can relocate the physical storage roots;
 - the execution code does not need hardcoded machine paths.
 
+If the configured Spark warehouse or local Iceberg warehouse is not writable, JANUS relocates
+that warehouse under a user-private fallback root. An explicit `JANUS_RUNTIME_SCRATCH_DIR` takes
+precedence; otherwise JANUS uses `$XDG_RUNTIME_DIR/janus`, or a unique `janus-runtime-*` temporary
+directory created once per process when `XDG_RUNTIME_DIR` is unset. JANUS refuses a fallback root
+that is owned by another user or writable by group or other.
+
+The Ivy jar cache is never relocated automatically because Spark loads executable code from it.
+Set `JANUS_SPARK_IVY_DIR` to an explicitly chosen writable location if the configured cache cannot
+be created. This is the only supported way to move the jar cache.
+
 ## Recommended workflow: containerized local mode
 
 The repository is set up to make containerized local mode the default reproducible path.
@@ -126,6 +136,13 @@ This builds the `janus` image defined by `docker/docker-compose.yml`.
 ```bash
 make up
 ```
+
+The image runs as uid/gid `1000:1000` by default. The Make targets set
+`JANUS_CONTAINER_USER` to your host uid/gid so writable bind mounts retain host ownership.
+Podman maps that identity through `keep-id`; Docker uses `nss_wrapper` when the selected uid has
+no account in the image, giving the process and its children a user lookup without modifying
+`/etc/passwd`. Set `JANUS_CONTAINER_USER=<uid>:<gid>` explicitly when invoking Compose directly
+with Docker and a non-default identity.
 
 The compose service mounts:
 
@@ -267,6 +284,11 @@ For reproducible cluster work:
 
 The repository ships the cluster profile's dependencies as an **opt-in** compose profile, so
 `make up` stays a one-container experience and nothing below runs unless you ask for it.
+
+All published cluster ports bind to loopback by default; the MinIO console is available at
+`http://127.0.0.1:9001`. To expose the stack on another interface, set the host-side Compose
+variable explicitly, for example `JANUS_CLUSTER_BIND_ADDRESS=0.0.0.0 make up-cluster` (or
+`make up-cluster-rest`).
 
 ```bash
 make up-cluster                                        # MinIO + Postgres + the janus service

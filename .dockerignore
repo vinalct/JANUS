@@ -1,5 +1,6 @@
 .git
 .env
+conf/environments/*.env
 .venv
 .tools
 .pytest_cache

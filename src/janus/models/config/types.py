@@ -7,13 +7,18 @@ builder — keeping it here would invert the package's dependency arrow.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Final
 
 from janus.models.config.constants import (
+    DEFAULT_MAX_ARCHIVE_RATIO,
+    DEFAULT_MAX_ARCHIVE_TOTAL_BYTES,
+    DEFAULT_MAX_PAYLOAD_BYTES,
+    DEFAULT_MAX_REDIRECTS,
     DEFAULT_PAST_END_STATUS_CODES,
     DEFAULT_RETRYABLE_STATUS_CODES,
+    MAX_REDIRECTS_CEILING,
 )
 
 
@@ -54,6 +59,42 @@ class RateLimitConfig:
     requests_per_minute: int | None = None
     concurrency: int = 1
     backoff_seconds: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LimitsConfig:
+    """Per-source ceilings on what remote content may cost. Structural, never policy."""
+
+    max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
+    max_redirects: int = DEFAULT_MAX_REDIRECTS
+    max_archive_member_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
+    max_archive_total_bytes: int = DEFAULT_MAX_ARCHIVE_TOTAL_BYTES
+    max_archive_ratio: int = DEFAULT_MAX_ARCHIVE_RATIO
+
+    def __post_init__(self) -> None:
+        positive_limits = {
+            "max_payload_bytes": self.max_payload_bytes,
+            "max_archive_member_bytes": self.max_archive_member_bytes,
+            "max_archive_total_bytes": self.max_archive_total_bytes,
+            "max_archive_ratio": self.max_archive_ratio,
+        }
+        for name, value in positive_limits.items():
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+
+        if (
+            not isinstance(self.max_redirects, int)
+            or isinstance(self.max_redirects, bool)
+            or not 0 <= self.max_redirects <= MAX_REDIRECTS_CEILING
+        ):
+            raise ValueError(
+                f"max_redirects must be an integer between 0 and {MAX_REDIRECTS_CEILING}"
+            )
+
+        if self.max_archive_member_bytes > self.max_archive_total_bytes:
+            raise ValueError(
+                "max_archive_member_bytes must not exceed max_archive_total_bytes"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +189,7 @@ class AccessConfig:
     pagination: PaginationConfig
     rate_limit: RateLimitConfig
     request_inputs: RequestInputsConfig
+    limits: LimitsConfig = field(default_factory=LimitsConfig)
     base_url: str | None = None
     path: str | None = None
     url: str | None = None
@@ -158,6 +200,7 @@ class AccessConfig:
     params: dict[str, str] | None = None
     parameter_bindings: dict[str, ParameterBinding] | None = None
     link_resolver: str = "auto"
+    allowed_hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

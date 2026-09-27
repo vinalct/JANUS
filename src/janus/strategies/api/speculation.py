@@ -39,7 +39,7 @@ from janus.strategies.http import (
     ApiRequest,
     ApiResponse,
 )
-from janus.utils.logging import StructuredLogger, redact_url
+from janus.utils.logging import StructuredLogger
 
 #: Root/container keys read as a total-record count when no explicit field is configured.
 #: ``count`` is deliberately absent: several APIs use it for *records on this page*, which would
@@ -245,7 +245,7 @@ def _resolve_total_records(
                     "api_total_records_invalid",
                     hook_value=repr(hook_total),
                     hook_value_type=type(hook_total).__name__,
-                    request_url=redact_url(request.full_url()),
+                    request_url=request.redacted_url(),
                 )
 
     payload_total = total_records_from_payload(
@@ -314,7 +314,7 @@ def _raise_on_past_end_conflict(
                     "api_pagination_past_end_conflict",
                     request_index=past_end_index,
                     status_code=response.status_code,
-                    request_url=redact_url(response.request.full_url()),
+                    request_url=response.request.redacted_url(),
                     conflicting_request_index=index,
                 )
             raise ApiPastEndConflictError(response, conflicting_request_index=index)

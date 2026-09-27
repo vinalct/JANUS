@@ -46,19 +46,33 @@ def _discover_files(
     file_hook: FileHook | None,
     transport: ApiTransport,
 ) -> tuple[DiscoveredFile, ...]:
+    from janus.strategies.files.link_policy import RemoteLinkPolicy
     from janus.strategies.files.resolvers import build_resolver_chain, resolve_link
 
     access = plan.source_config.access
+    policy = RemoteLinkPolicy.from_access(access)
     discovered: list[DiscoveredFile] = []
 
     if access.url:
+        assert policy is not None
         if file_hook is not None:
             resolved_from_url: Sequence[DiscoveredFile] = file_hook.resolve_links(
                 plan, access.url, access.format, transport
             )
         else:
             chain = build_resolver_chain(access.link_resolver)
-            resolved_from_url = resolve_link(access.url, access.format, transport, chain)
+            resolved_from_url = resolve_link(
+                access.url,
+                access.format,
+                transport,
+                chain,
+                policy=policy,
+            )
+
+        resolved_from_url = policy.filter(
+            resolved_from_url,
+            stage="hook_output" if file_hook is not None else "resolver_chain",
+        )
 
         if resolved_from_url:
             discovered.extend(

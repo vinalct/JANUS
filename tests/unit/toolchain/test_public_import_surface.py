@@ -25,6 +25,7 @@ MODELS_ALL: tuple[str, ...] = (
     "ExtractionResult",
     "IcebergInputReference",
     "IcebergRowsRequestInputsConfig",
+    "LimitsConfig",
     "OutputTarget",
     "OutputsConfig",
     "PaginationConfig",
@@ -149,6 +150,7 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
         "_raw_extracted_relative_path",
         "_read_checksum_sidecar",
     ),
+    "janus.utils.storage": ("normalize_relative_path",),
     "janus.scripts.raw_to_bronze": (
         "RawToBronzeLoader",
         "RawToBronzeRun",

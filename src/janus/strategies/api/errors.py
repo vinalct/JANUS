@@ -8,7 +8,6 @@ imports them. Mirrors ``strategies/http/errors.py``.
 from __future__ import annotations
 
 from janus.strategies.http import ApiResponse, HttpStrategyError, response_body_excerpt
-from janus.utils.logging import redact_url
 
 
 class ApiStrategyError(HttpStrategyError):
@@ -28,7 +27,7 @@ class ApiResponseError(ApiStrategyError):
         self.body_excerpt = response_body_excerpt(response)
         message = (
             f"API request failed with status {response.status_code} for "
-            f"{redact_url(response.request.full_url())}"
+            f"{response.request.redacted_url()}"
         )
         if self.body_excerpt is not None:
             message = f"{message}: {self.body_excerpt}"
@@ -43,7 +42,7 @@ class ApiPastEndConflictError(ApiStrategyError):
         self.conflicting_request_index = conflicting_request_index
         message = (
             f"API returned past-end status {response.status_code} for "
-            f"{redact_url(response.request.full_url())}, but request index "
+            f"{response.request.redacted_url()}, but request index "
             f"{conflicting_request_index} returned records"
         )
         super().__init__(message)

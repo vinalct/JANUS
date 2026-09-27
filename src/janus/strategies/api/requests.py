@@ -157,6 +157,8 @@ class ApiRequestExecutor:
             timeout_seconds=source_access.timeout_seconds,
             headers=_freeze_string_mapping(source_access.headers or {}),
             params=(),
+            max_payload_bytes=source_access.limits.max_payload_bytes,
+            max_redirects=source_access.limits.max_redirects,
         )
         request = inject_auth(request, source_access.auth, env_reader=self.resolve_env_var)
 
@@ -198,7 +200,7 @@ class ApiRequestExecutor:
                 page_number=pagination_state.page_number,
                 offset=pagination_state.offset,
                 cursor=pagination_state.cursor,
-                request_url=request.full_url(),
+                request_url=request.redacted_url(),
             )
         return request
 
@@ -386,7 +388,7 @@ class ApiRequestExecutor:
             request_input_count=request_input_count,
         )
         metadata = {
-            "request_url": response.request.full_url(),
+            "request_url": response.request.redacted_url(),
             "status_code": str(response.status_code),
             "request_index": str(pagination_state.request_index),
             "request_input_index": str(request_input_index),

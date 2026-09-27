@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Self
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
 REDACTED_VALUE = "***REDACTED***"
+_ENCODED_REDACTED_VALUE = quote_plus(REDACTED_VALUE)
 SENSITIVE_FIELD_MARKERS = (
     "api-key",
     "apikey",
@@ -154,7 +155,7 @@ def _sanitize_string(value: str, *, field_name: str | None = None) -> str:
     return redact_url(value)
 
 
-def redact_url(url: str) -> str:
+def redact_url(url: str, *, extra_params: Iterable[str] = ()) -> str:
     """Redact sensitive query parameters from URLs while leaving the rest readable."""
     parsed = urlsplit(url)
     if not parsed.scheme or not parsed.netloc:
@@ -163,10 +164,18 @@ def redact_url(url: str) -> str:
     redacted_path = _redact_sensitive_path(parsed.path)
     query_pairs = parse_qsl(parsed.query, keep_blank_values=True) if parsed.query else []
 
+    configured_sensitive_params = {
+        parameter.strip().lower() for parameter in extra_params if parameter.strip()
+    }
     redacted_pairs = []
     changed = False
     for key, value in query_pairs:
-        if is_sensitive_field(key) or key.strip().lower() in DEFAULT_SENSITIVE_QUERY_PARAMS:
+        normalized_key = key.strip().lower()
+        if (
+            is_sensitive_field(key)
+            or normalized_key in DEFAULT_SENSITIVE_QUERY_PARAMS
+            or normalized_key in configured_sensitive_params
+        ):
             redacted_pairs.append((key, REDACTED_VALUE))
             changed = True
         else:
@@ -174,9 +183,11 @@ def redact_url(url: str) -> str:
 
     if not changed and redacted_path == parsed.path:
         return url
-    return urlunsplit(
-        parsed._replace(path=redacted_path, query=urlencode(redacted_pairs))
+    redacted_query = urlencode(redacted_pairs).replace(
+        _ENCODED_REDACTED_VALUE,
+        REDACTED_VALUE,
     )
+    return urlunsplit(parsed._replace(path=redacted_path, query=redacted_query))
 
 
 def _redact_sensitive_path(path: str) -> str:

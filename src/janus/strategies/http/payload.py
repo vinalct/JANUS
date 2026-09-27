@@ -26,7 +26,6 @@ from typing import Any
 
 from janus.strategies.http.errors import HttpStrategyError
 from janus.strategies.http.transport import ApiResponse
-from janus.utils.logging import redact_url
 
 ALL_PAYLOAD_FORMATS = frozenset({"binary", "text", "json", "jsonl"})
 
@@ -76,7 +75,7 @@ def decode_payload(
     except (UnicodeDecodeError, ValueError) as exc:
         noun = format_name if failure_label is None else failure_label
         raise PayloadDecodeError(
-            f"Failed to decode {noun} payload from {redact_url(response.request.full_url())}"
+            f"Failed to decode {noun} payload from {response.request.redacted_url()}"
         ) from exc
 
     raise PayloadDecodeError(f"Unsupported {family_label} payload format: {format_name}")

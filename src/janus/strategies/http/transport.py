@@ -10,26 +10,46 @@ alongside in janus.strategies.http.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import ssl
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, BinaryIO, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from urllib.request import HTTPSHandler, OpenerDirector, Request, build_opener
+from urllib.request import (
+    HTTPDefaultErrorHandler,
+    HTTPErrorProcessor,
+    HTTPHandler,
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    OpenerDirector,
+    ProxyHandler,
+    Request,
+)
 
 from janus.models import AuthConfig
+from janus.models.config.constants import (
+    DEFAULT_MAX_PAYLOAD_BYTES,
+    DEFAULT_MAX_REDIRECTS,
+    MAX_REDIRECTS_CEILING,
+)
 from janus.strategies.common import _freeze_string_mapping, _stringify_mapping
+from janus.strategies.http.scrubber import SecretScrubber
 from janus.utils.logging import redact_url
 
 HTTP_STATUS_MIN = 100
 HTTP_STATUS_SUCCESS = 200
 HTTP_STATUS_REDIRECT = 300
 HTTP_STATUS_CLIENT_ERROR = 400
+SUPPORTED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https"})
+HTTP_DEFAULT_PORT = 80
+HTTPS_DEFAULT_PORT = 443
+READ_CHUNK_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +62,11 @@ class ApiRequest:
     headers: tuple[tuple[str, str], ...] = ()
     params: tuple[tuple[str, str], ...] = ()
     body: bytes | None = None
+    sensitive_headers: tuple[str, ...] = ()
+    sensitive_params: tuple[str, ...] = ()
+    max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
+    max_redirects: int = DEFAULT_MAX_REDIRECTS
+    scrubber: SecretScrubber | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.method.strip():
@@ -50,6 +75,8 @@ class ApiRequest:
             raise ValueError("url must not be empty")
         if self.timeout_seconds < 1:
             raise ValueError("timeout_seconds must be greater than zero")
+        if self.max_payload_bytes < 1:
+            raise ValueError("max_payload_bytes must be greater than zero")
 
     def headers_as_dict(self) -> dict[str, str]:
         return dict(self.headers)
@@ -62,6 +89,15 @@ class ApiRequest:
         headers[name] = value
         return replace(self, headers=_freeze_string_mapping(headers))
 
+    def with_sensitive_header(self, name: str, value: str) -> ApiRequest:
+        request = self.with_header(name, value)
+        sensitive_headers = tuple(
+            existing
+            for existing in request.sensitive_headers
+            if existing.lower() != name.lower()
+        )
+        return replace(request, sensitive_headers=(*sensitive_headers, name))
+
     def with_url(self, url: str) -> ApiRequest:
         return replace(self, url=url)
 
@@ -70,6 +106,13 @@ class ApiRequest:
         merged_params.update(_stringify_mapping(params))
         return replace(self, params=_freeze_string_mapping(merged_params))
 
+    def with_sensitive_param(self, name: str, value: str) -> ApiRequest:
+        request = self.with_params({name: value})
+        sensitive_params = tuple(
+            existing for existing in request.sensitive_params if existing != name
+        )
+        return replace(request, sensitive_params=(*sensitive_params, name))
+
     def full_url(self) -> str:
         parsed = urlsplit(self.url)
         existing_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
@@ -77,6 +120,10 @@ class ApiRequest:
         if not existing_params:
             return self.url
         return urlunsplit(parsed._replace(query=urlencode(existing_params)))
+
+    def redacted_url(self) -> str:
+        """Render this request URL without any configured credential parameter."""
+        return redact_url(self.full_url(), extra_params=self.sensitive_params)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,8 +158,156 @@ class ApiTransportError(RuntimeError):
     """Raised when the transport could not reach the remote API."""
 
 
+class ApiNonRetryableTransportError(ApiTransportError):
+    """A transport failure that another attempt cannot change."""
+
+
+class ApiResponseTooLargeError(ApiNonRetryableTransportError):
+    """Raised when a response exceeds its request's payload ceiling."""
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        limit_bytes: int,
+        bytes_seen: int | None = None,
+        declared_length: int | None = None,
+    ) -> None:
+        self.url = url
+        self.limit_bytes = limit_bytes
+        self.bytes_seen = bytes_seen
+        self.declared_length = declared_length
+
+        message = (
+            f"Response for {redact_url(url)!r} exceeds "
+            f"access.limits.max_payload_bytes={limit_bytes}"
+        )
+        if declared_length is not None:
+            message = f"{message}: declared Content-Length {declared_length}"
+        elif bytes_seen is not None:
+            message = f"{message}: {bytes_seen} bytes seen"
+        super().__init__(message)
+
+
 class AuthResolutionError(RuntimeError):
     """Raised when API auth cannot be resolved from the configured environment."""
+
+
+class RedirectRefused(URLError):
+    """Raised when a redirect crosses a forbidden transport boundary."""
+
+
+class RedirectLimitExceeded(URLError):
+    """Raised when a request exceeds its configured redirect-hop limit."""
+
+
+@dataclass(frozen=True, slots=True)
+class RedirectPolicy:
+    """Credential and hop policy carried by each urllib request."""
+
+    origin: tuple[str, str, int]
+    sensitive_headers: frozenset[str]
+    sensitive_params: frozenset[str]
+    max_redirects: int
+
+
+class _JanusRequest(Request):
+    janus_redirect_policy: RedirectPolicy
+    janus_redirect_hops: int
+
+
+def _origin_of(url: str) -> tuple[str, str, int]:
+    parsed = urlsplit(url)
+    scheme = parsed.scheme.lower()
+    default_port = HTTPS_DEFAULT_PORT if scheme == "https" else HTTP_DEFAULT_PORT
+    return scheme, (parsed.hostname or "").lower(), parsed.port or default_port
+
+
+def _credentials_may_travel(
+    origin: tuple[str, str, int], target: tuple[str, str, int]
+) -> bool:
+    """Return whether credentials may travel from the original request to a target."""
+    if origin == target:
+        return True
+    return (
+        origin[0] == "http"
+        and origin[2] == HTTP_DEFAULT_PORT
+        and target[0] == "https"
+        and target[2] == HTTPS_DEFAULT_PORT
+        and origin[1] == target[1]
+    )
+
+
+def _strip_sensitive(request: Request, policy: RedirectPolicy) -> None:
+    for headers in (request.headers, request.unredirected_hdrs):
+        for name in tuple(headers):
+            if (
+                name.lower() == "authorization"
+                or name.lower() in policy.sensitive_headers
+            ):
+                del headers[name]
+
+    parsed = urlsplit(request.full_url)
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    filtered = [(name, value) for name, value in query if name not in policy.sensitive_params]
+    if filtered != query:
+        request.full_url = urlunsplit(parsed._replace(query=urlencode(filtered)))
+
+
+def _carry_sensitive_params(
+    source: Request, target: Request, policy: RedirectPolicy
+) -> None:
+    source_query = parse_qsl(urlsplit(source.full_url).query, keep_blank_values=True)
+    target_url = urlsplit(target.full_url)
+    target_query = parse_qsl(target_url.query, keep_blank_values=True)
+    target_names = {name for name, _value in target_query}
+    carried = [
+        (name, value)
+        for name, value in source_query
+        if name in policy.sensitive_params and name not in target_names
+    ]
+    if carried:
+        target.full_url = urlunsplit(
+            target_url._replace(query=urlencode([*target_query, *carried]))
+        )
+
+
+class JanusRedirectHandler(HTTPRedirectHandler):
+    """Apply JANUS's per-request redirect and credential policy."""
+
+    max_redirections = MAX_REDIRECTS_CEILING
+    max_repeats = MAX_REDIRECTS_CEILING
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        policy = getattr(req, "janus_redirect_policy", None)
+        if policy is None:
+            raise RedirectRefused("redirect without a JANUS policy")
+
+        hops = getattr(req, "janus_redirect_hops", 0) + 1
+        if hops > policy.max_redirects:
+            raise RedirectLimitExceeded(
+                "redirect exceeded "
+                f"access.limits.max_redirects={policy.max_redirects}"
+            )
+
+        target_scheme = urlsplit(newurl).scheme.lower()
+        if target_scheme not in SUPPORTED_URL_SCHEMES:
+            raise RedirectRefused(f"redirect to scheme {target_scheme!r} refused")
+        if urlsplit(req.full_url).scheme.lower() == "https" and target_scheme == "http":
+            raise RedirectRefused("https → http downgrade refused")
+
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+
+        if _credentials_may_travel(policy.origin, _origin_of(newurl)):
+            _carry_sensitive_params(req, redirected, policy)
+        else:
+            _strip_sensitive(redirected, policy)
+
+        redirected.janus_redirect_policy = policy
+        redirected.janus_redirect_hops = hops
+        return redirected
 
 
 class ApiTransport(Protocol):
@@ -125,6 +320,152 @@ class ApiTransport(Protocol):
     def send(self, request: ApiRequest) -> ApiResponse: ...
 
 
+class CappedReader:
+    """A binary response reader that aborts once its cumulative cap is crossed."""
+
+    def __init__(self, stream: BinaryIO, *, url: str, limit_bytes: int) -> None:
+        self._stream = stream
+        self._url = url
+        self._limit_bytes = limit_bytes
+        self.bytes_read = 0
+        self._closed = False
+
+    def read(self, size: int | None = -1) -> bytes:
+        """Read at most ``size`` bytes while enforcing the cumulative limit."""
+        if self._closed:
+            raise ValueError("I/O operation on closed response body")
+        if size == 0:
+            return b""
+
+        read_to_end = size is None or size < 0
+        remaining_requested = None if read_to_end else size
+        payload = bytearray()
+
+        while remaining_requested is None or remaining_requested > 0:
+            remaining_cap = self._limit_bytes - self.bytes_read
+            amount = min(READ_CHUNK_BYTES, remaining_cap + 1)
+            if remaining_requested is not None:
+                amount = min(amount, remaining_requested)
+
+            chunk = self._stream.read(amount)
+            if not chunk:
+                break
+            self.bytes_read += len(chunk)
+            if self.bytes_read > self._limit_bytes:
+                self.close()
+                raise ApiResponseTooLargeError(
+                    self._url,
+                    limit_bytes=self._limit_bytes,
+                    bytes_seen=self.bytes_read,
+                )
+            payload.extend(chunk)
+            if remaining_requested is not None:
+                remaining_requested -= len(chunk)
+
+        return bytes(payload)
+
+    def __iter__(self) -> Iterator[bytes]:
+        while chunk := self.read(READ_CHUNK_BYTES):
+            yield chunk
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stream.close()
+
+
+@dataclass(slots=True)
+class ApiStreamedResponse:
+    """HTTP response metadata plus a capped, caller-owned response stream."""
+
+    request: ApiRequest
+    status_code: int
+    headers: tuple[tuple[str, str], ...]
+    body: CappedReader
+    declared_length: int | None
+    received_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+
+    def __post_init__(self) -> None:
+        if self.status_code < HTTP_STATUS_MIN:
+            raise ValueError("status_code must be a valid HTTP status")
+        if self.received_at.tzinfo is None or self.received_at.utcoffset() is None:
+            raise ValueError("received_at must be timezone-aware")
+
+    def headers_as_dict(self) -> dict[str, str]:
+        return dict(self.headers)
+
+    def close(self) -> None:
+        self.body.close()
+
+    def __enter__(self) -> ApiStreamedResponse:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        del exc_type
+        del exc
+        del tb
+        self.close()
+
+    def materialize(self, *, limit: int | None = None) -> ApiResponse:
+        """Read the remaining body, optionally truncating it to a diagnostic limit."""
+        if limit is not None and limit < 0:
+            raise ValueError("limit must not be negative")
+        try:
+            body = self.body.read() if limit is None else self.body.read(limit)
+            if limit is not None and len(body) > limit:
+                body = body[:limit]
+        finally:
+            self.close()
+        return ApiResponse(
+            request=self.request,
+            status_code=self.status_code,
+            body=body,
+            headers=self.headers,
+            received_at=self.received_at,
+        )
+
+
+class StreamingApiTransport(ApiTransport, Protocol):
+    """Transport contract for callers that consume a response incrementally."""
+
+    def stream(self, request: ApiRequest) -> ApiStreamedResponse: ...
+
+
+def _require_supported_scheme(url: str, *, display_url: str | None = None) -> None:
+    scheme = urlsplit(url).scheme.lower()
+    if scheme in SUPPORTED_URL_SCHEMES:
+        return
+    rendered_url = redact_url(url) if display_url is None else display_url
+    raise ApiTransportError(
+        f"Refusing to open {rendered_url!r}: scheme "
+        f"{scheme or '<none>'!r} is not http or https"
+    )
+
+
+def _build_opener(
+    context: ssl.SSLContext,
+    *,
+    redirect_handler: HTTPRedirectHandler,
+) -> OpenerDirector:
+    """Build an opener with exactly the handlers JANUS needs."""
+    opener = OpenerDirector()
+    for handler in (
+        ProxyHandler(),
+        HTTPHandler(),
+        HTTPSHandler(context=context),
+        HTTPDefaultErrorHandler(),
+        redirect_handler,
+        HTTPErrorProcessor(),
+    ):
+        opener.add_handler(handler)
+    return opener
+
+
 @dataclass(slots=True)
 class UrllibApiTransport:
     """Stdlib-backed HTTP transport with an explicit open/close lifecycle."""
@@ -134,46 +475,97 @@ class UrllibApiTransport:
 
     def open(self) -> None:
         if self.opener is None:
-            self.opener = build_opener(
-                HTTPSHandler(context=_build_ssl_context(self.ca_bundle_path))
+            self.opener = _build_opener(
+                _build_ssl_context(self.ca_bundle_path),
+                redirect_handler=JanusRedirectHandler(),
             )
 
     def close(self) -> None:
         self.opener = None
 
-    def send(self, request: ApiRequest) -> ApiResponse:
+    def _open_response(
+        self, request: ApiRequest
+    ) -> tuple[int, tuple[tuple[str, str], ...], BinaryIO]:
         self.open()
+        full_url = request.full_url()
+        _require_supported_scheme(full_url, display_url=request.redacted_url())
         if self.opener is None:
             raise ApiTransportError("API transport failed to initialize urllib opener")
 
-        urllib_request = Request(
-            request.full_url(),
+        urllib_request = _JanusRequest(
+            full_url,
             data=request.body,
             method=request.method,
             headers=request.headers_as_dict(),
         )
+        urllib_request.janus_redirect_policy = RedirectPolicy(
+            origin=_origin_of(full_url),
+            sensitive_headers=frozenset(
+                {"authorization", *(name.lower() for name in request.sensitive_headers)}
+            ),
+            sensitive_params=frozenset(request.sensitive_params),
+            max_redirects=request.max_redirects,
+        )
+        urllib_request.janus_redirect_hops = 0
 
         try:
-            with self.opener.open(urllib_request, timeout=request.timeout_seconds) as stream:
-                return ApiResponse(
-                    request=request,
-                    status_code=stream.getcode(),
-                    body=stream.read(),
-                    headers=_freeze_string_mapping(dict(stream.headers.items())),
-                )
+            stream = self.opener.open(urllib_request, timeout=request.timeout_seconds)
         except HTTPError as exc:
             headers = dict(exc.headers.items()) if exc.headers is not None else {}
-            return ApiResponse(
-                request=request,
-                status_code=exc.code,
-                body=exc.read(),
-                headers=_freeze_string_mapping(headers),
+            return exc.code, _freeze_string_mapping(headers), cast(BinaryIO, exc)
+        except (RedirectRefused, RedirectLimitExceeded) as exc:
+            message = (
+                f"Request failed for {request.redacted_url()!r}: "
+                f"{type(exc).__name__}: {exc.reason}"
             )
+            raise ApiNonRetryableTransportError(message) from exc
         except (URLError, OSError) as exc:
-            raise ApiTransportError(
-                f"Request failed for {redact_url(request.full_url())!r}: "
+            message = (
+                f"Request failed for {request.redacted_url()!r}: "
                 f"{type(exc).__name__}"
-            ) from exc
+            )
+            raise ApiTransportError(message) from exc
+        return (
+            stream.getcode(),
+            _freeze_string_mapping(dict(stream.headers.items())),
+            stream,
+        )
+
+    def send(self, request: ApiRequest) -> ApiResponse:
+        status_code, headers, stream = self._open_response(request)
+        declared_length = _declared_length(headers)
+        _reject_declared_length(request, stream, declared_length)
+        reader = CappedReader(
+            stream,
+            url=request.redacted_url(),
+            limit_bytes=request.max_payload_bytes,
+        )
+        try:
+            body = reader.read()
+        finally:
+            reader.close()
+        return ApiResponse(
+            request=request,
+            status_code=status_code,
+            body=body,
+            headers=headers,
+        )
+
+    def stream(self, request: ApiRequest) -> ApiStreamedResponse:
+        status_code, headers, stream = self._open_response(request)
+        declared_length = _declared_length(headers)
+        _reject_declared_length(request, stream, declared_length)
+        return ApiStreamedResponse(
+            request=request,
+            status_code=status_code,
+            headers=headers,
+            body=CappedReader(
+                stream,
+                url=request.redacted_url(),
+                limit_bytes=request.max_payload_bytes,
+            ),
+            declared_length=declared_length,
+        )
 
 
 @dataclass(slots=True)
@@ -194,6 +586,53 @@ class ApiClient:
 
     def send(self, request: ApiRequest) -> ApiResponse:
         return self.transport.send(request)
+
+    def stream(self, request: ApiRequest) -> ApiStreamedResponse:
+        stream = getattr(self.transport, "stream", None)
+        if callable(stream):
+            return stream(request)
+
+        response = self.transport.send(request)
+        declared_length = _declared_length(response.headers)
+        return ApiStreamedResponse(
+            request=response.request,
+            status_code=response.status_code,
+            headers=response.headers,
+            body=CappedReader(
+                io.BytesIO(response.body),
+                url=request.redacted_url(),
+                limit_bytes=request.max_payload_bytes,
+            ),
+            declared_length=declared_length,
+            received_at=response.received_at,
+        )
+
+
+def _declared_length(headers: tuple[tuple[str, str], ...]) -> int | None:
+    for name, value in headers:
+        if name.lower() != "content-length":
+            continue
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            return None
+        return parsed if parsed >= 0 else None
+    return None
+
+
+def _reject_declared_length(
+    request: ApiRequest,
+    stream: BinaryIO,
+    declared_length: int | None,
+) -> None:
+    if declared_length is None or declared_length <= request.max_payload_bytes:
+        return
+    stream.close()
+    raise ApiResponseTooLargeError(
+        request.redacted_url(),
+        limit_bytes=request.max_payload_bytes,
+        declared_length=declared_length,
+    )
 
 
 def _build_ssl_context(ca_bundle_path: str | None = None) -> ssl.SSLContext:
@@ -266,8 +705,15 @@ def inject_auth(
     if auth.type == "basic":
         username = _require_secret(auth.username_env_var, env_reader)
         password = _require_secret(auth.password_env_var, env_reader)
-        token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
-        return request.with_header("Authorization", f"Basic {token}")
+        pair = f"{username}:{password}"
+        token = base64.b64encode(pair.encode()).decode("ascii")
+        rendered_token = f"Basic {token}"
+        scrubber = SecretScrubber()
+        scrubber.register(username, password, pair, token, rendered_token)
+        return replace(
+            request.with_sensitive_header("Authorization", rendered_token),
+            scrubber=scrubber,
+        )
 
     token = _require_secret(auth.env_var, env_reader)
     rendered_token = _render_token(auth.token_prefix, token)
@@ -275,15 +721,31 @@ def inject_auth(
     if auth.type == "bearer_token":
         header_name = auth.header_name or "Authorization"
         token_prefix = auth.token_prefix or "Bearer"
-        return request.with_header(header_name, _render_token(token_prefix, token))
+        rendered_token = _render_token(token_prefix, token)
+        scrubber = SecretScrubber()
+        scrubber.register(token, rendered_token)
+        return replace(
+            request.with_sensitive_header(header_name, rendered_token),
+            scrubber=scrubber,
+        )
 
     if auth.type == "header_token":
         header_name = auth.header_name or "Authorization"
-        return request.with_header(header_name, rendered_token)
+        scrubber = SecretScrubber()
+        scrubber.register(token, rendered_token)
+        return replace(
+            request.with_sensitive_header(header_name, rendered_token),
+            scrubber=scrubber,
+        )
 
     if auth.type == "query_token":
         query_param = auth.query_param or "token"
-        return request.with_params({query_param: rendered_token})
+        scrubber = SecretScrubber()
+        scrubber.register(token, rendered_token)
+        return replace(
+            request.with_sensitive_param(query_param, rendered_token),
+            scrubber=scrubber,
+        )
 
     raise ValueError(f"Unsupported auth type: {auth.type}")
 

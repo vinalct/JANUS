@@ -6,6 +6,11 @@ The bottom of the package layering: this module imports nothing from
 
 from __future__ import annotations
 
+import re
+
+ALLOWED_HOST_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+ALLOWED_HOST_PATTERN = re.compile(rf"^(?:\*\.)?{ALLOWED_HOST_LABEL}(?:\.{ALLOWED_HOST_LABEL})*$")
+
 SUPPORTED_SOURCE_TYPES = frozenset({"api", "catalog", "file"})
 SUPPORTED_STRATEGIES = SUPPORTED_SOURCE_TYPES
 SUPPORTED_STRATEGY_VARIANTS = {
@@ -27,6 +32,11 @@ CLIENT_ERROR_STATUS_MAX_EXCLUSIVE = 500
 SERVER_ERROR_STATUS_MAX_EXCLUSIVE = 600
 
 DEFAULT_RETRYABLE_STATUS_CODES: tuple[int, ...] = (408, 429, 500, 502, 503, 504)
+DEFAULT_MAX_PAYLOAD_BYTES = 32 * 1024**3
+DEFAULT_MAX_REDIRECTS = 5
+MAX_REDIRECTS_CEILING = 20
+DEFAULT_MAX_ARCHIVE_TOTAL_BYTES = 128 * 1024**3
+DEFAULT_MAX_ARCHIVE_RATIO = 200
 
 RETRYABLE_CLIENT_STATUS_CODES: frozenset[int] = frozenset(
     code

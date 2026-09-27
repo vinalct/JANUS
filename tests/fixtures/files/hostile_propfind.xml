@@ -1,0 +1,103 @@
+<?xml version="1.0"?>
+<!-- Hostile PROPFIND fixture.
+
+     A DAV:multistatus shaped exactly like the recorded Receita Federal body
+     (tests/fixtures/files/cnpj_propfind_recorded.xml) but carrying the four entries a
+     real share never returns. The share token is the literal SHARE_TOKEN, so the source
+     URL this is parsed against is
+         https://arquivos.receitafederal.gov.br/index.php/s/SHARE_TOKEN
+     and the origin every verdict is measured against is
+         (https, arquivos.receitafederal.gov.br, 443).
+
+     Verdicts, in document order:
+       1. /public.php/webdav/                          skipped today — resourcetype/collection
+       2. /public.php/webdav/Empresas0.zip             keep — the only candidate this file yields
+       3. /public.php/webdav/2026-09/                  skipped today — resourcetype/collection
+       4. https://evil.example/public.php/webdav/Evil.zip
+                                                       drop: host — an absolute foreign href.
+                                                       `_nextcloud_public_file_url` uses only
+                                                       urlsplit(href).path, so today this is
+                                                       silently *re-homed* onto the configured
+                                                       base rather than dropped, and nothing
+                                                       logs it.
+       5. file:///public.php/webdav/Local.zip          drop: scheme
+       6. /public.php/webdav/2026-09/../../etc/passwd  keep, but contained: the filename must be
+                                                       the bare name `passwd` and the produced
+                                                       location must stay under the configured
+                                                       base with no `..` segment. Today
+                                                       `_nextcloud_public_file_url` re-attaches
+                                                       the traversal verbatim.
+-->
+<d:multistatus xmlns:d="DAV:" xmlns:s="http://sabredav.org/ns" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">
+  <d:response>
+    <d:href>/public.php/webdav/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:getlastmodified>Mon, 14 Sep 2026 15:08:06 GMT</d:getlastmodified>
+        <d:resourcetype><d:collection/></d:resourcetype>
+        <d:getetag>&quot;6aa80dd72199a&quot;</d:getetag>
+      </d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/public.php/webdav/Empresas0.zip</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:getlastmodified>Sun, 13 Sep 2026 06:16:47 GMT</d:getlastmodified>
+        <d:getcontentlength>563070974</d:getcontentlength>
+        <d:resourcetype/>
+        <d:getetag>&quot;a1b2c3d4e5f60&quot;</d:getetag>
+        <d:getcontenttype>application/zip</d:getcontenttype>
+      </d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/public.php/webdav/2026-09/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:getlastmodified>Sun, 13 Sep 2026 06:10:00 GMT</d:getlastmodified>
+        <d:resourcetype><d:collection/></d:resourcetype>
+        <d:getetag>&quot;6aa80dd7219ff&quot;</d:getetag>
+      </d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>https://evil.example/public.php/webdav/Evil.zip</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:getlastmodified>Sun, 13 Sep 2026 06:16:47 GMT</d:getlastmodified>
+        <d:getcontentlength>1024</d:getcontentlength>
+        <d:resourcetype/>
+        <d:getetag>&quot;dead0beef0001&quot;</d:getetag>
+      </d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>file:///public.php/webdav/Local.zip</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:getlastmodified>Sun, 13 Sep 2026 06:16:47 GMT</d:getlastmodified>
+        <d:getcontentlength>2048</d:getcontentlength>
+        <d:resourcetype/>
+        <d:getetag>&quot;dead0beef0002&quot;</d:getetag>
+      </d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/public.php/webdav/2026-09/../../etc/passwd</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:getlastmodified>Sun, 13 Sep 2026 06:16:47 GMT</d:getlastmodified>
+        <d:getcontentlength>4096</d:getcontentlength>
+        <d:resourcetype/>
+        <d:getetag>&quot;dead0beef0003&quot;</d:getetag>
+      </d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+</d:multistatus>

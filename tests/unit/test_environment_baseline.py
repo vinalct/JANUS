@@ -189,7 +189,6 @@ def test_prepare_runtime_falls_back_only_for_spark_scratch_paths(monkeypatch, tm
     original_ensure = environment_utils._ensure_writable_directory
     spark_scratch_suffixes = {
         "spark-warehouse",
-        "ivy",
         "iceberg",
     }
 
@@ -212,13 +211,13 @@ def test_prepare_runtime_falls_back_only_for_spark_scratch_paths(monkeypatch, tm
     assert paths["bronze_dir"] == project_root / "data" / "bronze"
     assert paths["metadata_dir"] == project_root / "data" / "metadata"
     assert paths["warehouse_dir"] == scratch_root / "workspace" / "warehouse_dir"
-    assert paths["ivy_dir"] == scratch_root / "workspace" / "ivy_dir"
+    assert paths["ivy_dir"] == project_root / "data" / "metadata" / "ivy"
     assert paths["iceberg_warehouse_dir"] == (
         scratch_root / "workspace" / "iceberg_warehouse_dir"
     )
     assert config["storage"]["raw_dir"] == "data/raw"
     assert config["storage"]["metadata_dir"] == "data/metadata"
-    assert config["spark"]["ivy_dir"] == str(paths["ivy_dir"])
+    assert config["spark"]["ivy_dir"] == "data/metadata/ivy"
     assert config["spark"]["iceberg"]["warehouse_dir"] == str(
         paths["iceberg_warehouse_dir"]
     )

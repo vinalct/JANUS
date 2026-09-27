@@ -45,7 +45,7 @@ def _catalog_request_input_dead_letter_metadata(
     metadata = {
         "request_input_index": str(request_input_index),
         "request_input_count": str(request_input_count),
-        "request_url": request.full_url(),
+        "request_url": request.redacted_url(),
     }
     if request_input:
         metadata["request_input_field_names"] = ",".join(sorted(str(key) for key in request_input))

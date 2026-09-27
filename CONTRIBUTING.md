@@ -8,18 +8,33 @@ you push.**
 ## How CI works
 
 Every push to `main` and every pull request targeting `main` runs
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml), which has two jobs:
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml), which has three jobs:
 
-- **fast** (no JVM) — `ruff check src tests`, `mypy`, and the unit suite
-  (`pytest tests/unit`). Spark-backed tests self-skip here, which is expected.
-  This is the quick feedback loop (a few minutes).
+- **fast** (no JVM) — audits the pinned dependencies with `pip-audit`, then runs
+  `ruff check src tests`, `mypy`, and the unit suite (`pytest tests/unit`).
+  Spark-backed tests self-skip here, which is expected. This is the quick
+  feedback loop (a few minutes).
+- **adapter** — runs the Dagster adapter suite against every supported Python
+  minor version without installing the Spark data engines.
 - **spark** (full stack, in the container) — builds the JANUS image from
   [`docker/Dockerfile`](docker/Dockerfile) and runs the **entire** suite,
   including `tests/integration`, so PySpark, JDK 17, and the Iceberg runtime are
   present. This is the job that actually exercises the Spark writer and Iceberg
   commit path.
 
-Both jobs are **required** status checks before a change can merge to `main`.
+All three jobs are **required** status checks before a change can merge to `main`.
+
+The fast job audits the complete dependency tree resolved from `requirements.txt`.
+If an advisory has no available fix, add a temporary exception to
+`.github/pip-audit-ignore.txt` as `<ID> <expiry YYYY-MM-DD> <reason>`. CI rejects
+malformed and expired entries. Dependabot proposes weekly updates for Python
+dependencies, GitHub Actions, and the Docker base image. Changes to `pyspark` or
+`pyiceberg` must be reviewed against the Spark/Iceberg compatibility matrix and
+must not be auto-merged.
+
+Hash-pinned installs with `pip install --require-hashes` are deferred until the
+project chooses lock tooling (`pip-compile` or `uv`). Do not hand-write hashes in
+the meantime.
 
 Two guarantees the spark job enforces:
 
@@ -53,7 +68,7 @@ pinned fast-job tooling on the host and run them directly:
 python -m pip install \
   ruff==0.11.6 \
   mypy==2.2.0 \
-  pytest==9.0.2 \
+  pytest==9.0.3 \
   PyYAML==6.0.3 \
   certifi==2026.2.25
 

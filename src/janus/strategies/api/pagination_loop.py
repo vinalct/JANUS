@@ -9,7 +9,7 @@ from pathlib import Path
 from janus.checkpoints import CheckpointState, ExtractionProgressStore
 from janus.models import ExecutionPlan, ExtractedArtifact
 from janus.strategies.http import ApiClient, ApiRequest, HttpRequestThrottle
-from janus.utils.logging import StructuredLogger, redact_url
+from janus.utils.logging import StructuredLogger
 from janus.writers import RawArtifactWriter
 
 from .errors import ApiResponseError
@@ -255,7 +255,7 @@ def extract_concurrent_pages(
                         page_number=submitted.pagination_state.page_number,
                         offset=submitted.pagination_state.offset,
                         status_code=response.status_code,
-                        request_url=redact_url(submitted.request.full_url()),
+                        request_url=submitted.request.redacted_url(),
                         committed_request_count=successful_requests,
                     )
                 stop_submitting = True

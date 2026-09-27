@@ -41,7 +41,12 @@ from janus.strategies.catalog.core import (
 from janus.strategies.catalog.metadata import _apply_per_input_params
 from janus.strategies.http import resolve_url
 from janus.utils.storage import StorageLayout
-from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter
+from janus.writers import (
+    PARTIAL_SUFFIX_MARKER,
+    SIDECAR_SUFFIX,
+    STAGING_DIRNAME,
+    RawArtifactWriter,
+)
 
 _VERSIONED_DOWNLOAD_PATH_PARTS = 3
 
@@ -95,7 +100,10 @@ def _rediscover_raw_artifacts(
         for path in sorted(
             candidate
             for candidate in raw_root.rglob("*")
-            if candidate.is_file() and candidate.suffix != SIDECAR_SUFFIX
+            if candidate.is_file()
+            and candidate.suffix != SIDECAR_SUFFIX
+            and PARTIAL_SUFFIX_MARKER not in candidate.name
+            and STAGING_DIRNAME not in candidate.parts
         )
     )
     if not artifacts:

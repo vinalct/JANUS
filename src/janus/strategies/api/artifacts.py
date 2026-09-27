@@ -17,7 +17,7 @@ from typing import Any
 from janus.models import ExecutionPlan, ExtractedArtifact
 from janus.strategies.api.pagination import PaginationState
 from janus.strategies.common import _raw_page_path, _raw_run_path_prefix
-from janus.utils.storage import StorageLayout
+from janus.utils.storage import StorageLayout, normalize_relative_path
 
 #: Filename suffix written for each supported raw payload format. Shared by the write path
 #: (``_raw_relative_path``) and the rediscovery globs, which is the point.
@@ -54,7 +54,7 @@ def _pages_dir(
     """Return the raw subdirectory for one request input, mirroring _raw_relative_path."""
     raw_dir = storage_layout.resolve_output(plan, "raw").resolved_path
     if raw_path_prefix is not None:
-        raw_dir = raw_dir / raw_path_prefix
+        raw_dir = raw_dir / normalize_relative_path(raw_path_prefix)
     if request_input_count > 1:
         return raw_dir / f"request-input-{request_input_index:06d}"
     return raw_dir / "pages"

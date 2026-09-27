@@ -52,4 +52,9 @@ def format_runtime_permission_error(exc: PermissionError) -> str:
             "`make down && make up` so the Docker/Podman user mapping is "
             "applied correctly."
         )
+    if Path(str(path)).name in {"ivy", "ivy_dir"}:
+        message += (
+            " The Spark Ivy jar cache is never relocated automatically; set "
+            "JANUS_SPARK_IVY_DIR to select a writable location."
+        )
     return message
