@@ -19,6 +19,22 @@ ODCS_SCHEMA = ODCS_SCHEMA_DIR / "odcs-json-schema-v3.2.0.json"
 ODCS_SCHEMA_SHA256 = ODCS_SCHEMA_DIR / "odcs-json-schema-v3.2.0.sha256"
 CONTRACT_FIXTURES = PROJECT_ROOT / "tests" / "fixtures" / "contracts"
 
+FIXTURES = tuple(
+    sorted(
+        path.relative_to(CONTRACT_FIXTURES).as_posix()
+        for directory in ("hostile", "baseline")
+        for path in (CONTRACT_FIXTURES / directory).glob("*.yaml")
+    )
+)
+FIXTURE_ANCHORS = {
+    "hostile/base.yaml",
+    "hostile/base_v2.yaml",
+    "hostile/corrupt_name.yaml",
+    "baseline/concurrency_contract.yaml",
+    "baseline/incremental_upsert_fixture.yaml",
+    "baseline/multi_batch_run_keys.yaml",
+}
+
 
 def _load_yaml(path: Path) -> Any:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -75,9 +91,15 @@ def test_every_checked_in_contract_validates_against_the_pinned_odcs_schema():
         ("odcs_invalid_missing_kind.yaml", False),
         ("odcs_invalid_customproperties_mapping.yaml", False),
         ("odcs_invalid_two_schemas.yaml", True),
+        *((fixture_name, True) for fixture_name in FIXTURES),
     ],
 )
 def test_odcs_validator_rejects_the_hostile_fixtures(fixture_name, expected_valid):
     errors = _render_errors(_odcs_validator(), _load_yaml(CONTRACT_FIXTURES / fixture_name))
 
     assert (errors == []) is expected_valid
+
+
+def test_the_order_19_fixture_sweep_matches_its_anchors():
+    """A glob that matched nothing would drop every order-19 case above without a failure."""
+    assert set(FIXTURES) >= FIXTURE_ANCHORS

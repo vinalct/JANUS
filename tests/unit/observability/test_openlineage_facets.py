@@ -691,3 +691,102 @@ def test_terminal_records_must_describe_one_run():
             lineage_record=replace(lineage, run_id="another-run"),
             run_record=run_record,
         )
+
+
+# --------------------------------------------------------------------------------------
+# the janusRun facet carries what the contract decided (FR-8, D-12)
+# --------------------------------------------------------------------------------------
+
+RED_TASK = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
+ENFORCEMENT_FACET_FIELDS = frozenset(
+    {"contract_preflight_outcome", "schema_evolution", "malformed_rows", "failure_stage"}
+)
+
+
+def _enforcement_event(metadata: RunMetadata, lineage: LineageRecord, report: ValidationReport):
+    run_record = RunRecord.from_run(
+        metadata,
+        lineage,
+        emitted_at=FINISHED_AT,
+        validation_report=report,
+        evidence=RunEvidencePaths(
+            run_metadata_path="metadata/runs/run.json",
+            lineage_path="metadata/lineage/run.json",
+            validation_report_path="metadata/validations/run.json",
+        ),
+    )
+    return build_openlineage_run_event(
+        metadata,
+        DATASETS,
+        lineage_record=lineage,
+        run_record=run_record,
+        graph=GRAPH,
+        data_contract=EXAMPLE_CONTRACT,
+    )
+
+
+class TestOrder19JanusRunFacet:
+
+    @RED_TASK
+    def test_a_run_carries_its_preflight_evolution_and_malformed_count(self):
+        raw, bronze = _materialized_outputs()
+        bronze = replace(bronze, metadata=(("schema_evolution", "added:note"),))
+        metadata = _run_metadata(
+            run_id="enforcement",
+            status="succeeded",
+            outputs=(raw, bronze),
+            records_extracted=2,
+            attributes=(("contract_preflight_outcome", "will_evolve"),),
+        )
+        lineage = _lineage(metadata)
+        report = replace(
+            _validation_report(metadata, failed=False),
+            checks=(
+                ValidationCheck.passed("data", "required_fields", "all present"),
+                ValidationCheck.passed(
+                    "data", "malformed_rows", "no malformed rows", details={"count": 0}
+                ),
+            ),
+        )
+
+        event = _enforcement_event(metadata, lineage, report)
+        facet = event["run"]["facets"]["janusRun"]
+
+        assert facet["contract_preflight_outcome"] == "will_evolve"
+        assert facet["schema_evolution"] == "added:note"
+        assert facet["malformed_rows"] == 0
+        assert facet["failure_stage"] is None
+        _validator(OPENLINEAGE_SCHEMA).validate(event)
+        _validator(JANUS_FACET_SCHEMA).validate(facet)
+
+    @RED_TASK
+    def test_an_enforcement_failure_names_its_stage(self):
+        raw, _ = _materialized_outputs()
+        metadata = replace(
+            _run_metadata(
+                run_id="enforcement",
+                status="failed",
+                outputs=(raw,),
+                records_extracted=2,
+                failure_reason="example.consumer v1.0.0: frame does not match the contract",
+                error_type="ContractViolationError",
+            ),
+            failure_stage="contract_check",
+        )
+        lineage = replace(_lineage(metadata), failure_stage="contract_check")
+
+        event = _enforcement_event(metadata, lineage, _validation_report(metadata, failed=True))
+        facet = event["run"]["facets"]["janusRun"]
+
+        assert facet["failure_stage"] == "contract_check"
+        assert facet["error_type"] == "ContractViolationError"
+        _validator(JANUS_FACET_SCHEMA).validate(facet)
+
+    @RED_TASK
+    def test_the_facet_schema_declares_the_four_fields_as_optional(self):
+        facet_schema = json.loads(JANUS_FACET_SCHEMA.read_text(encoding="utf-8"))
+        declared = facet_schema["$defs"]["JanusRunFacet"]
+
+        assert set(declared["properties"]) >= ENFORCEMENT_FACET_FIELDS
+        assert not ENFORCEMENT_FACET_FIELDS & set(declared["required"])
+        assert declared["properties"]["malformed_rows"] == {"type": ["integer", "null"]}

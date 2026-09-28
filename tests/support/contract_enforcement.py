@@ -13,11 +13,17 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from janus.models import BronzeWriteIntent, WriteResult, resolve_bronze_write_intent
+from janus.models import (
+    BronzeWriteIntent,
+    ExtractedArtifact,
+    WriteResult,
+    resolve_bronze_write_intent,
+)
 from janus.models.data_contracts import odcs_logical_type_for
 from janus.planner import PlannedRun, Planner, PlanningRequest
 from janus.runtime import ExecutedRun, SourceExecutor, SparkSessionProvider
 from janus.strategies.api import ApiResponse, ApiStrategy
+from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SparkDatasetWriter, quote_identifier
 
@@ -84,6 +90,8 @@ class EnforcementCase:
     table_name: str | None = None
     checkpoint_field: str | None = None
     allow_schema_evolution: bool = True
+    read_options: tuple[tuple[str, str], ...] = ()
+    custom_properties: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def for_source(
@@ -96,6 +104,32 @@ class EnforcementCase:
             properties=tuple(properties),
             **options,
         )
+
+    @classmethod
+    def from_contract_file(
+        cls, source_id: str, contract_file: Path, **options: Any
+    ) -> EnforcementCase:
+        """Build a case that carries ``contract_file``'s declaration.
+
+        Properties, version, status and every ``janus.*`` custom property come from the file;
+        ``options`` override them (``enforcement="strict"``). The identity — contract id, name,
+        the schema's table name — stays the case's own, so one fixture can back several
+        sources in one warehouse.
+        """
+        document = yaml.safe_load(Path(contract_file).read_text(encoding="utf-8"))
+        custom = {
+            str(entry["property"]): str(entry["value"])
+            for entry in document.get("customProperties") or ()
+        }
+        declared: dict[str, Any] = {
+            "version": str(document["version"]),
+            "status": str(document["status"]),
+            "compatibility": custom.pop("janus.compatibility"),
+            "enforcement": custom.pop("janus.enforcement"),
+            "custom_properties": tuple(custom.items()),
+        }
+        declared.update(options)
+        return cls.for_source(source_id, document["schema"][0]["properties"], **declared)
 
     @property
     def contract_id(self) -> str:
@@ -146,6 +180,10 @@ def render_contract(case: EnforcementCase) -> dict[str, Any]:
         "customProperties": [
             {"property": "janus.compatibility", "value": case.compatibility},
             {"property": "janus.enforcement", "value": case.enforcement},
+            *(
+                {"property": name, "value": value}
+                for name, value in case.custom_properties
+            ),
         ],
     }
 
@@ -166,6 +204,15 @@ def render_source_config(case: EnforcementCase) -> dict[str, Any]:
         quality["required_fields"] = list(case.required_fields)
     if case.unique_fields:
         quality["unique_fields"] = list(case.unique_fields)
+
+    spark: dict[str, Any] = {
+        "input_format": case.input_format,
+        "write_mode": case.write_mode,
+        "repartition": 1,
+        "partition_by": list(case.partition_by),
+    }
+    if case.read_options:
+        spark["read_options"] = dict(case.read_options)
 
     return {
         "source_id": case.source_id,
@@ -195,12 +242,7 @@ def render_source_config(case: EnforcementCase) -> dict[str, Any]:
         },
         "extraction": extraction,
         "schema": {"contract": case.contract_path.as_posix()},
-        "spark": {
-            "input_format": case.input_format,
-            "write_mode": case.write_mode,
-            "repartition": 1,
-            "partition_by": list(case.partition_by),
-        },
+        "spark": spark,
         "outputs": {
             "raw": {"path": f"data/raw/test/{case.source_id}", "format": case.raw_format},
             "bronze": {
@@ -271,6 +313,35 @@ class FixtureTransport:
         return ApiResponse(request=request, status_code=200, body=body)
 
 
+@dataclass(slots=True)
+class HandoffReplacingStrategy:
+    """The real api strategy, except that the materializer reads ``artifacts`` instead."""
+
+    inner: Any
+    artifacts: tuple[ExtractedArtifact, ...]
+
+    @property
+    def strategy_family(self) -> str:
+        return str(self.inner.strategy_family)
+
+    def plan(self, source_config: Any, run_context: Any, hook: Any = None) -> Any:
+        return self.inner.plan(source_config, run_context, hook=hook)
+
+    def extract(self, plan: Any, hook: Any = None, *, spark: Any = None) -> Any:
+        return self.inner.extract(plan, hook=hook, spark=spark)
+
+    def build_normalization_handoff(
+        self, plan: Any, extraction_result: Any, hook: Any = None
+    ) -> Any:
+        del plan, hook
+        return replace(extraction_result, artifacts=self.artifacts)
+
+    def emit_metadata(
+        self, plan: Any, extraction_result: Any, write_results: Any = (), hook: Any = None
+    ) -> Any:
+        return self.inner.emit_metadata(plan, extraction_result, write_results, hook=hook)
+
+
 def execute_case_with_pages(
     planned_run: PlannedRun,
     pages: Sequence[Any],
@@ -278,6 +349,9 @@ def execute_case_with_pages(
     environment_config: Mapping[str, Any] = ENVIRONMENT_CONFIG,
     *,
     transport: FixtureTransport | None = None,
+    handoff_artifacts: Sequence[ExtractedArtifact] | None = None,
+    provider: SparkSessionProvider | None = None,
+    logger: StructuredLogger | None = None,
 ) -> ExecutedRun:
     """Run one planned case through ``SourceExecutor`` with a private provider."""
     served = transport if transport is not None else FixtureTransport()
@@ -285,16 +359,44 @@ def execute_case_with_pages(
     storage_layout = StorageLayout.from_environment_config(
         environment_config, planned_run.plan.run_context.project_root
     )
-    strategy = ApiStrategy(
+    strategy: Any = ApiStrategy(
         transport_factory=lambda: served,
         storage_layout_factory=lambda plan: storage_layout,
         sleeper=lambda seconds: None,
         clock=lambda: 0.0,
     )
-    provider = SparkSessionProvider({}, {}, session_factory=session_factory)
-    return SourceExecutor().execute(
-        replace(planned_run, strategy=strategy), provider, environment_config
+    if handoff_artifacts is not None:
+        strategy = HandoffReplacingStrategy(strategy, tuple(handoff_artifacts))
+    spark_provider = (
+        provider
+        if provider is not None
+        else SparkSessionProvider({}, {}, session_factory=session_factory)
     )
+    return SourceExecutor(logger=logger).execute(
+        replace(planned_run, strategy=strategy), spark_provider, environment_config
+    )
+
+
+class BorrowedSession:
+    """A live session its caller keeps owning: everything delegates except ``stop()``."""
+
+    def __init__(self, session: Any) -> None:
+        self._session = session
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._session, name)
+
+    def stop(self) -> None:
+        """The owner stops the session, not the provider that borrowed it."""
+
+
+def write_parquet(
+    spark: Any, path: Path, rows: Sequence[tuple[Any, ...]], ddl_schema: str
+) -> Path:
+    """Write ``rows`` as one Parquet directory: a handoff typed by construction."""
+    frame = spark.createDataFrame(list(rows), ddl_schema)
+    frame.coalesce(1).write.mode("overwrite").parquet(str(path))
+    return path
 
 
 def iceberg_session_factory(root: Path, app_name: str = "janus-order19") -> Callable[[], Any]:
@@ -422,8 +524,10 @@ __all__ = [
     "CONTRACTS_DIR",
     "DEFAULT_NAMESPACE",
     "ENVIRONMENT_CONFIG",
+    "BorrowedSession",
     "EnforcementCase",
     "FixtureTransport",
+    "HandoffReplacingStrategy",
     "bronze_rows",
     "contract_property",
     "current_metadata_file",
@@ -444,4 +548,5 @@ __all__ = [
     "validation_checks",
     "write_case_project",
     "write_frame",
+    "write_parquet",
 ]

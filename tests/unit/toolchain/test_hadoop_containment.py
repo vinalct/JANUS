@@ -78,6 +78,12 @@ ALLOWED_SITES: dict[str, str] = {
         "supported types minus hadoop — a set difference that cannot be written without "
         "naming it. Builds no Spark session."
     ),
+    "tests/unit/runtime/test_contract_preflight.py": (
+        "a profile on the pre-migration catalog must make the contract "
+        "preflight report catalog_unavailable, never crash. The test builds that config from "
+        "HADOOP_CATALOG_TYPE and asserts the derivation's named error is the outcome's reason. "
+        "It loads no profile and builds no Spark session."
+    ),
     "tests/unit/toolchain/test_hadoop_containment.py": (
         "This sweep. It must name the token to detect it, and names the session-builder "
         "marker for the same reason; both are matched against its own text, which is why it "

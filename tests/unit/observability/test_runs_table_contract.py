@@ -342,3 +342,42 @@ def test_declaration_stays_well_under_the_module_size_ceiling():
         f"{module_path.name} has {line_count} lines; the declaration should stay "
         "comfortably below the 600-line package ceiling"
     )
+
+
+# --------------------------------------------------------------------------------------
+# the contract-enforcement columns (FR-8, D-14)
+# --------------------------------------------------------------------------------------
+
+RED_TASK = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
+
+
+class TestOrder19EnforcementColumns:
+
+    @RED_TASK
+    def test_the_three_columns_are_appended_after_the_contract_identity(self):
+        appended = tuple(
+            (column.field_id, column.name, column.iceberg_type, column.nullable)
+            for column in RUNS_TABLE_SCHEMA[-3:]
+        )
+
+        assert appended == (
+            (47, "contract_preflight_outcome", IcebergType.STRING, True),
+            (48, "schema_evolution", IcebergType.STRING, True),
+            (49, "malformed_rows", IcebergType.LONG, True),
+        )
+
+    @RED_TASK
+    def test_the_declaration_has_48_columns_and_nothing_was_renumbered(self):
+        assert len(RUNS_TABLE_SCHEMA) == 48
+        assert [column.field_id for column in RUNS_TABLE_SCHEMA] == [
+            *range(1, 43),
+            *range(44, 50),
+        ]
+        assert tuple(
+            (column.name, column.iceberg_type, column.nullable)
+            for column in RUNS_TABLE_SCHEMA[:EXPECTED_COLUMN_COUNT]
+        ) == EXPECTED_SCHEMA
+
+    @RED_TASK
+    def test_new_run_records_use_schema_version_three(self):
+        assert RUN_RECORD_SCHEMA_VERSION == 3

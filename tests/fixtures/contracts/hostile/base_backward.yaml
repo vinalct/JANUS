@@ -1,0 +1,35 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: test.hostile.base_backward
+name: hostile fixture base_backward
+version: 1.0.0
+status: active
+domain: test
+description:
+  purpose: 'base with compatibility backward: Iceberg-safe promotions are admitted.'
+team:
+- username: janus-tests
+  role: owner
+schema:
+- name: hostile_base
+  physicalType: table
+  properties:
+  - name: id
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+  - name: label
+    logicalType: string
+    physicalType: string
+  - name: amount
+    logicalType: integer
+    physicalType: long
+  - name: when
+    logicalType: date
+    physicalType: timestamptz
+customProperties:
+- property: janus.compatibility
+  value: backward
+- property: janus.enforcement
+  value: strict

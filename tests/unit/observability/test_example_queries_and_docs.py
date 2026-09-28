@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from janus.observability.runs_table import RUNS_TABLE_SCHEMA
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -114,3 +116,52 @@ def test_every_local_link_in_the_operator_guide_resolves():
             if not path_text or "://" in path_text:
                 continue
             assert (guide_path.parent / path_text).resolve().exists(), (guide_path, target)
+
+
+# --------------------------------------------------------------------------------------
+# the schema-drift query and the three enforcement columns (FR-8)
+# --------------------------------------------------------------------------------------
+
+RED_TASK = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
+SCHEMA_DRIFT_QUERY = "schema-drift-by-source.sql"
+ENFORCEMENT_COLUMNS = ("contract_preflight_outcome", "schema_evolution", "malformed_rows")
+ENFORCEMENT_ERRORS = (
+    "ContractViolationError",
+    "MalformedRowsError",
+    "ContractPreflightError",
+    "SchemaEvolutionRefusedError",
+)
+
+
+class TestOrder19SchemaDriftQuery:
+
+    @RED_TASK
+    def test_the_drift_query_is_published_on_the_latest_row_of_each_run(self):
+        sql = (QUERY_DIRECTORY / SCHEMA_DRIFT_QUERY).read_text(encoding="utf-8")
+
+        assert sql.count(";") == 1 and sql.rstrip().endswith(";")
+        assert "FROM janus.metadata.runs" in sql
+        assert "ROW_NUMBER() OVER (" in sql
+        assert "PARTITION BY run_id" in sql
+        assert "ORDER BY emitted_at DESC" in sql
+
+    @RED_TASK
+    def test_the_drift_query_uses_every_enforcement_signal(self):
+        sql = (QUERY_DIRECTORY / SCHEMA_DRIFT_QUERY).read_text(encoding="utf-8")
+        identifiers = set(re.findall(r"\b[a-z][a-z0-9_]*\b", sql))
+
+        assert set(ENFORCEMENT_COLUMNS) <= identifiers
+        assert "LAG(schema_version)" in sql
+        for outcome in ("will_evolve", "refused", "catalog_unavailable"):
+            assert f"'{outcome}'" in sql
+        for error_type in ENFORCEMENT_ERRORS:
+            assert f"'{error_type}'" in sql
+
+    @RED_TASK
+    def test_the_operator_register_documents_the_three_columns(self):
+        guide = OPERATOR_GUIDE.read_text(encoding="utf-8")
+        register = guide.split("## Column register", 1)[1].split("## Published Spark SQL", 1)[0]
+
+        for column in ENFORCEMENT_COLUMNS:
+            assert f"| `{column}` |" in register
+        assert SCHEMA_DRIFT_QUERY in guide

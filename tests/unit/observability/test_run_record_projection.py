@@ -746,3 +746,134 @@ def test_the_projection_imports_no_runtime_or_transport_module():
         f"importing janus.observability.records loaded {result.stdout.strip()}, which "
         "inverts the layering TASK-03 fixed."
     )
+
+
+# --------------------------------------------------------------------------------------
+# what the contract decided, projected into three columns (FR-8, D-11, D-14)
+# --------------------------------------------------------------------------------------
+
+RED_TASK = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
+
+
+def _bronze_with(plan: ExecutionPlan, *evolutions: str) -> tuple[WriteResult, ...]:
+    """Raw plus one bronze result per batch, each carrying the writer's evolution render."""
+    raw = _write_results(plan, bronze=False)
+    return raw + tuple(
+        WriteResult.from_plan(
+            plan,
+            "bronze",
+            path=BRONZE_TABLE,
+            format_name="iceberg",
+            mode="append",
+            records_written=1,
+            metadata={"schema_evolution": evolution},
+        )
+        for evolution in evolutions
+    )
+
+
+def _malformed_report(plan: ExecutionPlan, *checks: ValidationCheck) -> ValidationReport:
+    return ValidationReport.from_plan(
+        plan,
+        checks=(ValidationCheck.passed("data", "required_fields", "all present"), *checks),
+        emitted_at=FINISHED_AT,
+    )
+
+
+def _record(
+    tmp_path: Path,
+    *,
+    attributes: dict[str, str] | None = None,
+    write_results: tuple[WriteResult, ...] | None = None,
+    report: ValidationReport | None = None,
+) -> RunRecord:
+    plan = _plan(tmp_path, run_id="projection", attributes=attributes)
+    extraction_result = _extraction_result(plan)
+    run_metadata, lineage_record = _records(
+        plan,
+        status="succeeded",
+        extraction_result=extraction_result,
+        write_results=write_results if write_results is not None else _write_results(plan),
+    )
+    return RunRecord.from_run(
+        run_metadata,
+        lineage_record,
+        emitted_at=EMITTED_AT,
+        validation_report=report,
+        evidence=_evidence(tmp_path),
+    )
+
+
+class TestOrder19EnforcementProjection:
+
+    @RED_TASK
+    def test_the_preflight_outcome_is_lifted_from_its_run_attribute(self, tmp_path):
+        lifted = _record(tmp_path, attributes={"contract_preflight_outcome": "will_evolve"})
+        absent = _record(tmp_path)
+
+        assert lifted.contract_preflight_outcome == "will_evolve"
+        assert absent.contract_preflight_outcome is None
+
+    @RED_TASK
+    def test_an_unknown_preflight_outcome_is_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="contract_preflight_outcome"):
+            _record(tmp_path, attributes={"contract_preflight_outcome": "probably_fine"})
+
+    @RED_TASK
+    def test_schema_evolution_is_the_first_change_any_bronze_batch_made(self, tmp_path):
+        plan = _plan(tmp_path, run_id="projection")
+
+        changed = _record(tmp_path, write_results=_bronze_with(plan, "none", "added:note"))
+        unchanged = _record(tmp_path, write_results=_bronze_with(plan, "none", "none"))
+        no_bronze = _record(tmp_path, write_results=_write_results(plan, bronze=False))
+        pre_order = _record(tmp_path)
+
+        assert changed.schema_evolution == "added:note"
+        assert unchanged.schema_evolution == "none"
+        assert no_bronze.schema_evolution is None
+        assert pre_order.schema_evolution is None
+
+    @RED_TASK
+    def test_malformed_rows_is_null_until_counted_and_the_sum_once_counted(self, tmp_path):
+        plan = _plan(tmp_path, run_id="projection")
+
+        def malformed(outcome: str, count: str | None) -> ValidationCheck:
+            details = {} if count is None else {"count": count}
+            factory = getattr(ValidationCheck, outcome)
+            return factory("data", "malformed_rows", f"{outcome} malformed rows", details=details)
+
+        counted = _record(tmp_path, report=_malformed_report(plan, malformed("failed", "2")))
+        summed = _record(
+            tmp_path,
+            report=_malformed_report(plan, malformed("passed", "2"), malformed("passed", "3")),
+        )
+        clean = _record(tmp_path, report=_malformed_report(plan, malformed("passed", "0")))
+        parquet = _record(tmp_path, report=_malformed_report(plan, malformed("skipped", None)))
+        absent = _record(tmp_path, report=_malformed_report(plan))
+        not_validated = _record(tmp_path)
+
+        assert counted.malformed_rows == 2
+        assert summed.malformed_rows == 5
+        assert clean.malformed_rows == 0, "zero means counted and clean, not absent"
+        assert parquet.malformed_rows is None
+        assert absent.malformed_rows is None
+        assert not_validated.malformed_rows is None
+
+    @RED_TASK
+    def test_the_row_always_carries_the_three_columns(self, tmp_path):
+        payload = _record(tmp_path).to_dict()
+
+        assert {"contract_preflight_outcome", "schema_evolution", "malformed_rows"} <= set(payload)
+        assert payload["record_schema_version"] == 3
+
+    @RED_TASK
+    def test_the_duplicated_vocabulary_cannot_drift_from_its_owners(self):
+        """Observability may not import runtime or writers, so the strings are spelled twice
+        and held together here — the sanctioned single-definition-with-drift-test shape."""
+        from janus.observability import vocabulary
+        from janus.runtime.contract_preflight import PREFLIGHT_ATTRIBUTE, PREFLIGHT_OUTCOMES
+        from janus.writers.evolution import PLAN_METADATA_KEY
+
+        assert vocabulary.PREFLIGHT_OUTCOMES == PREFLIGHT_OUTCOMES
+        assert vocabulary.PREFLIGHT_ATTRIBUTE_NAME == PREFLIGHT_ATTRIBUTE
+        assert vocabulary.SCHEMA_EVOLUTION_METADATA_KEY == PLAN_METADATA_KEY
