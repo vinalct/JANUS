@@ -1,0 +1,7 @@
+[
+  {"id": "r1", "label": "one", "amount": 10, "when": "2026-09-01T10:00:00Z"},
+  {"id": "r2", "label": "two", "amount": 20, "when": "2026-09-02T10:00:00Z"},
+  {"id": "r3", "label": "three", "amount": "abc", "when": "2026-09-03T10:00:00Z"},
+  {"id": "r4", "label": "four", "amount": 40, "when": "2026-09-04T10:00:00Z"},
+  {"id": "r5", "label": "five", "amount": 12.5, "when": "2026-09-05T10:00:00Z"}
+]
