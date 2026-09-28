@@ -1,3 +1,12 @@
+from janus.quality.contract_checks import (
+    CORRUPT_RECORD_COLUMN,
+    ContractCheck,
+    ContractEnforcementError,
+    ContractMismatch,
+    ContractViolationError,
+    FrameColumn,
+    check_frame_against_contract,
+)
 from janus.quality.models import (
     SUPPORTED_VALIDATION_OUTCOMES,
     SUPPORTED_VALIDATION_PHASES,
@@ -20,8 +29,14 @@ from janus.quality.validators import (
 )
 
 __all__ = [
+    "CORRUPT_RECORD_COLUMN",
     "SUPPORTED_VALIDATION_OUTCOMES",
     "SUPPORTED_VALIDATION_PHASES",
+    "ContractCheck",
+    "ContractEnforcementError",
+    "ContractMismatch",
+    "ContractViolationError",
+    "FrameColumn",
     "PersistedValidationReport",
     "QualityGate",
     "QualityValidationError",
@@ -29,6 +44,7 @@ __all__ = [
     "ValidationCheck",
     "ValidationReport",
     "ValidationReportStore",
+    "check_frame_against_contract",
     "resolve_schema_expectation",
     "validate_bronze_key_uniqueness",
     "validate_materialized_outputs",

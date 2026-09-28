@@ -11,6 +11,7 @@ from janus.models.data_contracts import (
     contract_properties_from_spark_json,
     spark_struct_json,
 )
+from janus.quality.contract_checks import FrameColumn
 from janus.utils.environment import resolve_project_path
 
 
@@ -70,7 +71,7 @@ def spark_schema_from_contract(contract: DataContract) -> Any:
     try:
         from pyspark.sql.types import StructType
     except ImportError:
-        return _FieldNameSchema(contract.column_names)
+        return _FieldNameSchema(contract.schema.properties)
     return StructType.fromJson(struct_json)
 
 
@@ -79,18 +80,35 @@ def contract_properties_from_spark_schema(struct_type: Any) -> tuple[ContractPro
     return contract_properties_from_spark_json(struct_type.jsonValue())
 
 
+def frame_columns_from_spark_schema(schema: Any) -> tuple[FrameColumn, ...]:
+    """StructType -> FrameColumn tuple via ``schema.jsonValue()['fields']`` — the ONE adapter."""
+    return tuple(
+        FrameColumn(
+            name=field["name"],
+            spark_json_type=field["type"],
+            nullable=bool(field.get("nullable", True)),
+        )
+        for field in schema.jsonValue()["fields"]
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _FieldNameSchema:
     """Minimal schema facade for unit tests that run without PySpark installed."""
 
-    field_names: tuple[str, ...]
+    properties: tuple[ContractProperty, ...]
 
     def fieldNames(self) -> list[str]:
-        return list(self.field_names)
+        return [prop.name for prop in self.properties]
+
+    def jsonValue(self) -> dict[str, Any]:
+        """The struct JSON ``StructType.fromJson`` reads, which its ``jsonValue()`` returns."""
+        return spark_struct_json(self.properties)
 
 
 __all__ = [
     "contract_properties_from_spark_schema",
+    "frame_columns_from_spark_schema",
     "resolve_contract_path_for_plan",
     "resolve_declared_path",
     "resolve_schema_path_for_plan",

@@ -14,8 +14,14 @@ import pytest
 
 from janus.models.data_contracts import ContractProperty, ContractSchema, DataContract
 from janus.models.data_contracts import load_data_contract as _load_data_contract
-
-pytestmark = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
+from janus.quality.contract_checks import (
+    CORRUPT_RECORD_COLUMN,
+    ContractCheck,
+    ContractEnforcementError,
+    ContractViolationError,
+    FrameColumn,
+    check_frame_against_contract,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HOSTILE = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "hostile"
@@ -63,16 +69,14 @@ def _without_properties(contract: DataContract) -> DataContract:
     return empty
 
 
-def _frame(*columns: tuple[str, Any] | tuple[str, Any, bool]) -> tuple[Any, ...]:
-    from janus.quality.contract_checks import FrameColumn
-
+def _frame(*columns: tuple[str, Any] | tuple[str, Any, bool]) -> tuple[FrameColumn, ...]:
     return tuple(
         FrameColumn(column[0], column[1], column[2] if len(column) > 2 else True)
         for column in columns
     )
 
 
-def _base_frame(**overrides: Any) -> tuple[Any, ...]:
+def _base_frame(**overrides: Any) -> tuple[FrameColumn, ...]:
     """The base frame with some types replaced; a ``None`` override drops the column."""
     columns = []
     for name, spark_type in BASE_FRAME_TYPES:
@@ -111,7 +115,7 @@ def _scalar(name: str, physical_type: str, **options: Any) -> ContractProperty:
     return ContractProperty(name, physical_type, logical, **options)
 
 
-def _kinds(check: Any) -> list[tuple[str, str]]:
+def _kinds(check: ContractCheck) -> list[tuple[str, str]]:
     return [(mismatch.kind, mismatch.column) for mismatch in check.mismatches]
 
 
@@ -119,8 +123,6 @@ def _kinds(check: Any) -> list[tuple[str, str]]:
 
 
 def test_an_identical_frame_is_ok_with_no_mismatches():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     check = check_frame_against_contract(_base_frame(), _contract("base"))
 
     assert check.ok is True
@@ -129,8 +131,6 @@ def test_an_identical_frame_is_ok_with_no_mismatches():
 
 
 def test_a_missing_column_is_one_mismatch_named_after_it():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     check = check_frame_against_contract(_base_frame(amount=None), _contract("base"))
 
     assert check.ok is False
@@ -141,8 +141,6 @@ def test_a_missing_column_is_one_mismatch_named_after_it():
 @pytest.mark.parametrize("fixture", ["base", "base_backward", "base_frozen"])
 def test_an_undeclared_frame_column_is_a_mismatch_in_every_compatibility_mode(fixture):
     """D-4: a new upstream field is admitted by declaring it, never by a batch carrying it."""
-    from janus.quality.contract_checks import check_frame_against_contract
-
     frame = (*_base_frame(), *_frame(("note", "string")))
     check = check_frame_against_contract(frame, _contract(fixture))
 
@@ -151,8 +149,6 @@ def test_an_undeclared_frame_column_is_a_mismatch_in_every_compatibility_mode(fi
 
 
 def test_names_compare_exactly_and_case_sensitively():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     frame = _frame(("ID", "string"), ("label", "string"), ("amount", "long"), ("when", "timestamp"))
     check = check_frame_against_contract(frame, _contract("base"))
 
@@ -163,8 +159,6 @@ def test_names_compare_exactly_and_case_sensitively():
 
 
 def test_a_scalar_type_mismatch_is_reported_in_vocabulary_spellings():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     check = check_frame_against_contract(_base_frame(amount="string"), _contract("base"))
 
     assert _kinds(check) == [("type_mismatch", "amount")]
@@ -175,8 +169,6 @@ def test_a_scalar_type_mismatch_is_reported_in_vocabulary_spellings():
 
 
 def test_timestamp_without_zone_is_not_timestamptz():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     check = check_frame_against_contract(_base_frame(when="timestamp_ntz"), _contract("base"))
 
     assert _kinds(check) == [("type_mismatch", "when")]
@@ -187,8 +179,6 @@ def test_timestamp_without_zone_is_not_timestamptz():
 
 
 def test_a_decimal_scale_difference_is_a_type_mismatch():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     contract = _contract("base_decimal_18_2")
     check = check_frame_against_contract(_base_frame(amount="decimal(18,4)"), contract)
 
@@ -200,8 +190,6 @@ def test_a_decimal_scale_difference_is_a_type_mismatch():
 
 
 def test_an_unmappable_spark_type_is_a_mismatch_carrying_the_raw_spelling():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     check = check_frame_against_contract(_base_frame(amount="short"), _contract("base"))
 
     assert _kinds(check) == [("type_mismatch", "amount")]
@@ -209,8 +197,6 @@ def test_an_unmappable_spark_type_is_a_mismatch_carrying_the_raw_spelling():
 
 
 def test_a_nested_struct_child_mismatch_is_named_by_its_dotted_path():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     code = _scalar("code", "string")
     inner = ContractProperty("inner", "struct", "object", properties=(code,))
     payload = ContractProperty("payload", "struct", "object", properties=(inner,))
@@ -224,8 +210,6 @@ def test_a_nested_struct_child_mismatch_is_named_by_its_dotted_path():
 
 
 def test_array_elements_and_map_values_have_their_own_path_suffixes():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     items = ContractProperty(
         "items", "array", "array", items=_scalar("element", "string")
     )
@@ -249,8 +233,6 @@ def test_array_elements_and_map_values_have_their_own_path_suffixes():
 
 
 def test_a_container_against_a_scalar_is_one_mismatch_at_the_container():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     inner = ContractProperty("inner", "struct", "object", properties=(_scalar("code", "string"),))
     payload = ContractProperty("payload", "struct", "object", properties=(inner,))
     contract = _with_properties(_contract("base"), _scalar("id", "string"), payload)
@@ -261,8 +243,6 @@ def test_a_container_against_a_scalar_is_one_mismatch_at_the_container():
 
 
 def test_a_map_key_type_difference_is_one_mismatch_at_the_map():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     attrs = ContractProperty(
         "attrs",
         "map",
@@ -282,8 +262,6 @@ def test_a_map_key_type_difference_is_one_mismatch_at_the_map():
 
 
 def test_a_nullable_frame_column_the_contract_requires_is_recorded_not_a_mismatch():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     frame = _frame(("id", "string", True), *((n, t) for n, t in BASE_FRAME_TYPES[1:]))
     check = check_frame_against_contract(frame, _contract("base"))
 
@@ -292,8 +270,6 @@ def test_a_nullable_frame_column_the_contract_requires_is_recorded_not_a_mismatc
 
 
 def test_a_non_nullable_frame_column_the_contract_leaves_optional_is_nothing():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     frame = _frame(
         ("id", "string", False),
         ("label", "string", False),
@@ -311,11 +287,6 @@ def test_a_non_nullable_frame_column_the_contract_leaves_optional_is_nothing():
 
 
 def test_the_corrupt_record_column_is_ignored_only_while_the_reader_still_carries_it():
-    from janus.quality.contract_checks import (
-        CORRUPT_RECORD_COLUMN,
-        check_frame_against_contract,
-    )
-
     assert CORRUPT_RECORD_COLUMN == CORRUPT
     frame = (*_base_frame(), *_frame((CORRUPT, "string")))
 
@@ -330,8 +301,6 @@ def test_the_corrupt_record_column_is_ignored_only_while_the_reader_still_carrie
 
 
 def test_an_empty_frame_reports_every_declared_column_missing():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     check = check_frame_against_contract((), _contract("base"))
 
     assert sorted(_kinds(check)) == [
@@ -343,8 +312,6 @@ def test_an_empty_frame_reports_every_declared_column_missing():
 
 
 def test_an_empty_contract_still_produces_a_result():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     check = check_frame_against_contract(_base_frame(), _without_properties(_contract("base")))
 
     assert check.checked_columns == 0
@@ -352,8 +319,6 @@ def test_an_empty_contract_still_produces_a_result():
 
 
 def test_mismatches_are_sorted_by_column_then_kind():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     frame = (*_base_frame(amount="string", label=None), *_frame(("extra", "string")))
     check = check_frame_against_contract(frame, _contract("base"))
 
@@ -365,8 +330,6 @@ def test_mismatches_are_sorted_by_column_then_kind():
 
 
 def test_the_check_is_frozen_and_carries_the_contract_identity():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     contract = _contract("base")
     check = check_frame_against_contract(_base_frame(), contract)
 
@@ -383,8 +346,6 @@ def test_the_check_is_frozen_and_carries_the_contract_identity():
 
 
 def test_the_check_renders_as_the_schema_expectations_validation_check():
-    from janus.quality.contract_checks import check_frame_against_contract
-
     passed = check_frame_against_contract(_base_frame(), _contract("base")).to_validation_check()
     failed = check_frame_against_contract(
         _base_frame(amount="string"), _contract("base")
@@ -404,12 +365,6 @@ def test_the_check_renders_as_the_schema_expectations_validation_check():
 
 
 def test_the_violation_names_the_contract_and_lists_one_mismatch_per_line():
-    from janus.quality.contract_checks import (
-        ContractEnforcementError,
-        ContractViolationError,
-        check_frame_against_contract,
-    )
-
     contract = _contract("base")
     check = check_frame_against_contract(_base_frame(amount="string", label=None), contract)
     error = ContractViolationError(check, batch_index=2, batch_count=3)
