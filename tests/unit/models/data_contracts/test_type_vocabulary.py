@@ -15,6 +15,7 @@ from janus.models.data_contracts.vocabulary import (
     DECIMAL_TYPE_NAME,
     VOCABULARY,
     UnknownPhysicalTypeError,
+    UnsupportedIcebergTypeError,
     UnsupportedSparkTypeError,
     VocabularyType,
     contract_properties_from_spark_json,
@@ -22,6 +23,7 @@ from janus.models.data_contracts.vocabulary import (
     iceberg_type_name,
     odcs_logical_type_for,
     parse_physical_type,
+    physical_type_from_iceberg_name,
     physical_type_from_spark_json,
     spark_json_type,
     spark_struct_json,
@@ -45,9 +47,7 @@ ALLOWED_ODCS_LOGICAL_TYPES = frozenset(
     {"array", "boolean", "date", "integer", "number", "object", "string"}
 )
 
-_SCALAR_ENTRIES = tuple(
-    entry for entry in VOCABULARY if entry.name not in CONTAINER_TYPE_NAMES
-)
+_SCALAR_ENTRIES = tuple(entry for entry in VOCABULARY if entry.name not in CONTAINER_TYPE_NAMES)
 
 
 def _scalar(name: str, *, required: bool = False) -> ContractProperty:
@@ -155,6 +155,34 @@ def test_every_container_round_trips_through_spark_json(prop: ContractProperty):
     assert physical_type_from_spark_json(spark_json_type(prop)) == prop.physical_type
 
 
+@pytest.mark.parametrize("entry", _SCALAR_ENTRIES, ids=lambda entry: entry.name)
+def test_every_scalar_entry_round_trips_through_iceberg_name(entry: VocabularyType):
+    assert physical_type_from_iceberg_name(entry.iceberg_name) == entry.name
+
+
+@pytest.mark.parametrize("spelling", ["decimal(18,2)", "decimal(18, 2)"])
+def test_iceberg_decimal_spacings_map_to_the_same_physical_type(spelling: str):
+    assert physical_type_from_iceberg_name(spelling) == "decimal(18,2)"
+
+
+@pytest.mark.parametrize(
+    ("spelling", "physical"),
+    [
+        ("struct<1: a: optional string>", "struct"),
+        ("list<string>", "array"),
+        ("map<string, long>", "map"),
+    ],
+)
+def test_iceberg_container_names_map_to_their_top_level_type(spelling: str, physical: str):
+    assert physical_type_from_iceberg_name(spelling) == physical
+
+
+@pytest.mark.parametrize("spelling", ["uuid", "fixed[16]", "time", "timestamp_ns"])
+def test_unsupported_iceberg_types_are_refused(spelling: str):
+    with pytest.raises(UnsupportedIcebergTypeError):
+        physical_type_from_iceberg_name(spelling)
+
+
 def test_representative_decimal_round_trips_with_its_precision_and_scale():
     prop = _scalar(DECIMAL_TYPE_NAME)
 
@@ -177,9 +205,7 @@ def test_the_timestamp_pin_crosses_spark_and_iceberg_in_both_directions():
 
 
 def test_odcs_logical_types_follow_the_pinned_table():
-    assert {
-        entry.name: entry.odcs_logical_type for entry in VOCABULARY
-    } == {
+    assert {entry.name: entry.odcs_logical_type for entry in VOCABULARY} == {
         "boolean": "boolean",
         "integer": "integer",
         "long": "integer",
@@ -202,9 +228,7 @@ def test_container_iceberg_names_recurse_through_their_children():
 
     assert iceberg_type_name(array_prop) == "list<string>"
     assert iceberg_type_name(map_prop) == "map<string, long>"
-    assert iceberg_type_name(struct_prop) == (
-        "struct<leaf: int, middle: struct<deep: timestamp>>"
-    )
+    assert iceberg_type_name(struct_prop) == ("struct<leaf: int, middle: struct<deep: timestamp>>")
 
 
 def test_container_spark_json_carries_child_nullability():
@@ -310,9 +334,7 @@ def test_contract_properties_invert_the_generated_struct_json():
     assert tuple(prop.physical_type for prop in rebuilt) == tuple(
         prop.physical_type for prop in properties
     )
-    assert tuple(prop.required for prop in rebuilt) == tuple(
-        prop.required for prop in properties
-    )
+    assert tuple(prop.required for prop in rebuilt) == tuple(prop.required for prop in properties)
     assert tuple(prop.logical_type for prop in rebuilt) == tuple(
         odcs_logical_type_for(prop.physical_type) for prop in properties
     )

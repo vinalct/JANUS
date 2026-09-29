@@ -13,8 +13,6 @@ import pytest
 from janus.models.data_contracts import DataContract, load_data_contract
 from janus.normalizers import NORMALIZATION_METADATA_COLUMNS
 
-pytestmark = pytest.mark.xfail(strict=True, reason="red until TASK-09 (order-19)")
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HOSTILE = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "hostile"
 MODULE_PATH = PROJECT_ROOT / "src" / "janus" / "writers" / "evolution.py"
@@ -181,9 +179,7 @@ def test_contract_major_reads_the_first_semver_component(version, major):
 
 
 def test_an_unstamped_table_counts_as_major_zero_and_admits_one_declared_breaking_change():
-    plan = _plan(
-        _contract("base_dropped"), _live("base"), recorded=None, strategy="replace_table"
-    )
+    plan = _plan(_contract("base_dropped"), _live("base"), recorded=None, strategy="replace_table")
 
     assert (plan.recorded_major, plan.contract_major) == (0, 1)
     assert plan.outcome == "breaking_replace"
@@ -286,9 +282,7 @@ def test_only_the_empty_diff_is_a_noop():
         "noop": _plan(_contract("base"), _live("base")),
         "evolve": _plan(_contract("base_plus_nullable"), _live("base")),
         "refused": _plan(_contract("base_frozen"), _live("base_int")),
-        "breaking_replace": _plan(
-            _contract("base_v2"), _live("base"), strategy="replace_table"
-        ),
+        "breaking_replace": _plan(_contract("base_v2"), _live("base"), strategy="replace_table"),
     }
 
     assert {outcome: plan.outcome for outcome, plan in plans.items()} == {
@@ -296,6 +290,50 @@ def test_only_the_empty_diff_is_a_noop():
     }
     assert [outcome for outcome, plan in plans.items() if plan.is_noop] == ["noop"]
     assert [outcome for outcome, plan in plans.items() if plan.evolves] == ["evolve"]
+
+
+def test_reordering_and_existing_required_flag_changes_need_no_ddl():
+    reordered = _plan(_contract("base_reordered"), _live("base"))
+    assert reordered.outcome == "noop"
+
+    base = _contract("base")
+    label = base.schema.properties[1]
+    changed = replace(
+        base,
+        schema=replace(
+            base.schema,
+            properties=(
+                base.schema.properties[0],
+                replace(label, required=True),
+                *base.schema.properties[2:],
+            ),
+        ),
+    )
+    assert _plan(changed, _live("base")).outcome == "noop"
+
+
+@pytest.mark.parametrize("stamp", ["", "1.0", "not-a-version"])
+def test_invalid_recorded_versions_fail_closed_even_with_a_major_bump(stamp):
+    plan = _plan(
+        _contract("base_v2"),
+        _live("base"),
+        recorded=stamp,
+        strategy="replace_table",
+    )
+    assert plan.outcome == "refused"
+    assert "invalid_recorded_version" in _refusal_kinds(plan)
+
+
+def test_unsupported_live_type_is_a_refusal():
+    from janus.writers.evolution import LiveColumn
+
+    live = tuple(
+        LiveColumn(column.name, "uuid" if column.name == "amount" else column.physical_type, False)
+        for column in _live("base")
+    )
+    plan = _plan(_contract("base"), live)
+    assert plan.outcome == "refused"
+    assert _refusal_kinds(plan) == {"retyped"}
 
 
 def test_the_plan_is_frozen():
@@ -306,7 +344,7 @@ def test_the_plan_is_frozen():
 
 
 def test_the_planner_is_total_over_every_fixture_pair():
-    names = sorted(path.stem for path in HOSTILE.glob("*.yaml") if path.stem != "base_max3")
+    names = sorted(path.stem for path in HOSTILE.glob("base*.yaml"))
     contracts = {name: _contract(name) for name in names}
     lives = {name: _live(name) for name in names}
 
