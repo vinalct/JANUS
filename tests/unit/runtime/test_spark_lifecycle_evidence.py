@@ -16,7 +16,6 @@ import pytest
 
 import janus.runtime.spark_lifecycle as spark_lifecycle
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext, WriteResult
-from janus.models.data_contracts import load_data_contract
 from janus.models.source_config import (
     CombinedRequestInputsConfig,
     DateWindowRequestInputsConfig,
@@ -30,7 +29,7 @@ from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.runtime.spark_lifecycle import scoped_request_input_session
 from janus.utils.logging import build_structured_logger
 from janus.utils.storage import StorageLayout
-from tests.support.contract_frames import read_frame
+from tests.support.contract_frames import lenient_contract_for_fake_frame, read_frame
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -550,7 +549,7 @@ def _planned_run(
     )
     return PlannedRun(
         plan=ExecutionPlan.from_source_config(source_config, run_context).with_data_contract(
-            load_data_contract(PROJECT_ROOT / source_config.schema.contract)
+            lenient_contract_for_fake_frame(PROJECT_ROOT / source_config.schema.contract)
         ),
         strategy=RequestInputAwareStrategy(calls, provider),
         hook=None,

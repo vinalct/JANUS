@@ -2,7 +2,7 @@ apiVersion: v3.2.0
 kind: DataContract
 id: example.federal_open_data_example
 name: Federal open data example
-version: 1.0.0
+version: 1.0.1
 status: active
 domain: example
 description:
@@ -49,4 +49,4 @@ customProperties:
   - property: janus.compatibility
     value: additive
   - property: janus.enforcement
-    value: lenient
+    value: strict

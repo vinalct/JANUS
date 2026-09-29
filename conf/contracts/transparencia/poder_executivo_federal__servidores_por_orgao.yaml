@@ -2,7 +2,7 @@ apiVersion: v3.2.0
 kind: DataContract
 id: transparencia.poder_executivo_federal__servidores_por_orgao
 name: Portal da Transparencia - Servidores agregados por orgao
-version: 1.0.0
+version: 1.0.1
 status: active
 domain: transparencia
 description:
@@ -232,4 +232,4 @@ customProperties:
 - property: janus.compatibility
   value: additive
 - property: janus.enforcement
-  value: lenient
+  value: strict

@@ -2,7 +2,7 @@ apiVersion: v3.2.0
 kind: DataContract
 id: estatisticas.agro_abacaxi_pronaf
 name: IBGE - Quantidade produzida de abacaxi em estabelecimentos agropecuarios
-version: 1.0.0
+version: 1.0.1
 status: active
 domain: estatisticas
 description:
@@ -382,7 +382,7 @@ customProperties:
 - property: janus.compatibility
   value: additive
 - property: janus.enforcement
-  value: lenient
+  value: strict
 - property: janus.draftedFrom
   value: fixture tests/fixtures/ibge/agro_abacaxi_pronaf_2006_flat.json, tests/fixtures/ibge/sidra_flat_without_nc_nn.json
     (2 normalized rows); field names, types, nested structure and order matched the TASK-01 inferred golden;

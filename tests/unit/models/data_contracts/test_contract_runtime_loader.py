@@ -55,7 +55,7 @@ def test_example_contract_loads_into_the_complete_frozen_model():
         api_version="v3.2.0",
         id="example.federal_open_data_example",
         name="Federal open data example",
-        version="1.0.0",
+        version="1.0.1",
         status="active",
         domain="example",
         purpose=(
@@ -98,7 +98,7 @@ def test_example_contract_loads_into_the_complete_frozen_model():
         ),
         janus=JanusContractOptions(
             compatibility="additive",
-            enforcement="lenient",
+            enforcement="strict",
         ),
         schema_version=expected_hash,
     )

@@ -2,7 +2,7 @@ apiVersion: v3.2.0
 kind: DataContract
 id: transparencia.gastos_cartoes__cartoes
 name: Portal da Transparencia - Gastos Cartões
-version: 1.0.0
+version: 1.0.1
 status: active
 domain: transparencia
 description:
@@ -581,4 +581,4 @@ customProperties:
 - property: janus.compatibility
   value: additive
 - property: janus.enforcement
-  value: lenient
+  value: strict

@@ -11,7 +11,6 @@ import pytest
 
 import janus.scripts.checksums as checksums
 from janus.models import ExecutionPlan, RunContext, WriteResult
-from janus.models.data_contracts import load_data_contract
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
 from janus.registry import load_registry
@@ -26,7 +25,11 @@ from janus.strategies.catalog import CatalogStrategy
 from janus.strategies.files import FileStrategy
 from janus.utils.storage import StorageLayout
 from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter
-from tests.support.contract_frames import contract_schema, read_frame
+from tests.support.contract_frames import (
+    contract_schema,
+    lenient_contract_for_fake_frame,
+    read_frame,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "dados_abertos_catalog"
@@ -779,7 +782,7 @@ def test_raw_to_bronze_loader_rehydrates_file_archive_members_from_raw_downloads
         plan=ExecutionPlan.from_source_config(
             source_config, run_context
         ).with_data_contract(
-            load_data_contract(PROJECT_ROOT / source_config.schema.contract)
+            lenient_contract_for_fake_frame(PROJECT_ROOT / source_config.schema.contract)
         ),
         strategy=FileStrategy(),
         hook=None,
@@ -1047,9 +1050,9 @@ def _planned_run(tmp_path: Path, calls: list[str]) -> PlannedRun:
 
 
 def _with_contract(plan: ExecutionPlan) -> ExecutionPlan:
-    """The source's checked-in contract, which the planner would have attached."""
+    """Use the source schema with lenient data checks for frame doubles."""
     return plan.with_data_contract(
-        load_data_contract(PROJECT_ROOT / plan.source_config.schema.contract)
+        lenient_contract_for_fake_frame(PROJECT_ROOT / plan.source_config.schema.contract)
     )
 
 

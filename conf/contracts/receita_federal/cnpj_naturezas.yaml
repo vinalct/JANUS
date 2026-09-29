@@ -2,7 +2,7 @@ apiVersion: v3.2.0
 kind: DataContract
 id: receita_federal.cnpj_naturezas
 name: Receita Federal - CNPJ Naturezas Juridicas
-version: 1.0.0
+version: 1.0.1
 status: active
 domain: receita_federal
 description:
@@ -56,4 +56,4 @@ customProperties:
 - property: janus.compatibility
   value: additive
 - property: janus.enforcement
-  value: lenient
+  value: strict

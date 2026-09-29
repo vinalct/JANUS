@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
-from janus.models.data_contracts import DataContract
+from janus.models.data_contracts import DataContract, load_data_contract
 from janus.schema_contracts import spark_schema_from_contract
 
 
@@ -37,3 +38,9 @@ def read_frame(schema: Any, inferred_schema: Any = None) -> SchemaFrame:
 def contract_schema(contract: DataContract | None) -> Any:
     """The schema a read shaped by ``contract`` carries — Spark's own type when it is installed."""
     return None if contract is None else spark_schema_from_contract(contract)
+
+
+def lenient_contract_for_fake_frame(path: Path) -> DataContract:
+    """Keep schema-only frame doubles free of strict Spark data actions."""
+    contract = load_data_contract(path)
+    return replace(contract, janus=replace(contract.janus, enforcement="lenient"))

@@ -9,7 +9,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import janus.runtime.materialize as materialize_module
 from janus.models import ExtractedArtifact, ExtractionResult, RunContext
+from janus.models.data_contracts import load_data_contract
 from janus.normalizers import BaseNormalizer
 from janus.planner import PlannedRun
 from janus.readers import SparkDatasetReader
@@ -34,7 +36,7 @@ STORAGE_CONFIG = {
 }
 
 
-def cost_inep(out_dir: Path) -> dict[str, Any]:
+def cost_inep(out_dir: Path, *, enforcement: str | None = None) -> dict[str, Any]:
     """The INEP fixture archive, through the INEP integration suite's own helpers."""
     from tests.integration.inep import test_inep_integration as inep
     from tests.support.contracts import with_registry_contract
@@ -44,6 +46,10 @@ def cost_inep(out_dir: Path) -> dict[str, Any]:
     project.mkdir()
     archive = inep._build_fixture_archive(project)
     source_config = inep._cloned_source_config(project, archive_path=archive)
+    if source_config.schema.contract is None:
+        raise ValueError("INEP cost source has no declared contract")
+    if enforcement is not None:
+        _set_contract_enforcement(project / source_config.schema.contract, enforcement)
     storage_layout = inep._storage_layout(project)
     strategy = _file_strategy(storage_layout)
     run_context = RunContext.create(
@@ -55,21 +61,32 @@ def cost_inep(out_dir: Path) -> dict[str, Any]:
     return time_materialize(root, planned_run, handoff, storage_layout)
 
 
-def cost_cnpj(out_dir: Path, csv_path: Path) -> dict[str, Any]:
+def cost_cnpj(
+    out_dir: Path, csv_path: Path, *, enforcement: str | None = None
+) -> dict[str, Any]:
     """A generated ``Estabelecimentos`` part file as the one artifact of a file handoff."""
     root = _fresh(out_dir, "cost-cnpj")
     project = root / "project"
     project.mkdir()
     registry = load_registry(PROJECT_ROOT)
     source = registry.get_source(CNPJ_SOURCE_ID, include_disabled=True)
+    if source.schema.contract is None:
+        raise ValueError("CNPJ cost source has no declared contract")
     storage_layout = StorageLayout.from_environment_config(STORAGE_CONFIG, project)
     strategy = _file_strategy(storage_layout)
     run_context = RunContext.create(
         run_id="m0-cost-cnpj", environment="local", project_root=project, started_at=STARTED_AT
     )
-    plan = strategy.plan(source, run_context).with_data_contract(
-        registry.contract_for(CNPJ_SOURCE_ID)
-    )
+    contract = registry.contract_for(CNPJ_SOURCE_ID)
+    if contract is None:
+        raise ValueError("CNPJ cost source has no loaded contract")
+    if enforcement is not None:
+        contract_copy = project / source.schema.contract
+        contract_copy.parent.mkdir(parents=True, exist_ok=True)
+        contract_copy.write_bytes(contract.contract_path.read_bytes())
+        _set_contract_enforcement(contract_copy, enforcement)
+        contract = load_data_contract(contract_copy)
+    plan = strategy.plan(source, run_context).with_data_contract(contract)
     handoff = ExtractionResult.from_plan(
         plan, (ExtractedArtifact(path=str(csv_path.resolve()), format="csv"),)
     )
@@ -96,22 +113,47 @@ def time_materialize(
             writer_factory=SparkDatasetWriter,
         )
         plan = planned_run.plan
+        original_pass = materialize_module.run_pre_write_pass
+        cache_sizes: list[tuple[int, int]] = []
 
-        def once(group: str) -> tuple[float, int, Any]:
+        def observed_pass(*args: Any, **kwargs: Any) -> Any:
+            result = original_pass(*args, **kwargs)
+            cached = spark.sparkContext._jsc.sc().getRDDStorageInfo()
+            cache_sizes.append(
+                (
+                    sum(int(info.memSize()) for info in cached),
+                    sum(int(info.diskSize()) for info in cached),
+                )
+            )
+            return result
+
+        materialize_module.run_pre_write_pass = observed_pass
+
+        def once(group: str) -> tuple[float, int, Any, tuple[int, int]]:
             spark.sparkContext.setJobGroup(group, group)
+            before = len(cache_sizes)
             started = time.perf_counter()
             results, _, _, _ = materializer.materialize(
                 planned_run, plan, spark, handoff, storage_layout, None
             )
             elapsed = time.perf_counter() - started
             jobs = len(spark.sparkContext.statusTracker().getJobIdsForGroup(group))
-            return elapsed, jobs, results
+            cached = cache_sizes[before:]
+            peak = (
+                max((mem for mem, _ in cached), default=0),
+                max((disk for _, disk in cached), default=0),
+            )
+            return elapsed, jobs, results, peak
 
-        warm_seconds, warm_jobs, _ = once("cost-warmup")
-        timed = [once(f"cost-run-{index}") for index in range(1, timed_runs + 1)]
+        try:
+            warm_seconds, warm_jobs, _, _ = once("cost-warmup")
+            timed = [once(f"cost-run-{index}") for index in range(1, timed_runs + 1)]
+        finally:
+            materialize_module.run_pre_write_pass = original_pass
         last_results = timed[-1][2]
+        peak_rss = jvm_peak_rss_kib(spark)
         rows = spark.table(last_results[0].path).count()
-        seconds = [round(elapsed, 3) for elapsed, _, _ in timed]
+        seconds = [round(elapsed, 3) for elapsed, _, _, _ in timed]
         median = statistics.median(seconds)
         contract = plan.data_contract
         return {
@@ -122,10 +164,12 @@ def time_materialize(
             "rows": rows,
             "warmup": {"seconds": round(warm_seconds, 3), "jobs": warm_jobs},
             "timed_seconds": seconds,
-            "timed_jobs": [jobs for _, jobs, _ in timed],
+            "timed_jobs": [jobs for _, jobs, _, _ in timed],
+            "cache_memory_bytes": max(run[3][0] for run in timed),
+            "cache_disk_bytes": max(run[3][1] for run in timed),
             "median_seconds": median,
             "rows_per_second": round(rows / median, 1) if median else None,
-            "driver_peak_rss_kib": jvm_peak_rss_kib(spark),
+            "driver_peak_rss_kib": peak_rss,
             **profile,
         }
     finally:
@@ -175,6 +219,26 @@ def _fresh(out_dir: Path, name: str) -> Path:
     shutil.rmtree(path, ignore_errors=True)
     path.mkdir(parents=True)
     return path
+
+
+def _set_contract_enforcement(path: Path, enforcement: str) -> None:
+    """Swap only the enforcement value in a private contract copy."""
+    if enforcement not in {"lenient", "strict"}:
+        raise ValueError(f"unsupported enforcement: {enforcement}")
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    matches = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == "- property: janus.enforcement"
+    ]
+    if len(matches) != 1 or matches[0] + 1 >= len(lines):
+        raise ValueError(f"expected one janus.enforcement property in {path}")
+    value_index = matches[0] + 1
+    line = lines[value_index]
+    if line.strip() not in {"value: lenient", "value: strict"}:
+        raise ValueError(f"unexpected janus.enforcement value in {path}")
+    lines[value_index] = line.replace(line.strip(), f"value: {enforcement}", 1)
+    path.write_text("".join(lines), encoding="utf-8")
 
 
 __all__ = [

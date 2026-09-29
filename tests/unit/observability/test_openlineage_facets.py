@@ -726,6 +726,7 @@ def _enforcement_event(metadata: RunMetadata, lineage: LineageRecord, report: Va
 
 
 def test_an_enforcement_failure_names_its_stage():
+    (raw,) = _materialized_outputs(bronze=False)
     metadata = replace(
         _run_metadata(
             run_id="enforcement",

@@ -10,7 +10,6 @@ from typing import Any
 
 from janus.lineage import RunObserver
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext, WriteResult
-from janus.models.data_contracts import load_data_contract
 from janus.models.source_config import IcebergRowsRequestInputsConfig
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
@@ -19,7 +18,11 @@ from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.runtime.executor import _plan_with_storage_layout_outputs
 from janus.utils.logging import build_structured_logger
 from janus.utils.storage import StorageLayout
-from tests.support.contract_frames import contract_schema, read_frame
+from tests.support.contract_frames import (
+    contract_schema,
+    lenient_contract_for_fake_frame,
+    read_frame,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -382,7 +385,7 @@ def test_source_executor_passes_explicit_schema_for_headerless_csv_sources(tmp_p
         plan=ExecutionPlan.from_source_config(
             source_config, run_context
         ).with_data_contract(
-            load_data_contract(PROJECT_ROOT / source_config.schema.contract)
+            lenient_contract_for_fake_frame(PROJECT_ROOT / source_config.schema.contract)
         ),
         strategy=CnpjCsvStrategy(calls),
         hook=None,
@@ -1017,9 +1020,9 @@ def test_executor_hands_the_provider_to_extract_without_starting_a_session(tmp_p
 
 
 def _with_contract(plan: ExecutionPlan) -> ExecutionPlan:
-    """The source's checked-in contract, which the planner would have attached."""
+    """Use the source schema with lenient data checks for frame doubles."""
     return plan.with_data_contract(
-        load_data_contract(PROJECT_ROOT / plan.source_config.schema.contract)
+        lenient_contract_for_fake_frame(PROJECT_ROOT / plan.source_config.schema.contract)
     )
 
 
