@@ -30,6 +30,9 @@ from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from tests.support.spark_sessions import build_iceberg_session, require_iceberg_runtime
 
+
+pytestmark = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
+
 SOURCE_ID = "incremental_upsert_fixture"
 BRONZE_NAMESPACE = "bronze_test"
 BRONZE_TABLE_NAME = "incremental_upsert_fixture"

@@ -121,6 +121,7 @@
         "checkpoint_value": {"$ref": "#/$defs/NullableString"},
         "failure_reason": {"$ref": "#/$defs/NullableString"},
         "error_type": {"$ref": "#/$defs/NullableString"},
+        "failure_stage": {"$ref": "#/$defs/NullableString"},
         "run_attributes": {"$ref": "#/$defs/StringMap"},
         "plan_notes": {
           "type": "array",

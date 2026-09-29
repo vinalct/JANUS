@@ -1,9 +1,12 @@
 """Shared bronze-materialization pipeline used by the live executor and the raw-replay loader.
 
 Both `janus.runtime.executor` and `janus.scripts.raw_to_bronze` drive the same
-batch -> Spark read -> normalize -> write-to-bronze pipeline; everything downstream
-of the normalization handoff is defined here exactly once. This module is a leaf:
+batch -> Spark read -> contract check -> normalize -> write-to-bronze pipeline; everything
+downstream of the normalization handoff is defined here exactly once. This module is a leaf:
 it must not import from either caller.
+
+No batch reaches ``writer.write`` without passing the pre-write contract check. A refusal is
+raised, never handled here: the entry points decide what a failed run records.
 """
 
 from __future__ import annotations
@@ -20,9 +23,17 @@ from janus.models import (
     WriteResult,
     resolve_bronze_write_intent,
 )
+from janus.models.data_contracts import DataContract
 from janus.normalizers import BaseNormalizer
 from janus.planner import PlannedRun
-from janus.quality import PersistedValidationReport
+from janus.quality import (
+    ContractEnforcementError,
+    MissingContractError,
+    PersistedValidationReport,
+    PreWriteEvidence,
+    run_pre_write_pass,
+)
+from janus.quality.pre_write import pre_write_aggregates
 from janus.readers import SparkDatasetReader
 from janus.schema_contracts import resolve_spark_schema_for_plan
 from janus.utils.logging import StructuredLogger
@@ -32,16 +43,63 @@ from janus.writers import SparkDatasetWriter
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
+    from janus.runtime.spark_lifecycle import SparkSessionProvider
+
 _FILE_HANDOFF_ARTIFACTS_PER_BATCH = 5
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedHandoff:
+    """What materializing one handoff hands the quality gate; empty when the handoff was."""
+
+    bronze_results: tuple[WriteResult, ...] = ()
+    normalized_dataframe: Any | None = None
+    bronze_dataframe: Any | None = None
+    run_keys: Any | None = None
+    pre_write_evidence: tuple[PreWriteEvidence, ...] | None = None
 
 
 @dataclass(slots=True)
 class BronzeMaterializer:
-    """Owns the batch -> read -> normalize -> write-to-bronze loop for both entry points."""
+    """Owns the batch -> read -> check -> normalize -> write-to-bronze loop of both entry points."""
 
     reader: SparkDatasetReader
     normalizer: BaseNormalizer
     writer_factory: Callable[[StorageLayout], SparkDatasetWriter]
+
+    def materialize_handoff(
+        self,
+        planned_run: PlannedRun,
+        plan: ExecutionPlan,
+        spark_provider: SparkSessionProvider,
+        handoff: ExtractionResult,
+        storage_layout: StorageLayout,
+        logger: StructuredLogger | None,
+        *,
+        bronze_target_identifier: str | None = None,
+    ) -> MaterializedHandoff:
+        """Materialize a non-empty handoff in the provider's session; start none for an empty."""
+        if handoff.is_empty:
+            _log_info(logger, "spark_session_skipped")
+            return MaterializedHandoff()
+        bronze_results, normalized_dataframe, run_keys, evidence = self.materialize(
+            planned_run,
+            plan,
+            spark_provider.get(),
+            handoff,
+            storage_layout,
+            logger,
+            bronze_target_identifier=bronze_target_identifier,
+        )
+        return MaterializedHandoff(
+            bronze_results=bronze_results,
+            normalized_dataframe=normalized_dataframe,
+            # Read the committed table for the bronze uniqueness oracle while the session is
+            # still live — this is not a new lifetime.
+            bronze_dataframe=read_committed_bronze(spark_provider.get(), bronze_results),
+            run_keys=run_keys,
+            pre_write_evidence=evidence,
+        )
 
     def materialize(
         self,
@@ -53,7 +111,17 @@ class BronzeMaterializer:
         logger: StructuredLogger | None,
         *,
         bronze_target_identifier: str | None = None,
-    ) -> tuple[tuple[WriteResult, ...], Any | None, Any | None]:
+    ) -> tuple[tuple[WriteResult, ...], Any | None, Any | None, tuple[PreWriteEvidence, ...]]:
+        """Write every batch that passes its contract check; return the evidence of each one.
+
+        Raises ``MissingContractError`` for a plan without a contract, and the check's
+        ``ContractEnforcementError`` for the first batch that fails it, carrying the evidence of
+        every batch checked so far and the bronze results of the batches already committed.
+        """
+        contract = plan.data_contract
+        if contract is None:
+            raise MissingContractError(plan.source.source_id)
+
         batches = _normalization_handoff_batches(planned_run, handoff)
         if len(batches) > 1:
             _log_info(
@@ -66,12 +134,13 @@ class BronzeMaterializer:
 
         # Resolve the write intent exactly once per run
         run_intent = resolve_bronze_write_intent(plan)
-        contract_fields = _contract_log_fields(plan)
+        contract_fields = {"contract_id": contract.id, "schema_version": contract.schema_version}
         # Keys the run wrote, accumulated across every batch so the bronze uniqueness
         # oracle covers rows from batches 1..n-1, not only the last one it validates.
         unique_fields = plan.source_config.quality.unique_fields
         writer = self.writer_factory(storage_layout)
         bronze_results: list[WriteResult] = []
+        evidence: list[PreWriteEvidence] = []
         normalized_dataframe = None
         run_keys = None
         for batch_index, batch_artifacts in enumerate(batches, start=1):
@@ -112,29 +181,47 @@ class BronzeMaterializer:
             )
             _log_info(logger, "spark_read_finished", **batch_metadata)
 
-            _log_info(logger, "normalization_started", **batch_metadata)
-            normalized_dataframe = self.normalizer.normalize(raw_dataframe, plan)
-            _log_info(logger, "normalization_finished", **batch_metadata)
+            # A strict pass aggregates before the write reads the same rows again: persist so
+            # the two share one scan, and release it only after the write (or its failure).
+            persisted = pre_write_aggregates(contract, enforcement=contract.janus.enforcement)
+            if persisted:
+                raw_dataframe = _persist(raw_dataframe)
+            try:
+                checked_dataframe = _checked_batch(
+                    raw_dataframe,
+                    contract,
+                    evidence,
+                    committed=bronze_results,
+                    logger=logger,
+                    batch_metadata=batch_metadata,
+                )
 
-            run_keys = _accumulate_run_keys(run_keys, normalized_dataframe, unique_fields)
+                _log_info(logger, "normalization_started", **batch_metadata)
+                normalized_dataframe = self.normalizer.normalize(checked_dataframe, plan)
+                _log_info(logger, "normalization_finished", **batch_metadata)
 
-            batch_intent = run_intent.for_batch(batch_index)
-            intent_fields = _intent_log_fields(batch_intent)
-            started_fields: dict[str, Any] = {
-                "bronze_output_path": plan.bronze_output.path,
-                **intent_fields,
-                **batch_metadata,
-            }
-            if bronze_target_identifier is not None:
-                started_fields["target_table"] = bronze_target_identifier
-            _log_info(logger, "bronze_write_started", **started_fields)
-            bronze_result = writer.write(
-                normalized_dataframe,
-                plan,
-                "bronze",
-                intent=batch_intent,
-                count_records=_should_count_records_for_handoff(planned_run),
-            )
+                run_keys = _accumulate_run_keys(run_keys, normalized_dataframe, unique_fields)
+
+                batch_intent = run_intent.for_batch(batch_index)
+                intent_fields = _intent_log_fields(batch_intent)
+                started_fields: dict[str, Any] = {
+                    "bronze_output_path": plan.bronze_output.path,
+                    **intent_fields,
+                    **batch_metadata,
+                }
+                if bronze_target_identifier is not None:
+                    started_fields["target_table"] = bronze_target_identifier
+                _log_info(logger, "bronze_write_started", **started_fields)
+                bronze_result = writer.write(
+                    normalized_dataframe,
+                    plan,
+                    "bronze",
+                    intent=batch_intent,
+                    count_records=_should_count_records_for_handoff(planned_run),
+                )
+            finally:
+                if persisted:
+                    raw_dataframe.unpersist()
             bronze_results.append(bronze_result)
             _log_info(
                 logger,
@@ -157,15 +244,59 @@ class BronzeMaterializer:
             )
         if run_keys is not None:
             run_keys = run_keys.distinct()
-        return tuple(bronze_results), normalized_dataframe, run_keys
+        return tuple(bronze_results), normalized_dataframe, run_keys, tuple(evidence)
 
 
-def _contract_log_fields(plan: ExecutionPlan) -> dict[str, str]:
-    """Name the contract a read is shaped by, or nothing at all for an inferred source."""
-    contract = plan.data_contract
-    if contract is None:
-        return {}
-    return {"contract_id": contract.id, "schema_version": contract.schema_version}
+def _checked_batch(
+    dataframe: Any,
+    contract: DataContract,
+    evidence: list[PreWriteEvidence],
+    *,
+    committed: Sequence[WriteResult],
+    logger: StructuredLogger | None,
+    batch_metadata: Mapping[str, Any],
+) -> Any:
+    """Run one batch's pre-write pass and append its evidence; the frame it returns may be written.
+
+    A refusal leaves with what the run knew: the evidence of every batch checked so far, this one
+    last, and the bronze results of the batches already committed.
+    """
+    try:
+        checked_dataframe, batch_evidence = run_pre_write_pass(
+            dataframe,
+            contract,
+            enforcement=contract.janus.enforcement,
+            batch_index=batch_metadata["batch_index"],
+            batch_count=batch_metadata["batch_count"],
+        )
+    except ContractEnforcementError as exc:
+        exc.evidence = (*evidence, *exc.evidence)
+        exc.committed_results = tuple(committed)
+        _log_error(
+            logger,
+            "contract_check_failed",
+            failure_stage=exc.failure_stage,
+            error_type=type(exc).__name__,
+            contract_id=contract.id,
+            **batch_metadata,
+        )
+        raise
+    evidence.append(batch_evidence)
+    _log_info(
+        logger,
+        "contract_check_passed",
+        mismatches=0,
+        nullability_relaxed=list(batch_evidence.contract_check.nullability_relaxed),
+        **batch_metadata,
+    )
+    return checked_dataframe
+
+
+def _persist(dataframe: Any) -> Any:
+    """Keep one batch for the pre-write aggregation and the write; spills rather than failing."""
+    from pyspark import StorageLevel
+
+    return dataframe.persist(StorageLevel.MEMORY_AND_DISK)
 
 
 def _normalization_handoff_batches(

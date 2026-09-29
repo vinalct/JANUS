@@ -13,6 +13,13 @@ from janus.models import (
 )
 from janus.normalizers import NORMALIZATION_METADATA_COLUMNS
 from janus.quality.models import QualityValidationError, ValidationCheck, ValidationReport
+from janus.quality.pre_write import (
+    PreWriteEvidence,
+    required_fields_check,
+    required_null_aggregations,
+    structural_check,
+    summarize_pre_write_evidence,
+)
 from janus.quality.schema_expectation import SchemaExpectation, resolve_schema_expectation
 from janus.quality.store import PersistedValidationReport, ValidationReportStore
 from janus.utils.environment import resolve_project_path
@@ -24,7 +31,12 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class QualityGate:
-    """Strategy-agnostic validation orchestrator for config, data, and outputs."""
+    """Strategy-agnostic validation orchestrator for config, data, and outputs.
+
+    The structural contract check is decided before the write, by the materializer; given that
+    ``pre_write_evidence``, the gate reports it as ``data.schema_expectations`` (and, for a
+    ``strict`` contract, ``data.required_fields``) instead of deciding a second time.
+    """
 
     report_store: ValidationReportStore | None = None
 
@@ -34,30 +46,26 @@ class QualityGate:
         *,
         dataframe: DataFrame | None = None,
         write_results: Sequence[WriteResult] = (),
-        expected_fields: Sequence[str] | None = None,
         output_columns: Sequence[str] = NORMALIZATION_METADATA_COLUMNS,
         bronze_dataframe: DataFrame | None = None,
         run_keys: DataFrame | None = None,
+        pre_write_evidence: Sequence[PreWriteEvidence] | None = None,
         raise_on_failure: bool = False,
     ) -> ValidationReport:
-        schema_expectation = resolve_schema_expectation(plan, expected_fields=expected_fields)
+        schema_expectation = resolve_schema_expectation(plan)
+        reported = _pre_write_report(plan, pre_write_evidence)
         checks = (
             validate_quality_contract(plan.source_config.quality),
             validate_schema_contract_mode(plan, schema_expectation),
-            validate_required_fields(plan, dataframe),
+            reported.get("required_fields") or validate_required_fields(plan, dataframe),
             validate_unique_fields(plan, dataframe),
-            validate_schema_expectations(plan, dataframe, schema_expectation),
+            reported.get("schema_expectations") or validate_schema_expectations(plan, dataframe),
             validate_output_columns(dataframe, output_columns),
             validate_materialized_outputs(plan, write_results),
             validate_bronze_key_uniqueness(plan, bronze_dataframe, run_keys),
         )
         report = ValidationReport.from_plan(
-            plan,
-            checks,
-            metadata={
-                "allow_schema_evolution": str(plan.source_config.quality.allow_schema_evolution),
-                "schema_expectation_source": schema_expectation.source or "",
-            },
+            plan, checks, metadata=_report_metadata(plan, schema_expectation)
         )
         if raise_on_failure and not report.is_successful:
             raise QualityValidationError(report)
@@ -69,10 +77,10 @@ class QualityGate:
         *,
         dataframe: DataFrame | None = None,
         write_results: Sequence[WriteResult] = (),
-        expected_fields: Sequence[str] | None = None,
         output_columns: Sequence[str] = NORMALIZATION_METADATA_COLUMNS,
         bronze_dataframe: DataFrame | None = None,
         run_keys: DataFrame | None = None,
+        pre_write_evidence: Sequence[PreWriteEvidence] | None = None,
         raise_on_failure: bool = False,
     ) -> PersistedValidationReport:
         if self.report_store is None:
@@ -82,10 +90,10 @@ class QualityGate:
             plan,
             dataframe=dataframe,
             write_results=write_results,
-            expected_fields=expected_fields,
             output_columns=output_columns,
             bronze_dataframe=bronze_dataframe,
             run_keys=run_keys,
+            pre_write_evidence=pre_write_evidence,
             raise_on_failure=False,
         )
         persisted_path = self.report_store.write(plan, report)
@@ -93,6 +101,24 @@ class QualityGate:
         if raise_on_failure and not report.is_successful:
             raise QualityValidationError(report)
         return persisted
+
+
+def _pre_write_report(
+    plan: ExecutionPlan, evidence: Sequence[PreWriteEvidence] | None
+) -> dict[str, ValidationCheck]:
+    """The checks the materializer already decided, merged across batches; none without it."""
+    contract = plan.data_contract
+    if not evidence or contract is None:
+        return {}
+    return summarize_pre_write_evidence(evidence, enforcement=contract.janus.enforcement)
+
+
+def _report_metadata(plan: ExecutionPlan, expectation: SchemaExpectation) -> dict[str, str]:
+    metadata = {"schema_expectation_source": expectation.source or ""}
+    if plan.data_contract is not None:
+        metadata["compatibility"] = plan.data_contract.janus.compatibility
+        metadata["enforcement"] = plan.data_contract.janus.enforcement
+    return metadata
 
 
 def validate_quality_contract(quality_config: QualityConfig) -> ValidationCheck:
@@ -141,49 +167,26 @@ def validate_schema_contract_mode(
     plan: ExecutionPlan,
     schema_expectation: SchemaExpectation,
 ) -> ValidationCheck:
-    if schema_expectation.error:
-        return ValidationCheck.failed(
+    contract = plan.data_contract
+    if contract is None:
+        # Not decided here: the materializer refuses to write without a contract.
+        return ValidationCheck.skipped(
             "config",
             "schema_contract_mode",
-            schema_expectation.error,
-            details={"schema_source": schema_expectation.source or ""},
-        )
-
-    if (
-        not plan.source_config.quality.allow_schema_evolution
-        and not plan.source_config.schema.is_declared
-    ):
-        return ValidationCheck.failed(
-            "config",
-            "schema_contract_mode",
-            "allow_schema_evolution=false requires schema.mode='explicit'.",
-            details={"schema_mode": plan.source_config.schema.mode},
-        )
-
-    if schema_expectation.fields:
-        return ValidationCheck.passed(
-            "config",
-            "schema_contract_mode",
-            "Schema validation will use an explicit field contract.",
-            details={
-                "schema_source": schema_expectation.source or "",
-                "expected_field_count": len(schema_expectation.fields),
-            },
-        )
-
-    if plan.source_config.quality.allow_schema_evolution:
-        return ValidationCheck.passed(
-            "config",
-            "schema_contract_mode",
-            "Schema evolution is enabled; unexpected columns will be tolerated.",
+            "No data contract is declared; bronze is materialized only under one.",
             details={"schema_mode": plan.source_config.schema.mode},
         )
 
     return ValidationCheck.passed(
         "config",
         "schema_contract_mode",
-        "Strict schema mode is configured through an explicit schema contract.",
-        details={"schema_mode": plan.source_config.schema.mode},
+        "Schema validation will use an explicit field contract.",
+        details={
+            "schema_source": schema_expectation.source or "",
+            "expected_field_count": len(schema_expectation.fields),
+            "compatibility": contract.janus.compatibility,
+            "enforcement": contract.janus.enforcement,
+        },
     )
 
 
@@ -191,6 +194,7 @@ def validate_required_fields(
     plan: ExecutionPlan,
     dataframe: DataFrame | None,
 ) -> ValidationCheck:
+    """The post-write count; a ``strict`` run's gate renders the pre-write count instead."""
     required_fields = plan.source_config.quality.required_fields
     if not required_fields:
         return ValidationCheck.skipped(
@@ -214,23 +218,7 @@ def validate_required_fields(
             details={"missing_fields": ",".join(missing_columns)},
         )
 
-    invalid_counts = _required_field_violation_counts(dataframe, required_fields)
-    failing_fields = {field: count for field, count in invalid_counts.items() if count > 0}
-    if failing_fields:
-        rendered_counts = ", ".join(f"{field} ({count})" for field, count in failing_fields.items())
-        return ValidationCheck.failed(
-            "data",
-            "required_fields",
-            "Required fields contain null or blank values: " + rendered_counts,
-            details={field: count for field, count in failing_fields.items()},
-        )
-
-    return ValidationCheck.passed(
-        "data",
-        "required_fields",
-        "All required fields are present and populated.",
-        details={"required_field_count": len(required_fields)},
-    )
+    return required_fields_check(_required_field_violation_counts(dataframe, required_fields))
 
 
 def validate_unique_fields(
@@ -353,78 +341,27 @@ def validate_bronze_key_uniqueness(
 def validate_schema_expectations(
     plan: ExecutionPlan,
     dataframe: DataFrame | None,
-    schema_expectation: SchemaExpectation,
 ) -> ValidationCheck:
+    """Report the structural contract check for a frame validated outside the materializer.
+
+    It is the same pure check the pre-write gate runs, so the two cannot disagree; the
+    normalization columns a normalized frame carries are ignored unless the contract declares them.
+    """
     if dataframe is None:
         return ValidationCheck.skipped(
             "data",
             "schema_expectations",
             "No dataframe was provided for schema validation.",
         )
-    if schema_expectation.error:
-        return ValidationCheck.failed(
-            "data",
-            "schema_expectations",
-            schema_expectation.error,
-            details={"schema_source": schema_expectation.source or ""},
-        )
-    if not schema_expectation.fields:
+    if plan.data_contract is None:
         return ValidationCheck.skipped(
             "data",
             "schema_expectations",
             "No explicit schema expectation was available for comparison.",
         )
-
-    observed_fields = tuple(dataframe.columns)
-    missing_fields = [
-        field for field in schema_expectation.fields if field not in observed_fields
-    ]
-    unexpected_fields = [
-        field for field in observed_fields if field not in schema_expectation.fields
-    ]
-    if missing_fields:
-        return ValidationCheck.failed(
-            "data",
-            "schema_expectations",
-            "Observed schema is missing expected fields: " + ", ".join(missing_fields),
-            details={
-                "schema_source": schema_expectation.source or "",
-                "missing_fields": ",".join(missing_fields),
-            },
-        )
-
-    if unexpected_fields and not plan.source_config.quality.allow_schema_evolution:
-        return ValidationCheck.failed(
-            "data",
-            "schema_expectations",
-            "Observed schema contains unexpected fields while schema evolution is disabled: "
-            + ", ".join(unexpected_fields),
-            details={
-                "schema_source": schema_expectation.source or "",
-                "unexpected_fields": ",".join(unexpected_fields),
-            },
-        )
-
-    if unexpected_fields:
-        return ValidationCheck.passed(
-            "data",
-            "schema_expectations",
-            "Observed schema satisfies the expected contract and allowed extra fields.",
-            details={
-                "schema_source": schema_expectation.source or "",
-                "unexpected_fields": ",".join(unexpected_fields),
-            },
-        )
-
-    return ValidationCheck.passed(
-        "data",
-        "schema_expectations",
-        "Observed schema matches the expected contract.",
-        details={
-            "schema_source": schema_expectation.source or "",
-            "expected_field_count": len(schema_expectation.fields),
-        },
-    )
+    return structural_check(
+        dataframe, plan.data_contract, ignored_columns=NORMALIZATION_METADATA_COLUMNS
+    ).to_validation_check()
 
 
 def validate_output_columns(
@@ -529,19 +466,7 @@ def _required_field_violation_counts(
     dataframe: DataFrame,
     fields: Sequence[str],
 ) -> dict[str, int]:
-    from pyspark.sql.functions import col, trim, when
-    from pyspark.sql.functions import sum as spark_sum
-    from pyspark.sql.types import StringType
-
-    schema_by_name = {field.name: field.dataType for field in dataframe.schema.fields}
-    aggregations = []
-    for field in fields:
-        invalid_condition = col(field).isNull()
-        if isinstance(schema_by_name[field], StringType):
-            invalid_condition = invalid_condition | (trim(col(field)) == "")
-        aggregations.append(spark_sum(when(invalid_condition, 1).otherwise(0)).alias(field))
-
-    row = dataframe.agg(*aggregations).first()
+    row = dataframe.agg(*required_null_aggregations(dataframe, fields)).first()
     if row is None:
         raise RuntimeError("Spark returned no row for the required-field aggregation")
     return {field: int(row[field] or 0) for field in fields}

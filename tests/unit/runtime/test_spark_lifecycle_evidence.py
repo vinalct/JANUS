@@ -16,6 +16,7 @@ import pytest
 
 import janus.runtime.spark_lifecycle as spark_lifecycle
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext, WriteResult
+from janus.models.data_contracts import load_data_contract
 from janus.models.source_config import (
     CombinedRequestInputsConfig,
     DateWindowRequestInputsConfig,
@@ -29,6 +30,7 @@ from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.runtime.spark_lifecycle import scoped_request_input_session
 from janus.utils.logging import build_structured_logger
 from janus.utils.storage import StorageLayout
+from tests.support.contract_frames import read_frame
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -176,9 +178,8 @@ class StubReader:
     def read_extraction_result(self, spark, extraction_result, **kwargs):
         del spark
         del extraction_result
-        del kwargs
         self.calls.append("read")
-        return object()
+        return read_frame(kwargs.get("schema"))
 
 
 @dataclass(slots=True)
@@ -548,7 +549,9 @@ def _planned_run(
         started_at=datetime(2026, 7, 6, 12, 0, tzinfo=UTC),
     )
     return PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=ExecutionPlan.from_source_config(source_config, run_context).with_data_contract(
+            load_data_contract(PROJECT_ROOT / source_config.schema.contract)
+        ),
         strategy=RequestInputAwareStrategy(calls, provider),
         hook=None,
     )

@@ -100,7 +100,7 @@ def time_materialize(
         def once(group: str) -> tuple[float, int, Any]:
             spark.sparkContext.setJobGroup(group, group)
             started = time.perf_counter()
-            results, _, _ = materializer.materialize(
+            results, _, _, _ = materializer.materialize(
                 planned_run, plan, spark, handoff, storage_layout, None
             )
             elapsed = time.perf_counter() - started

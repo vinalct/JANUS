@@ -22,7 +22,7 @@ CONTRACT_FIXTURES = PROJECT_ROOT / "tests" / "fixtures" / "contracts"
 FIXTURES = tuple(
     sorted(
         path.relative_to(CONTRACT_FIXTURES).as_posix()
-        for directory in ("hostile", "baseline")
+        for directory in ("hostile", "baseline", "lifecycle")
         for path in (CONTRACT_FIXTURES / directory).glob("*.yaml")
     )
 )
@@ -33,6 +33,9 @@ FIXTURE_ANCHORS = {
     "baseline/concurrency_contract.yaml",
     "baseline/incremental_upsert_fixture.yaml",
     "baseline/multi_batch_run_keys.yaml",
+    "lifecycle/combined_iceberg_rows_lifecycle.yaml",
+    "lifecycle/execute_lifecycle_evidence.yaml",
+    "lifecycle/scoped_iceberg_rows_session.yaml",
 }
 
 

@@ -19,6 +19,7 @@ from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.runtime.executor import _plan_with_storage_layout_outputs
 from janus.utils.logging import build_structured_logger
 from janus.utils.storage import StorageLayout
+from tests.support.contract_frames import contract_schema, read_frame
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -82,6 +83,7 @@ class FakeReader:
     seen_schema: Any | None = None
     seen_options: dict[str, str] | None = None
     read_artifact_counts: list[int] = field(default_factory=list)
+    inferred_schema: Any | None = None
 
     def read_extraction_result(
         self,
@@ -97,7 +99,7 @@ class FakeReader:
         self.seen_schema = schema
         self.seen_options = None if options is None else dict(options)
         self.calls.append("read")
-        return object()
+        return read_frame(schema, self.inferred_schema)
 
 
 @dataclass(slots=True)
@@ -467,7 +469,7 @@ def test_source_executor_reads_using_handoff_format_instead_of_source_config_for
         started_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=JsonlStrategy(calls),
         hook=None,
     )
@@ -476,7 +478,8 @@ def test_source_executor_reads_using_handoff_format_instead_of_source_config_for
         [ValidationCheck.passed("output", "materialized_outputs", "ok")],
     )
     metadata_root = tmp_path / "data" / "metadata" / "receita_federal" / "cnpj" / "empresas"
-    reader = FakeReader(calls)
+    # Handed no schema, Spark infers one from the JSONL rows — the contract's own shape here.
+    reader = FakeReader(calls, inferred_schema=contract_schema(planned_run.plan.data_contract))
 
     executed_run = SourceExecutor(
         reader=reader,
@@ -556,7 +559,7 @@ def test_source_executor_batches_file_handoff_artifacts_and_appends_after_overwr
         started_at=datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=MultiFileCnpjStrategy(calls),
         hook=None,
     )
@@ -724,7 +727,7 @@ def test_source_executor_persists_empty_strategy_metadata_on_early_exception(tmp
         started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=ExplodingStrategy(calls),
         hook=None,
     )
@@ -806,7 +809,7 @@ def _planned_run(
         started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
     )
     return PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=FakeStrategy(calls),
         hook=None,
     )
@@ -917,7 +920,7 @@ def test_executor_never_starts_a_session_for_an_empty_handoff(tmp_path):
         started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=EmptyHandoffStrategy(calls),
         hook=None,
     )
@@ -1011,6 +1014,13 @@ def test_executor_hands_the_provider_to_extract_without_starting_a_session(tmp_p
     assert calls.index("extract") < calls.index("spark_start")
     assert provider.start_count == 1
     assert provider.stop_calls == 1
+
+
+def _with_contract(plan: ExecutionPlan) -> ExecutionPlan:
+    """The source's checked-in contract, which the planner would have attached."""
+    return plan.with_data_contract(
+        load_data_contract(PROJECT_ROOT / plan.source_config.schema.contract)
+    )
 
 
 def _source_config_with_absolute_schema(source_config):

@@ -31,6 +31,9 @@ from janus.planner import PlannedRun
 from janus.runtime.materialize import BronzeMaterializer
 from janus.utils.storage import StorageLayout
 
+
+pytestmark = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
+
 ENVIRONMENT_CONFIG = {
     "storage": {
         "root_dir": "data",

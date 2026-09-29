@@ -12,6 +12,8 @@
     },
     {
       "details": {
+        "compatibility": "additive",
+        "enforcement": "lenient",
         "expected_field_count": "1",
         "schema_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
       },
@@ -70,7 +72,8 @@
   "emitted_at": "2026-07-04T12:00:05+00:00",
   "environment": "local",
   "metadata": {
-    "allow_schema_evolution": "True",
+    "compatibility": "additive",
+    "enforcement": "lenient",
     "schema_expectation_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
   },
   "run_id": "order15-api_success",

@@ -26,6 +26,7 @@ from janus.strategies.catalog import CatalogStrategy
 from janus.strategies.files import FileStrategy
 from janus.utils.storage import StorageLayout
 from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter
+from tests.support.contract_frames import contract_schema, read_frame
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "dados_abertos_catalog"
@@ -81,6 +82,7 @@ class FakeReader:
     seen_schema: Any | None = None
     seen_options: dict[str, str] | None = None
     read_artifact_counts: list[int] = field(default_factory=list)
+    inferred_schema: Any | None = None
 
     def read_extraction_result(
         self,
@@ -96,7 +98,7 @@ class FakeReader:
         self.seen_schema = schema
         self.seen_options = None if options is None else dict(options)
         self.calls.append("read")
-        return object()
+        return read_frame(schema, self.inferred_schema)
 
 
 @dataclass(slots=True)
@@ -644,7 +646,7 @@ def test_raw_to_bronze_loader_regenerates_catalog_jsonl_handoff_from_raw_pages(t
         started_at=datetime(2026, 4, 17, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=CatalogStrategy(),
         hook=None,
     )
@@ -714,7 +716,7 @@ def test_raw_to_bronze_loader_reads_using_handoff_format_instead_of_source_confi
             return extraction_result
 
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=JsonlHandoffStrategy(calls),
         hook=None,
     )
@@ -728,7 +730,8 @@ def test_raw_to_bronze_loader_reads_using_handoff_format_instead_of_source_confi
         [ValidationCheck.passed("output", "materialized_outputs", "ok")],
     )
     metadata_root = tmp_path / "data" / "metadata" / "receita_federal" / "cnpj" / "empresas"
-    reader = FakeReader(calls)
+    # Handed no schema, Spark infers one from the JSONL rows — the contract's own shape here.
+    reader = FakeReader(calls, inferred_schema=contract_schema(planned_run.plan.data_contract))
 
     result = RawToBronzeLoader(
         reader=reader,
@@ -888,7 +891,7 @@ def test_file_raw_to_bronze_writes_handoff_artifacts_in_append_batches(tmp_path)
         started_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=FileStrategy(),
         hook=None,
     )
@@ -1037,9 +1040,16 @@ def _planned_run(tmp_path: Path, calls: list[str]) -> PlannedRun:
         started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
     )
     return PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=FakeStrategy(calls),
         hook=None,
+    )
+
+
+def _with_contract(plan: ExecutionPlan) -> ExecutionPlan:
+    """The source's checked-in contract, which the planner would have attached."""
+    return plan.with_data_contract(
+        load_data_contract(PROJECT_ROOT / plan.source_config.schema.contract)
     )
 
 

@@ -14,9 +14,9 @@ import pytest
 pytest.importorskip("pyspark")
 
 from janus.models.data_contracts import DataContract, load_data_contract
+from janus.quality import ContractViolationError, run_pre_write_pass
 from tests.support.spark_sessions import build_iceberg_session
 
-RED_TASK = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 RED_TASK_2 = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -68,8 +68,6 @@ def _tracked_rows(*corrupt: str | None) -> list[tuple[Any, ...]]:
 
 
 def _run(frame: Any, contract: DataContract, **options: Any) -> tuple[Any, Any]:
-    from janus.quality.pre_write import run_pre_write_pass
-
     options.setdefault("batch_index", 1)
     options.setdefault("batch_count", 1)
     return run_pre_write_pass(frame, contract, **options)
@@ -115,7 +113,6 @@ def _counting_actions(monkeypatch: pytest.MonkeyPatch, frame: Any) -> Iterator[_
 # ── the structural gate and the required-null half ──────────────────
 
 
-@RED_TASK
 def test_strict_counts_required_nulls_in_exactly_one_action(spark, monkeypatch):
     frame = spark.createDataFrame(_rows("a", "b", "c"), BASE_DDL)
 
@@ -128,10 +125,7 @@ def test_strict_counts_required_nulls_in_exactly_one_action(spark, monkeypatch):
     assert checked.columns == frame.columns
 
 
-@RED_TASK
 def test_blank_strings_count_as_null_for_a_required_string_column(spark):
-    from janus.quality.contract_checks import ContractViolationError
-
     frame = spark.createDataFrame(_rows("a", None, "", "   "), BASE_DDL)
 
     with pytest.raises(ContractViolationError) as raised:
@@ -148,10 +142,7 @@ def test_blank_strings_count_as_null_for_a_required_string_column(spark):
     ]
 
 
-@RED_TASK
 def test_a_structural_mismatch_raises_before_any_action(spark, monkeypatch):
-    from janus.quality.contract_checks import ContractViolationError
-
     frame = spark.createDataFrame(
         [("a", "one", WHEN)], "id string, label string, when timestamp"
     )
@@ -168,7 +159,6 @@ def test_a_structural_mismatch_raises_before_any_action(spark, monkeypatch):
     ]
 
 
-@RED_TASK
 def test_lenient_runs_no_action_and_leaves_required_nulls_to_the_gate(spark, monkeypatch):
     frame = spark.createDataFrame(_rows("a", None), BASE_DDL)
 
@@ -179,7 +169,6 @@ def test_lenient_runs_no_action_and_leaves_required_nulls_to_the_gate(spark, mon
     assert dict(evidence.required_null_counts) == {}
 
 
-@RED_TASK
 def test_the_evidence_reports_the_structural_check_as_schema_expectations(spark):
     frame = spark.createDataFrame(_rows("a"), BASE_DDL)
 

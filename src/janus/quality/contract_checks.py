@@ -86,10 +86,28 @@ class ContractCheck:
 
 
 class ContractEnforcementError(RuntimeError):
-    """Base of every 'the contract said no' failure; failure_stage names where."""
+    """Base of every 'the contract said no' failure; failure_stage names where.
+
+    The materializer attaches what it knew when it refused: ``evidence`` holds the pre-write
+    evidence of every batch it checked, the refused one last, and ``committed_results`` the bronze
+    writes of the batches before it, so an entry point can report both without re-reading.
+    """
 
     failure_stage: str = "contract_check"
     checks: tuple[ValidationCheck, ...] = ()
+    evidence: tuple[Any, ...] = ()
+    committed_results: tuple[Any, ...] = ()
+
+
+class MissingContractError(ContractEnforcementError):
+    """A plan without a data contract: there is nothing to check a batch against, so no write."""
+
+    def __init__(self, source_id: str) -> None:
+        self.source_id = source_id
+        super().__init__(
+            f"source {source_id!r} has no data contract; bronze is materialized only under one "
+            "(declare schema.contract)"
+        )
 
 
 class ContractViolationError(ContractEnforcementError):

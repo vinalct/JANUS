@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from janus.models import RunContext, SourceConfig
+from janus.models.data_contracts import load_data_contract
 from janus.normalizers import NORMALIZATION_METADATA_COLUMNS
 from janus.planner import PlannedRun
 from janus.runtime import SourceExecutor, SparkSessionProvider
@@ -24,6 +25,9 @@ from janus.utils.storage import StorageLayout
 from tests.support.spark_sessions import build_iceberg_session, require_iceberg_runtime
 
 SOURCE_ID = "lazy_spark_date_window_source"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# The contract the materializer checks every batch against; the pages' own shape.
+CONTRACT_PATH = "tests/fixtures/contracts/lifecycle/execute_lifecycle_evidence.yaml"
 ENVIRONMENT_CONFIG = {
     "storage": {
         "root_dir": "data",
@@ -311,7 +315,9 @@ def _run_source(
         started_at=datetime(2026, 7, 6, 11, 0, tzinfo=UTC),
     )
     source_config = _source_config(tmp_path, unique_fields=unique_fields)
-    plan = strategy.plan(source_config, run_context, hook=hook)
+    plan = strategy.plan(source_config, run_context, hook=hook).with_data_contract(
+        load_data_contract(PROJECT_ROOT / CONTRACT_PATH)
+    )
     planned_run = PlannedRun(plan=plan, strategy=strategy, hook=hook)
 
     provider = SparkSessionProvider({}, {}, logger, session_factory=session_factory)
@@ -417,7 +423,7 @@ def _source_config_payload(*, unique_fields: list[str] | None = None) -> dict[st
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": CONTRACT_PATH},
         "spark": {
             "input_format": "json",
             "write_mode": "append",

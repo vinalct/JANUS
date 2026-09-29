@@ -131,6 +131,7 @@
         },
         "extraction_mode": "incremental",
         "failure_reason": null,
+        "failure_stage": null,
         "materialized_outputs": [
           {
             "format": "json",

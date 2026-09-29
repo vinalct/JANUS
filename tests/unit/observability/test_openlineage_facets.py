@@ -725,6 +725,28 @@ def _enforcement_event(metadata: RunMetadata, lineage: LineageRecord, report: Va
     )
 
 
+def test_an_enforcement_failure_names_its_stage():
+    metadata = replace(
+        _run_metadata(
+            run_id="enforcement",
+            status="failed",
+            outputs=(raw,),
+            records_extracted=2,
+            failure_reason="example.consumer v1.0.0: frame does not match the contract",
+            error_type="ContractViolationError",
+        ),
+        failure_stage="contract_check",
+    )
+    lineage = replace(_lineage(metadata), failure_stage="contract_check")
+
+    event = _enforcement_event(metadata, lineage, _validation_report(metadata, failed=True))
+    facet = event["run"]["facets"]["janusRun"]
+
+    assert facet["failure_stage"] == "contract_check"
+    assert facet["error_type"] == "ContractViolationError"
+    _validator(JANUS_FACET_SCHEMA).validate(facet)
+
+
 class TestOrder19JanusRunFacet:
 
     @RED_TASK
@@ -757,29 +779,6 @@ class TestOrder19JanusRunFacet:
         assert facet["malformed_rows"] == 0
         assert facet["failure_stage"] is None
         _validator(OPENLINEAGE_SCHEMA).validate(event)
-        _validator(JANUS_FACET_SCHEMA).validate(facet)
-
-    @RED_TASK
-    def test_an_enforcement_failure_names_its_stage(self):
-        raw, _ = _materialized_outputs()
-        metadata = replace(
-            _run_metadata(
-                run_id="enforcement",
-                status="failed",
-                outputs=(raw,),
-                records_extracted=2,
-                failure_reason="example.consumer v1.0.0: frame does not match the contract",
-                error_type="ContractViolationError",
-            ),
-            failure_stage="contract_check",
-        )
-        lineage = replace(_lineage(metadata), failure_stage="contract_check")
-
-        event = _enforcement_event(metadata, lineage, _validation_report(metadata, failed=True))
-        facet = event["run"]["facets"]["janusRun"]
-
-        assert facet["failure_stage"] == "contract_check"
-        assert facet["error_type"] == "ContractViolationError"
         _validator(JANUS_FACET_SCHEMA).validate(facet)
 
     @RED_TASK

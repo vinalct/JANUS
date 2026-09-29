@@ -21,14 +21,12 @@ from janus.models import (
 )
 from janus.models.data_contracts import DataContract, load_data_contract
 from janus.planner import PlannedRun
-from janus.quality import QualityGate, ValidationReportStore
+from janus.quality import ContractViolationError, QualityGate, ValidationReportStore
 from janus.registry import load_registry
 from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.runtime.materialize import BronzeMaterializer
 from janus.scripts.raw_to_bronze import RawToBronzeLoader
 from janus.utils.storage import StorageLayout, bronze_table_identifier
-
-pytestmark = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HOSTILE = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "hostile"
@@ -301,8 +299,6 @@ def _assert_contract_check_failure(run: Any, contract: DataContract, calls: list
 
 
 def test_the_writer_is_never_called_when_the_check_fails(tmp_path):
-    from janus.quality.contract_checks import ContractViolationError
-
     calls: list[str] = []
     planned_run = _planned_run(tmp_path, calls)
     plan = planned_run.plan
@@ -344,8 +340,6 @@ def test_the_check_runs_between_the_read_and_normalization(tmp_path):
 
 
 def test_a_failing_second_batch_leaves_the_first_written_and_names_itself(tmp_path):
-    from janus.quality.contract_checks import ContractViolationError
-
     calls: list[str] = []
     # Six file artifacts over the five-per-batch limit: batches of 5 and 1.
     planned_run = _planned_run(tmp_path, calls, artifact_count=6, family="file")

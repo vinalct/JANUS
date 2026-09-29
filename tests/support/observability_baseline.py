@@ -25,6 +25,7 @@ from janus.scripts.raw_to_bronze import RawToBronzeLoader
 from janus.strategies.api import ApiHook, ApiResponse, ApiStrategy
 from janus.strategies.catalog import CatalogStrategy
 from janus.utils.storage import StorageLayout, bronze_table_identifier
+from tests.support.contract_frames import SchemaRows
 from tests.support.contracts import CONTRACT_SCHEMA_BLOCK, write_minimal_contract
 
 # Fixed instants: every timestamp in a golden is derived from one of these two.
@@ -128,7 +129,8 @@ class JsonReader:
                 if artifact.format == "jsonl"
                 else json.loads(content)
             )
-        return rows
+        # The rows keep their shape; the schema is the one the read was handed, as Spark applies.
+        return SchemaRows(rows, schema=kwargs.get("schema"))
 
 
 class IdentityNormalizer:

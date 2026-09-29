@@ -16,6 +16,7 @@ from janus.normalizers import BaseNormalizer
 from janus.quality import QualityGate
 from janus.readers import SparkDatasetReader
 from janus.registry import load_registry
+from janus.schema_contracts import resolve_spark_schema_for_plan
 from janus.strategies.files import FileStrategy
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SparkDatasetWriter
@@ -149,6 +150,7 @@ def test_inep_archive_extracts_microdata_csv_and_materializes_bronze_and_metadat
     raw_dataframe = reader.read_extraction_result(
         spark,
         handoff,
+        schema=resolve_spark_schema_for_plan(plan),
         options=plan.source_config.spark.read_options,
     )
     normalized_dataframe = BaseNormalizer().normalize(raw_dataframe, plan)

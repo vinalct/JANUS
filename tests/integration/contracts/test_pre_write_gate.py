@@ -38,7 +38,6 @@ from tests.support.contract_enforcement import (
     write_parquet,
 )
 
-RED_04 = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 RED_05 = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -116,7 +115,6 @@ def _assert_failed_before_commit(run: ExecutedRun, *, failure_stage: str) -> Non
 # ── AC-1: a structural mismatch fails before the commit ──────────────────────
 
 
-@RED_04
 def test_a_missing_column_fails_before_the_full_refresh_commits(factory, tmp_path):
     case = EnforcementCase.for_source(
         "ac1_missing_column", ID_AMOUNT, raw_format="jsonl", write_mode="overwrite", page_size=2
@@ -133,7 +131,6 @@ def test_a_missing_column_fails_before_the_full_refresh_commits(factory, tmp_pat
     assert "amount" in _columns(factory, case.bronze_table)
 
 
-@RED_04
 def test_a_type_mismatch_fails_before_the_commit(factory, tmp_path):
     case = EnforcementCase.for_source("ac1_type_mismatch", ID_AMOUNT, write_mode="overwrite")
     first = _run(case, tmp_path, factory, [[{"id": "t1", "amount": 1}]], run_id="ac1-type-1")
@@ -160,7 +157,6 @@ def test_a_type_mismatch_fails_before_the_commit(factory, tmp_path):
     assert _snapshots(factory, case.bronze_table) == before
 
 
-@RED_04
 def test_a_null_in_a_required_column_of_a_strict_source_fails_before_the_append(
     factory, tmp_path
 ):
@@ -177,7 +173,6 @@ def test_a_null_in_a_required_column_of_a_strict_source_fails_before_the_append(
         assert bronze_rows(spark, case.bronze_table, ("id",)) == [("g1",), ("g2",)]
 
 
-@RED_04
 @pytest.mark.parametrize("kind", ["missing_column", "type_mismatch", "required_null"])
 def test_a_failing_first_batch_never_creates_the_table(factory, tmp_path, kind):
     source_id = f"ac1_first_write_{kind}"

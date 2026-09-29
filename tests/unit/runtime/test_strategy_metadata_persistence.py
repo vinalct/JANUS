@@ -13,6 +13,7 @@ from typing import Any
 
 from janus.lineage import RunObserver
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext, WriteResult
+from janus.models.data_contracts import load_data_contract
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
 from janus.registry import load_registry
@@ -21,6 +22,7 @@ from janus.runtime.executor import ExecutedRun
 from janus.strategies.base import SourceHook
 from janus.utils.logging import StructuredLogger, build_structured_logger
 from janus.utils.storage import StorageLayout
+from tests.support.contract_frames import read_frame
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -116,10 +118,9 @@ class FakeReader:
         del spark
         del extraction_result
         del format_name
-        del schema
         del options
         self.calls.append("read")
-        return object()
+        return read_frame(schema)
 
 
 @dataclass(slots=True)
@@ -350,7 +351,9 @@ def _run(
         started_at=datetime(2026, 4, 8, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=ExecutionPlan.from_source_config(source_config, run_context).with_data_contract(
+            load_data_contract(PROJECT_ROOT / source_config.schema.contract)
+        ),
         strategy=MetadataStrategy(
             calls,
             emitted_metadata=emitted_metadata,

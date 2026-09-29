@@ -5,6 +5,7 @@ from janus.quality.contract_checks import (
     ContractMismatch,
     ContractViolationError,
     FrameColumn,
+    MissingContractError,
     check_frame_against_contract,
 )
 from janus.quality.models import (
@@ -14,6 +15,7 @@ from janus.quality.models import (
     ValidationCheck,
     ValidationReport,
 )
+from janus.quality.pre_write import PreWriteEvidence, run_pre_write_pass
 from janus.quality.schema_expectation import SchemaExpectation, resolve_schema_expectation
 from janus.quality.store import PersistedValidationReport, ValidationReportStore
 from janus.quality.validators import (
@@ -37,7 +39,9 @@ __all__ = [
     "ContractMismatch",
     "ContractViolationError",
     "FrameColumn",
+    "MissingContractError",
     "PersistedValidationReport",
+    "PreWriteEvidence",
     "QualityGate",
     "QualityValidationError",
     "SchemaExpectation",
@@ -46,6 +50,7 @@ __all__ = [
     "ValidationReportStore",
     "check_frame_against_contract",
     "resolve_schema_expectation",
+    "run_pre_write_pass",
     "validate_bronze_key_uniqueness",
     "validate_materialized_outputs",
     "validate_output_columns",
