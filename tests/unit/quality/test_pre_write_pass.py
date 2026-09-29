@@ -17,8 +17,6 @@ from janus.models.data_contracts import DataContract, load_data_contract
 from janus.quality import ContractViolationError, run_pre_write_pass
 from tests.support.spark_sessions import build_iceberg_session
 
-RED_TASK_2 = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HOSTILE = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "hostile"
 CORRUPT = "_janus_corrupt_record"
@@ -133,9 +131,7 @@ def test_blank_strings_count_as_null_for_a_required_string_column(spark):
 
     assert raised.value.failure_stage == "contract_check"
     required = [
-        mismatch
-        for mismatch in raised.value.check.mismatches
-        if mismatch.kind == "required_null"
+        mismatch for mismatch in raised.value.check.mismatches if mismatch.kind == "required_null"
     ]
     assert [(mismatch.column, mismatch.observed) for mismatch in required] == [
         ("id", "3 null/blank")
@@ -143,9 +139,7 @@ def test_blank_strings_count_as_null_for_a_required_string_column(spark):
 
 
 def test_a_structural_mismatch_raises_before_any_action(spark, monkeypatch):
-    frame = spark.createDataFrame(
-        [("a", "one", WHEN)], "id string, label string, when timestamp"
-    )
+    frame = spark.createDataFrame([("a", "one", WHEN)], "id string, label string, when timestamp")
 
     with (
         _counting_actions(monkeypatch, frame) as counter,
@@ -183,7 +177,6 @@ def test_the_evidence_reports_the_structural_check_as_schema_expectations(spark)
 # ── malformed rows ──────────────────────────────────────────────────
 
 
-@RED_TASK_2
 def test_malformed_rows_share_the_one_action_and_samples_cost_a_second(spark, monkeypatch):
     clean = spark.createDataFrame(_tracked_rows(None, None, None), TRACKED_DDL)
     drifted = spark.createDataFrame(
@@ -211,19 +204,15 @@ def test_malformed_rows_share_the_one_action_and_samples_cost_a_second(spark, mo
     assert drifted_evidence.malformed_count == 2
 
 
-@RED_TASK_2
 def test_the_frame_handed_back_never_carries_the_corrupt_column(spark):
     frame = spark.createDataFrame(_tracked_rows(None, '{"amount": "abc"}'), TRACKED_DDL)
 
-    checked, _ = _run(
-        frame, _contract("base_lenient"), enforcement="lenient", tracks_corrupt=True
-    )
+    checked, _ = _run(frame, _contract("base_lenient"), enforcement="lenient", tracks_corrupt=True)
 
     assert CORRUPT not in checked.columns
     assert checked.columns == ["id", "label", "amount", "when"]
 
 
-@RED_TASK_2
 def test_samples_are_at_most_five_bounded_and_flag_truncation(spark):
     long_record = '{"label": "' + "x" * 1200 + '", "amount": "abc"}'
     frame = spark.createDataFrame(
@@ -249,7 +238,6 @@ def test_samples_are_at_most_five_bounded_and_flag_truncation(spark):
     assert len(json.loads(details["samples"])) == SAMPLE_LIMIT
 
 
-@RED_TASK_2
 def test_samples_are_scrubbed_before_they_reach_the_validation_json(spark):
     echoed = '{"next": "https://example.invalid/r?token=sk-live-123456&page=2", "amount": "x"}'
     frame = spark.createDataFrame(_tracked_rows(echoed), TRACKED_DDL)
@@ -268,7 +256,6 @@ def test_samples_are_scrubbed_before_they_reach_the_validation_json(spark):
     assert "sk-live-123456" not in details["samples"]
 
 
-@RED_TASK_2
 def test_strict_over_the_threshold_raises_malformed_rows_error(spark):
     from janus.quality.malformed_rows import MalformedRowsError
 
@@ -286,7 +273,6 @@ def test_strict_over_the_threshold_raises_malformed_rows_error(spark):
     assert "abc" in error.samples[0] or "abc" in error.samples[1]
 
 
-@RED_TASK_2
 def test_strict_within_the_threshold_writes_and_still_reports_the_count(spark):
     frame = spark.createDataFrame(
         _tracked_rows(None, '{"amount": "abc"}', '{"amount": 12.5}'), TRACKED_DDL
@@ -306,15 +292,12 @@ def test_strict_within_the_threshold_writes_and_still_reports_the_count(spark):
     assert check.details_as_dict()["threshold"] == "3"
 
 
-@RED_TASK_2
 def test_lenient_never_raises_and_reports_a_warning(spark):
     frame = spark.createDataFrame(
         _tracked_rows(None, '{"amount": "abc"}', '{"amount": 12.5}'), TRACKED_DDL
     )
 
-    _, evidence = _run(
-        frame, _contract("base_lenient"), enforcement="lenient", tracks_corrupt=True
-    )
+    _, evidence = _run(frame, _contract("base_lenient"), enforcement="lenient", tracks_corrupt=True)
 
     check = _check(evidence, "malformed_rows", enforcement="lenient")
     assert check.outcome == "passed"
@@ -323,7 +306,6 @@ def test_lenient_never_raises_and_reports_a_warning(spark):
     assert check.details_as_dict()["count"] == "2"
 
 
-@RED_TASK_2
 def test_a_parquet_handoff_skips_malformed_rows_but_strict_still_counts_nulls(spark):
     frame = spark.createDataFrame(_rows("a", "b"), BASE_DDL)
 

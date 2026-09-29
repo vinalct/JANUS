@@ -1,18 +1,21 @@
-"""The pre-write pass: the structural check for every batch, one aggregation for ``strict``."""
+"""The pre-write pass: structural check and one shared data aggregation per batch."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, NoReturn
 
 from janus.models.data_contracts import DataContract
 from janus.quality.contract_checks import (
+    CORRUPT_RECORD_COLUMN,
     ContractCheck,
     ContractMismatch,
     ContractViolationError,
     check_frame_against_contract,
 )
+from janus.quality.malformed_rows import MalformedRowsError, bounded_samples, malformed_rows_check
 from janus.quality.models import ValidationCheck
 
 STRICT = "strict"
@@ -31,12 +34,24 @@ class PreWriteEvidence:
     required_null_counts: Mapping[str, int] = field(default_factory=dict)
     malformed_count: int | None = None
     malformed_samples: tuple[str, ...] = ()
+    malformed_truncated: bool = False
+    max_malformed_rows: int = 0
 
     def checks(self, *, enforcement: str) -> tuple[ValidationCheck, ...]:
-        """This batch's report: ``schema_expectations``, plus ``required_fields`` for strict."""
+        """Render schema, required-field and malformed-row results for this batch."""
         rendered = [self.contract_check.to_validation_check()]
         if enforcement == STRICT:
             rendered.append(self._required_fields_check())
+        rendered.append(
+            malformed_rows_check(
+                self.malformed_count,
+                enforcement=enforcement,
+                threshold=self.max_malformed_rows,
+                samples=self.malformed_samples,
+                truncated=self.malformed_truncated,
+                batch_index=self.batch_index,
+            )
+        )
         return tuple(rendered)
 
     def _required_fields_check(self) -> ValidationCheck:
@@ -56,15 +71,48 @@ def run_pre_write_pass(
     enforcement: str,
     batch_index: int,
     batch_count: int,
+    max_malformed_rows: int = 0,
+    tracks_corrupt: bool = False,
 ) -> tuple[Any, PreWriteEvidence]:
-    """Return ``(frame, evidence)``, or raise ``ContractViolationError`` before any write."""
-    check = structural_check(dataframe, contract)
+    """Check schema and data before the write, returning a frame without reader evidence."""
+    check = structural_check(dataframe, contract, allow_corrupt_column=tracks_corrupt)
     if not check.ok:
         _refuse(PreWriteEvidence(batch_index, batch_count, check))
 
+    fields = contract.required_columns if enforcement == STRICT else ()
     counts: dict[str, int] = {}
-    if pre_write_aggregates(contract, enforcement=enforcement):
-        counts = _required_null_counts(dataframe, contract.required_columns)
+    malformed_count: int | None = None
+    if pre_write_aggregates(contract, enforcement=enforcement, tracks_corrupt=tracks_corrupt):
+        from pyspark.sql.functions import col, when
+        from pyspark.sql.functions import sum as spark_sum
+
+        aggregations = required_null_aggregations(dataframe, fields)
+        if tracks_corrupt:
+            aggregations.append(
+                spark_sum(when(col(CORRUPT_RECORD_COLUMN).isNotNull(), 1).otherwise(0)).alias(
+                    "__malformed"
+                )
+            )
+        row = dataframe.agg(*aggregations).first()
+        if row is None:
+            raise RuntimeError("Spark returned no row for the pre-write aggregation")
+        counts = {name: int(row[name] or 0) for name in fields}
+        if tracks_corrupt:
+            malformed_count = int(row["__malformed"] or 0)
+
+    samples: tuple[str, ...] = ()
+    truncated = False
+    if malformed_count:
+        from pyspark.sql.functions import col
+
+        rows = (
+            dataframe.where(col(CORRUPT_RECORD_COLUMN).isNotNull())
+            .select(CORRUPT_RECORD_COLUMN)
+            .limit(5)
+            .collect()
+        )
+        samples, truncated = bounded_samples(rows)
+
     violations = [
         ContractMismatch(REQUIRED_NULL, name, observed=f"{count} null/blank")
         for name, count in counts.items()
@@ -74,19 +122,69 @@ def run_pre_write_pass(
         mismatches = sorted([*check.mismatches, *violations], key=lambda m: (m.column, m.kind))
         _refuse(
             PreWriteEvidence(
-                batch_index, batch_count, replace(check, mismatches=tuple(mismatches)), counts
+                batch_index,
+                batch_count,
+                replace(check, mismatches=tuple(mismatches)),
+                counts,
+                malformed_count,
+                samples,
+                truncated,
+                max_malformed_rows,
             )
         )
-    return dataframe, PreWriteEvidence(batch_index, batch_count, check, counts)
+
+    if tracks_corrupt:
+        dataframe = dataframe.drop(CORRUPT_RECORD_COLUMN)
+        clean_check = structural_check(dataframe, contract)
+        if not clean_check.ok:
+            _refuse(PreWriteEvidence(batch_index, batch_count, clean_check))
+
+    evidence = PreWriteEvidence(
+        batch_index,
+        batch_count,
+        check,
+        counts,
+        malformed_count,
+        samples,
+        truncated,
+        max_malformed_rows,
+    )
+    if (
+        enforcement == STRICT
+        and malformed_count is not None
+        and malformed_count > max_malformed_rows
+    ):
+        error = MalformedRowsError(
+            malformed_count, samples, max_malformed_rows, batch_index, batch_count
+        )
+        error.evidence = (evidence,)
+        error.checks = (
+            malformed_rows_check(
+                malformed_count,
+                enforcement=enforcement,
+                threshold=max_malformed_rows,
+                samples=samples,
+                truncated=truncated,
+                batch_index=batch_index,
+            ),
+        )
+        raise error
+    return dataframe, evidence
 
 
-def pre_write_aggregates(contract: DataContract, *, enforcement: str) -> bool:
-    """Whether the pass will run an action, which is when a batch is worth persisting first."""
-    return enforcement == STRICT and bool(contract.required_columns)
+def pre_write_aggregates(
+    contract: DataContract, *, enforcement: str, tracks_corrupt: bool = False
+) -> bool:
+    """Whether a batch needs a persisted scan for the shared data aggregation."""
+    return tracks_corrupt or (enforcement == STRICT and bool(contract.required_columns))
 
 
 def structural_check(
-    dataframe: Any, contract: DataContract, *, ignored_columns: Sequence[str] = ()
+    dataframe: Any,
+    contract: DataContract,
+    *,
+    ignored_columns: Sequence[str] = (),
+    allow_corrupt_column: bool = False,
 ) -> ContractCheck:
     from janus.schema_contracts import frame_columns_from_spark_schema
 
@@ -96,7 +194,9 @@ def structural_check(
         for column in frame_columns_from_spark_schema(dataframe.schema)
         if column.name in declared or column.name not in ignored_columns
     ]
-    return check_frame_against_contract(columns, contract)
+    return check_frame_against_contract(
+        columns, contract, allow_corrupt_column=allow_corrupt_column
+    )
 
 
 def required_null_aggregations(dataframe: Any, fields: Sequence[str]) -> list[Any]:
@@ -160,14 +260,24 @@ def _merge(entries: list[tuple[PreWriteEvidence, ValidationCheck]]) -> Validatio
             for item, check in chosen
         )
     details = {**first.details_as_dict(), "batches": str(len(entries))}
+    if first.name == "malformed_rows" and outcome != "skipped":
+        measured = [check.details_as_dict() for _, check in entries if check.outcome != "skipped"]
+        count = sum(int(item["count"]) for item in measured)
+        samples = [sample for item in measured for sample in json.loads(item["samples"])][:5]
+        details.update(
+            count=str(count),
+            samples=json.dumps(samples, ensure_ascii=False),
+            truncated=str(any(item["truncated"] == "true" for item in measured)).lower(),
+        )
+        if len(entries) > 1 and outcome == "passed":
+            if "severity" in details:
+                message = f"WARNING: {count} malformed rows observed across {len(entries)} batches."
+            else:
+                message = (
+                    f"{count} malformed rows observed across {len(entries)} batches; "
+                    "each batch within max_malformed_rows."
+                )
     return replace(first, message=message, details=tuple(sorted(details.items())))
-
-
-def _required_null_counts(dataframe: Any, fields: Sequence[str]) -> dict[str, int]:
-    row = dataframe.agg(*required_null_aggregations(dataframe, fields)).first()
-    if row is None:
-        raise RuntimeError("Spark returned no row for the pre-write aggregation")
-    return {name: int(row[name] or 0) for name in fields}
 
 
 def _refuse(evidence: PreWriteEvidence) -> NoReturn:

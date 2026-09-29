@@ -11,13 +11,14 @@ from janus.utils.storage import StorageLayout
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
-SUPPORTED_SPARK_READ_FORMATS = frozenset(
-    {"binary", "csv", "json", "jsonl", "parquet", "text"}
-)
+SUPPORTED_SPARK_READ_FORMATS = frozenset({"binary", "csv", "json", "jsonl", "parquet", "text"})
+CORRUPT_RECORD_READ_FORMATS = frozenset({"csv", "json", "jsonl"})
 
 
 class SparkDatasetReader:
     """Generic Spark reader for raw artifacts and explicit JANUS output zones."""
+
+    supports_corrupt_record_read = True
 
     def read_paths(
         self,
@@ -27,12 +28,15 @@ class SparkDatasetReader:
         format_name: str,
         schema: Any | None = None,
         options: Mapping[str, Any] | None = None,
+        corrupt_record_column: str | None = None,
     ) -> DataFrame:
         normalized_paths = _normalize_paths(paths)
         reader = spark.read.format(_spark_read_format(format_name))
         if schema is not None:
             reader = reader.schema(schema)
-        for key, value in _resolved_read_options(format_name, options).items():
+        for key, value in _resolved_read_options(
+            format_name, options, corrupt_record_column=corrupt_record_column
+        ).items():
             reader = reader.option(key, value)
 
         load_argument: str | list[str]
@@ -50,6 +54,7 @@ class SparkDatasetReader:
         format_name: str | None = None,
         schema: Any | None = None,
         options: Mapping[str, Any] | None = None,
+        corrupt_record_column: str | None = None,
     ) -> DataFrame:
         if extraction_result.is_empty:
             raise ValueError("extraction_result must contain at least one artifact")
@@ -61,6 +66,7 @@ class SparkDatasetReader:
             format_name=resolved_format,
             schema=schema,
             options=options,
+            corrupt_record_column=corrupt_record_column,
         )
 
     def read_plan_output(
@@ -127,17 +133,26 @@ def _compact_complete_parent_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
 def _resolved_read_options(
     format_name: str,
     options: Mapping[str, Any] | None,
+    *,
+    corrupt_record_column: str | None = None,
 ) -> dict[str, str]:
-    resolved_options = _default_read_options(format_name)
+    resolved_options = _default_read_options(
+        format_name, corrupt_record_column=corrupt_record_column
+    )
     resolved_options.update(_normalize_options(options))
     return resolved_options
 
 
-def _default_read_options(format_name: str) -> dict[str, str]:
+def _default_read_options(
+    format_name: str, *, corrupt_record_column: str | None = None
+) -> dict[str, str]:
     normalized = format_name.strip().lower()
+    options: dict[str, str] = {}
     if normalized == "json":
-        return {"multiLine": "true"}
-    return {}
+        options["multiLine"] = "true"
+    if corrupt_record_column is not None and normalized in CORRUPT_RECORD_READ_FORMATS:
+        options.update(mode="PERMISSIVE", columnNameOfCorruptRecord=corrupt_record_column)
+    return options
 
 
 def _normalize_options(options: Mapping[str, Any] | None) -> dict[str, str]:

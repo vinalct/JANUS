@@ -84,8 +84,7 @@ class ContractProperty:
         declared = [name for name in field_names if getattr(self, name)]
         if declared:
             raise ValueError(
-                f"{self.physical_type} properties must not declare "
-                + " or ".join(declared)
+                f"{self.physical_type} properties must not declare " + " or ".join(declared)
             )
 
 
@@ -113,6 +112,7 @@ class JanusContractOptions:
     compatibility: str
     enforcement: str
     drafted_from: str | None = None
+    max_malformed_rows: int = 0
 
     def __post_init__(self) -> None:
         if self.compatibility not in SUPPORTED_COMPATIBILITY_MODES:
@@ -123,6 +123,8 @@ class JanusContractOptions:
             raise ValueError(f"enforcement must be one of: {allowed}")
         if self.drafted_from is not None and not self.drafted_from.strip():
             raise ValueError("drafted_from must not be empty")
+        if type(self.max_malformed_rows) is not int or self.max_malformed_rows < 0:
+            raise ValueError("max_malformed_rows must be a non-negative integer")
 
 
 @dataclass(frozen=True, slots=True)

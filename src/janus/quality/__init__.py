@@ -8,6 +8,7 @@ from janus.quality.contract_checks import (
     MissingContractError,
     check_frame_against_contract,
 )
+from janus.quality.malformed_rows import MalformedRowsError
 from janus.quality.models import (
     SUPPORTED_VALIDATION_OUTCOMES,
     SUPPORTED_VALIDATION_PHASES,
@@ -39,6 +40,7 @@ __all__ = [
     "ContractMismatch",
     "ContractViolationError",
     "FrameColumn",
+    "MalformedRowsError",
     "MissingContractError",
     "PersistedValidationReport",
     "PreWriteEvidence",

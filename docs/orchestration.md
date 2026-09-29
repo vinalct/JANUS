@@ -338,6 +338,15 @@ The batch records it as `status: "failed"` with the validation report path in it
 and its descendants are skipped with `reason_code: "upstream_failed"`. Read
 `validation_report_path` from that source's `evidence.metadata_outputs`.
 
+### A malformed-row refusal
+
+For `failure_stage: "malformed_rows"`, open the source's validation report and inspect
+`data.malformed_rows.details`: `count`, `threshold`, `batch_index`, and up to five bounded,
+scrubbed `samples`. A refused batch commits no bronze snapshot. JSON pages read with `multiLine`
+can flag every row when one record drifts; JSONL and CSV identify individual lines. A CSV header
+mismatch can flag every data row. In a batch, the source fails and its descendants are skipped
+with `reason_code: "upstream_failed"`.
+
 ### Summary write failure
 
 If the aggregate cannot be persisted, the batch still prints the complete in-memory summary

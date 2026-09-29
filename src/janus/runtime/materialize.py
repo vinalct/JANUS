@@ -27,6 +27,7 @@ from janus.models.data_contracts import DataContract
 from janus.normalizers import BaseNormalizer
 from janus.planner import PlannedRun
 from janus.quality import (
+    CORRUPT_RECORD_COLUMN,
     ContractEnforcementError,
     MissingContractError,
     PersistedValidationReport,
@@ -35,7 +36,8 @@ from janus.quality import (
 )
 from janus.quality.pre_write import pre_write_aggregates
 from janus.readers import SparkDatasetReader
-from janus.schema_contracts import resolve_spark_schema_for_plan
+from janus.readers.spark import CORRUPT_RECORD_READ_FORMATS
+from janus.schema_contracts import spark_schema_from_contract
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout
 from janus.writers import SparkDatasetWriter
@@ -153,13 +155,18 @@ class BronzeMaterializer:
                 batch_artifacts,
             )
 
+            tracks_corrupt = _tracks_corrupt_records(
+                self.reader, batch_handoff.single_artifact_format(), plan
+            )
             raw_dataframe = _read_batch(
                 self.reader, spark, batch_handoff, plan, contract, logger, batch_metadata
             )
 
             # A strict pass aggregates before the write reads the same rows again: persist so
             # the two share one scan, and release it only after the write (or its failure).
-            persisted = pre_write_aggregates(contract, enforcement=contract.janus.enforcement)
+            persisted = pre_write_aggregates(
+                contract, enforcement=contract.janus.enforcement, tracks_corrupt=tracks_corrupt
+            )
             if persisted:
                 raw_dataframe = _persist(raw_dataframe)
             try:
@@ -170,6 +177,8 @@ class BronzeMaterializer:
                         enforcement=contract.janus.enforcement,
                         batch_index=batch_metadata["batch_index"],
                         batch_count=batch_metadata["batch_count"],
+                        max_malformed_rows=contract.janus.max_malformed_rows,
+                        tracks_corrupt=tracks_corrupt,
                     )
                 except ContractEnforcementError as exc:
                     _annotate_contract_failure(
@@ -230,6 +239,17 @@ class BronzeMaterializer:
         return tuple(bronze_results), normalized_dataframe, run_keys, tuple(evidence)
 
 
+def _tracks_corrupt_records(
+    reader: SparkDatasetReader, handoff_format: str, plan: ExecutionPlan
+) -> bool:
+    """Only readers that can expose corrupt records opt into the pre-write count."""
+    return (
+        getattr(reader, "supports_corrupt_record_read", False)
+        and handoff_format in CORRUPT_RECORD_READ_FORMATS
+        and handoff_format == plan.source_config.spark.input_format
+    )
+
+
 def _read_batch(
     reader: SparkDatasetReader,
     spark: SparkSession,
@@ -249,8 +269,9 @@ def _read_batch(
         **batch_metadata,
     )
     handoff_format = handoff.single_artifact_format()
+    tracks_corrupt = _tracks_corrupt_records(reader, handoff_format, plan)
     spark_schema = (
-        resolve_spark_schema_for_plan(plan)
+        spark_schema_from_contract(contract, with_corrupt_record=tracks_corrupt)
         if handoff_format == plan.source_config.spark.input_format
         else None
     )
@@ -259,12 +280,16 @@ def _read_batch(
         if handoff_format == plan.source_config.spark.input_format
         else None
     )
+    read_kwargs: dict[str, Any] = {}
+    if tracks_corrupt:
+        read_kwargs["corrupt_record_column"] = CORRUPT_RECORD_COLUMN
     dataframe = reader.read_extraction_result(
         spark,
         handoff,
         format_name=handoff_format,
         schema=spark_schema,
         options=read_options,
+        **read_kwargs,
     )
     _log_info(logger, "spark_read_finished", **batch_metadata)
     return dataframe

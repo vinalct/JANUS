@@ -11,7 +11,7 @@ from janus.models.data_contracts import (
     contract_properties_from_spark_json,
     spark_struct_json,
 )
-from janus.quality.contract_checks import FrameColumn
+from janus.quality.contract_checks import CORRUPT_RECORD_COLUMN, FrameColumn
 from janus.utils.environment import resolve_project_path
 
 
@@ -65,13 +65,17 @@ def resolve_spark_schema_for_plan(plan: ExecutionPlan) -> Any | None:
     return spark_schema_from_contract(contract)
 
 
-def spark_schema_from_contract(contract: DataContract) -> Any:
+def spark_schema_from_contract(contract: DataContract, *, with_corrupt_record: bool = False) -> Any:
     """Build the Spark schema for one contract — the single generator in `src`."""
     struct_json = spark_struct_json(contract.schema.properties)
+    if with_corrupt_record:
+        struct_json["fields"].append(
+            {"name": CORRUPT_RECORD_COLUMN, "type": "string", "nullable": True, "metadata": {}}
+        )
     try:
         from pyspark.sql.types import StructType
     except ImportError:
-        return _FieldNameSchema(contract.schema.properties)
+        return _FieldNameSchema(contract.schema.properties, with_corrupt_record)
     return StructType.fromJson(struct_json)
 
 
@@ -97,13 +101,22 @@ class _FieldNameSchema:
     """Minimal schema facade for unit tests that run without PySpark installed."""
 
     properties: tuple[ContractProperty, ...]
+    with_corrupt_record: bool = False
 
     def fieldNames(self) -> list[str]:
-        return [prop.name for prop in self.properties]
+        names = [prop.name for prop in self.properties]
+        if self.with_corrupt_record:
+            names.append(CORRUPT_RECORD_COLUMN)
+        return names
 
     def jsonValue(self) -> dict[str, Any]:
         """The struct JSON ``StructType.fromJson`` reads, which its ``jsonValue()`` returns."""
-        return spark_struct_json(self.properties)
+        schema = spark_struct_json(self.properties)
+        if self.with_corrupt_record:
+            schema["fields"].append(
+                {"name": CORRUPT_RECORD_COLUMN, "type": "string", "nullable": True, "metadata": {}}
+            )
+        return schema
 
 
 __all__ = [

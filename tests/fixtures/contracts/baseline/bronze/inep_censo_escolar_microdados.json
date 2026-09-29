@@ -46,6 +46,10 @@
         "outcome": "passed"
       },
       {
+        "name": "malformed_rows",
+        "outcome": "passed"
+      },
+      {
         "name": "output_columns",
         "outcome": "passed"
       },

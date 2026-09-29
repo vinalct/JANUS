@@ -9,6 +9,7 @@ from pyspark.sql import SparkSession
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext
 from janus.models.data_contracts import load_data_contract
 from janus.readers import SparkDatasetReader
+from janus.readers.spark import _default_read_options
 from janus.registry import load_registry
 from janus.schema_contracts import spark_schema_from_contract
 from janus.utils.storage import StorageLayout
@@ -160,3 +161,68 @@ def _build_storage_layout(tmp_path: Path) -> StorageLayout:
         },
         tmp_path,
     )
+
+
+def test_corrupt_record_options_apply_only_to_json_and_csv():
+    assert _default_read_options("json", corrupt_record_column="_janus_corrupt_record") == {
+        "multiLine": "true",
+        "mode": "PERMISSIVE",
+        "columnNameOfCorruptRecord": "_janus_corrupt_record",
+    }
+    for format_name in ("jsonl", "csv"):
+        assert _default_read_options(
+            format_name, corrupt_record_column="_janus_corrupt_record"
+        ) == {
+            "mode": "PERMISSIVE",
+            "columnNameOfCorruptRecord": "_janus_corrupt_record",
+        }
+    assert _default_read_options("parquet", corrupt_record_column="_janus_corrupt_record") == {}
+
+
+def test_reader_captures_json_drift_with_explicit_corrupt_schema(spark):
+    contract = load_data_contract(
+        PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "hostile" / "base.yaml"
+    )
+    frame = SparkDatasetReader().read_paths(
+        spark,
+        (PROJECT_ROOT / "tests" / "fixtures" / "malformed" / "page_with_drift.json",),
+        format_name="json",
+        schema=spark_schema_from_contract(contract, with_corrupt_record=True),
+        corrupt_record_column="_janus_corrupt_record",
+    )
+
+    assert frame.columns[-1] == "_janus_corrupt_record"
+    rows = frame.collect()
+    assert len(rows) == 5
+    assert all('"abc"' in row["_janus_corrupt_record"] for row in rows)
+
+
+def test_read_options_can_override_the_permissive_default():
+    from janus.readers.spark import _resolved_read_options
+
+    assert (
+        _resolved_read_options(
+            "csv", {"mode": "FAILFAST"}, corrupt_record_column="_janus_corrupt_record"
+        )["mode"]
+        == "FAILFAST"
+    )
+
+
+def test_reader_captures_csv_parse_failure_and_extra_field(spark):
+    source = load_registry(PROJECT_ROOT).get_source(
+        "inep_censo_escolar_microdados", include_disabled=True
+    )
+    contract = load_data_contract(PROJECT_ROOT / source.schema.contract)
+    frame = SparkDatasetReader().read_paths(
+        spark,
+        (PROJECT_ROOT / "tests" / "fixtures" / "malformed" / "line_with_drift.csv",),
+        format_name="csv",
+        schema=spark_schema_from_contract(contract, with_corrupt_record=True),
+        options=source.spark.read_options,
+        corrupt_record_column="_janus_corrupt_record",
+    )
+
+    corrupt = [row["_janus_corrupt_record"] for row in frame.collect()]
+    assert len([value for value in corrupt if value is not None]) == 2
+    assert any(value and value.endswith(";abc") for value in corrupt)
+    assert any(value and value.endswith(";EXTRA") for value in corrupt)

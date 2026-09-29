@@ -12,8 +12,11 @@ import pytest
 pytest.importorskip("pyspark")
 
 from janus.models import ExtractedArtifact
+from janus.models.data_contracts import load_data_contract
+from janus.readers import SparkDatasetReader
 from janus.registry import load_registry
 from janus.runtime import ExecutedRun
+from janus.schema_contracts import spark_schema_from_contract
 from tests.support.contract_enforcement import (
     EnforcementCase,
     bronze_rows,
@@ -30,8 +33,6 @@ from tests.support.contract_enforcement import (
     write_parquet,
 )
 
-pytestmark = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HOSTILE = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "hostile"
 MALFORMED = PROJECT_ROOT / "tests" / "fixtures" / "malformed"
@@ -44,6 +45,7 @@ CNPJ_MOTIVOS_SOURCE_ID = "receita_federal__cnpj__motivos_full_refresh"
 CORRUPT = "_janus_corrupt_record"
 STARTED_AT = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
 SAMPLE_CHARACTER_LIMIT = 500
+_CREATED_TABLES: set[str] = set()
 
 DRIFT_PAGE = json.loads((MALFORMED / "page_with_drift.json").read_text(encoding="utf-8"))
 CLEAN_PAGE = [
@@ -55,7 +57,12 @@ CLEAN_PAGE = [
 @pytest.fixture(scope="module")
 def factory(tmp_path_factory):
     root = tmp_path_factory.mktemp("janus-malformed-rows")
-    return iceberg_session_factory(root / "warehouse", "janus-malformed-rows")
+    session_factory = iceberg_session_factory(root / "warehouse", "janus-malformed-rows")
+    yield session_factory
+    with inspection_session(session_factory) as spark:
+        for table in sorted(_CREATED_TABLES):
+            if table_exists(spark, table):
+                assert CORRUPT not in [name for name, _ in table_schema(spark, table)]
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -70,6 +77,7 @@ def _run(
     run_id: str,
     **options: Any,
 ) -> ExecutedRun:
+    _CREATED_TABLES.add(case.bronze_table)
     write_case_project(project, case)
     planned = plan_case(project, case, run_id=run_id, started_at=STARTED_AT)
     return execute_case_with_pages(planned, pages, factory, **options)
@@ -211,9 +219,9 @@ def test_a_strict_headerless_cnpj_csv_counts_its_one_bad_line(factory, tmp_path)
     crafted = tmp_path / "handoff" / "motivos.csv"
     crafted.parent.mkdir(parents=True)
     crafted.write_bytes(
-        '"00";"SEM MOTIVO"\n'
-        '"01";"EXTINCAO POR ENCERRAMENTO";"EXTRA"\n'
-        '"02";"INCORPORAÇÃO"\n'.encode("iso-8859-1")
+        '"00";"SEM MOTIVO"\n"01";"EXTINCAO POR ENCERRAMENTO";"EXTRA"\n"02";"INCORPORAÇÃO"\n'.encode(
+            "iso-8859-1"
+        )
     )
 
     run = _run(
@@ -252,3 +260,45 @@ def test_a_parquet_handoff_skips_the_malformed_rows_check(factory, tmp_path):
     assert check.outcome == "skipped"
     assert "typed by construction" in check.message
     assert CORRUPT not in _table_state(factory, case.bronze_table)[1]
+
+
+# ── Spark reader invariants ───────────────────────────────────────────────────
+
+
+def test_schema_flag_is_required_to_keep_the_corrupt_record(factory):
+    contract = load_data_contract(HOSTILE / "base.yaml")
+    path = MALFORMED / "page_with_drift.json"
+    with inspection_session(factory) as spark:
+        frame = SparkDatasetReader().read_paths(
+            spark,
+            (path,),
+            format_name="json",
+            schema=spark_schema_from_contract(contract),
+            corrupt_record_column=CORRUPT,
+        )
+        assert CORRUPT not in frame.columns
+
+
+def test_corrupt_only_filter_requires_a_persisted_frame(factory):
+    from pyspark import StorageLevel
+    from pyspark.errors import AnalysisException
+    from pyspark.sql.functions import col
+
+    contract = load_data_contract(HOSTILE / "base.yaml")
+    path = MALFORMED / "page_with_drift.json"
+    with inspection_session(factory) as spark:
+        frame = SparkDatasetReader().read_paths(
+            spark,
+            (path,),
+            format_name="json",
+            schema=spark_schema_from_contract(contract, with_corrupt_record=True),
+            corrupt_record_column=CORRUPT,
+        )
+        with pytest.raises(AnalysisException, match="QUERY_ONLY_CORRUPT_RECORD_COLUMN"):
+            frame.where(col(CORRUPT).isNotNull()).count()
+
+        cached = frame.persist(StorageLevel.MEMORY_AND_DISK)
+        try:
+            assert cached.where(col(CORRUPT).isNotNull()).count() == 5
+        finally:
+            cached.unpersist()

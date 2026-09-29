@@ -35,7 +35,8 @@ class QualityGate:
 
     The structural contract check is decided before the write, by the materializer; given that
     ``pre_write_evidence``, the gate reports it as ``data.schema_expectations`` (and, for a
-    ``strict`` contract, ``data.required_fields``) instead of deciding a second time.
+    ``strict`` contract, ``data.required_fields``) and ``data.malformed_rows`` instead
+    of deciding a second time.
     """
 
     report_store: ValidationReportStore | None = None
@@ -60,6 +61,7 @@ class QualityGate:
             reported.get("required_fields") or validate_required_fields(plan, dataframe),
             validate_unique_fields(plan, dataframe),
             reported.get("schema_expectations") or validate_schema_expectations(plan, dataframe),
+            *((reported["malformed_rows"],) if "malformed_rows" in reported else ()),
             validate_output_columns(dataframe, output_columns),
             validate_materialized_outputs(plan, write_results),
             validate_bronze_key_uniqueness(plan, bronze_dataframe, run_keys),

@@ -22,7 +22,7 @@ JANUS reads the subset below, copied from the [pinned ODCS schema guide](schemas
 | `team` | List of `{username, role}` members with at least one `owner` role. | yes |
 | `schema` | Exactly one element whose `name` is the Bronze table name, whose `physicalType` is `table`, and which contains `properties`. | yes |
 | `schema[0].properties[]` | Bronze field metadata: `name`, `businessName`, `description`, derived `logicalType`, JANUS `physicalType`, `required`, `unique`, `primaryKey`, `classification`, and `customProperties` entries for `sourceField` and `sourceFormat`. A `struct` may contain nested `properties`; an `array` may contain `items`. | `name` and `physicalType`; other values have JANUS defaults |
-| `customProperties` | Pairs for `janus.compatibility` (`additive`, `backward`, or `frozen`), `janus.enforcement` (`strict` or `lenient`), and optionally `janus.draftedFrom` (free text on drafts only). | compatibility and enforcement |
+| `customProperties` | Pairs for `janus.compatibility` (`additive`, `backward`, or `frozen`), `janus.enforcement` (`strict` or `lenient`), optionally `janus.maxMalformedRows` (a non-negative integer string, default `0`), and `janus.draftedFrom` (free text on drafts only). | compatibility and enforcement |
 
 ODCS uses arrays for `schema`, `team` and `customProperties`. For example:
 
@@ -103,7 +103,23 @@ The CLI writes `status: draft` and `janus.draftedFrom`; it never runs inside `ru
 
 ## Versioning and compatibility
 
-Use semver for `version`; bump it when declared fields or meaning change. `schema_version` changes on any contract byte edit, even if semver does not. This order records `janus.compatibility` (`additive`, `backward`, `frozen`) and `janus.enforcement` (`strict`, `lenient`) without acting on them.
+Use semver for `version`; bump it when declared fields or meaning change. `schema_version` changes on any contract byte edit, even if semver does not. `janus.enforcement` governs the pre-write malformed-row check for JSON and CSV handoffs; `janus.compatibility` (`additive`, `backward`, `frozen`) is recorded for evolution governance.
+
+## Malformed JSON and CSV rows
+
+JANUS reads JSON, JSONL and CSV handoffs in Spark `PERMISSIVE` mode with a reserved corrupt-record
+column. A `strict` contract refuses a batch before the bronze write when the malformed count
+exceeds `janus.maxMalformedRows` (default `0`). A `lenient` contract writes Spark's parsed values,
+including any nulls from failed type parses, and records the count as a warning. The validation
+report's `data.malformed_rows` check carries the count and up to five scrubbed samples. Samples are
+limited to 500 characters. The reader column is removed before normalization and never belongs to
+the bronze table. Parquet handoffs skip this check. A source can explicitly set `mode: FAILFAST`
+in its Spark read options to make Spark reject malformed input at read time.
+
+Spark's default `multiLine: true` for JSON treats a page as one document. A single drifted record
+can mark every row in that page as corrupt while preserving good parsed values; the count is rows
+Spark could not vouch for. JSONL and CSV count individual records. In CSV, a bad header can mark
+every subsequent data row corrupt.
 
 ## Identity in every run record
 
