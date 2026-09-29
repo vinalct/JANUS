@@ -40,6 +40,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from janus.writers.identifiers import partition_clause, quote_identifier
+from janus.writers.schema_ddl import render_projection
 
 _MECHANISMS = frozenset({"insert_overwrite", "replace_table"})
 
@@ -173,7 +174,7 @@ def build_insert_overwrite_sql(
 
     quoted_table = quote_identifier(table_identifier)
     quoted_view = quote_identifier(source_view)
-    columns = ", ".join(quote_identifier(column) for column in projection)
+    columns = render_projection(projection)
     return f"INSERT OVERWRITE {quoted_table}\nSELECT {columns} FROM {quoted_view}"
 
 

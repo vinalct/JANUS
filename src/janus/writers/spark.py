@@ -34,6 +34,11 @@ from janus.writers.overwrite import (
     build_replace_table_as_select_sql,
     plan_full_refresh_overwrite,
 )
+from janus.writers.schema_ddl import (
+    build_add_columns_sql,
+    build_insert_into_sql,
+    plan_append_projection,
+)
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame
@@ -205,16 +210,13 @@ class SparkDatasetWriter:
                 f"CREATE NAMESPACE IF NOT EXISTS {quote_identifier(namespace_identifier)}"
             )
 
-            quoted_table = quote_identifier(table_identifier)
-            quoted_temp_view = quote_identifier(temp_view_name)
             table_exists = spark.catalog.tableExists(table_identifier)
 
             if effective_mode == "ignore" and table_exists:
                 pass
             elif effective_mode == "overwrite" and table_exists:
-                target_columns, target_partitions = _read_target_table_state(
-                    spark, table_identifier
-                )
+                target_columns = _read_target_columns(spark, table_identifier)
+                target_partitions = _read_target_partitions(spark, table_identifier)
                 overwrite_plan = plan_full_refresh_overwrite(
                     source_columns=tuple(
                         (field.name, field.dataType.simpleString())
@@ -252,7 +254,22 @@ class SparkDatasetWriter:
                             )
                         )
             elif effective_mode == "append" and table_exists:
-                spark.sql(f"INSERT INTO {quoted_table} SELECT * FROM {quoted_temp_view}")
+                target_columns = _read_target_columns(spark, table_identifier)
+                projection = plan_append_projection(
+                    source_columns=tuple(
+                        (field.name, field.dataType.simpleString())
+                        for field in prepared_frame.schema.fields
+                    ),
+                    target_columns=target_columns,
+                    table_identifier=table_identifier,
+                )
+                spark.sql(
+                    build_insert_into_sql(
+                        table_identifier=table_identifier,
+                        source_view=temp_view_name,
+                        projection=projection,
+                    )
+                )
             else:
                 # A first write for any of ignore/append/overwrite creates the table.
                 spark.sql(
@@ -402,30 +419,16 @@ def build_merge_sql(
     )
 
 
-def build_add_columns_sql(
-    *,
-    table_identifier: str,
-    columns: Sequence[tuple[str, str]],
-) -> str | None:
-    """Render ``ALTER TABLE ... ADD COLUMNS`` for schema evolution, or ``None`` if empty."""
-    if not columns:
-        return None
-
-    quoted_table = quote_identifier(table_identifier)
-    rendered = ", ".join(
-        f"{quote_identifier(name)} {column_type}" for name, column_type in columns
-    )
-    return f"ALTER TABLE {quoted_table} ADD COLUMNS ({rendered})"
-
-
-def _read_target_table_state(
-    spark: Any, table_identifier: str
-) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...] | None]:
-    """Return ``(columns, partition_columns)`` for an existing Iceberg table."""
-    columns = tuple(
+def _read_target_columns(spark: Any, table_identifier: str) -> tuple[tuple[str, str], ...]:
+    """Read existing Iceberg columns once without loading partition metadata."""
+    return tuple(
         (field.name, field.dataType.simpleString())
         for field in spark.table(table_identifier).schema.fields
     )
+
+
+def _read_target_partitions(spark: Any, table_identifier: str) -> tuple[str, ...] | None:
+    """Read identity partition columns for a full-refresh overwrite."""
     try:
         partitions_schema = spark.table(f"{table_identifier}.partitions").schema
         partition_field = next(
@@ -433,12 +436,12 @@ def _read_target_table_state(
             None,
         )
         if partition_field is None:
-            return columns, ()
+            return ()
         # JANUS only ever emits identity partitioning, so the struct's field names are the
         # column names verbatim.
-        return columns, tuple(field.name for field in partition_field.dataType.fields)
+        return tuple(field.name for field in partition_field.dataType.fields)
     except Exception:
-        return columns, None
+        return None
 
 
 @contextmanager

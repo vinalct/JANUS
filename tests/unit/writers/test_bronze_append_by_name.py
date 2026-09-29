@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from test_bronze_overwrite_writer import (
     ENVIRONMENT_CONFIG,
     FakeDataFrame,
@@ -24,8 +23,6 @@ from janus.models import BronzeWriteIntent, ExecutionPlan, WriteResult
 from janus.models.data_contracts import DataContract, load_data_contract
 from janus.utils.storage import StorageLayout
 from janus.writers import SparkDatasetWriter
-
-pytestmark = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HOSTILE = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "hostile"
@@ -175,6 +172,7 @@ def test_a_reordered_batch_is_projected_in_target_table_order(tmp_path):
     [statement] = inserts(session)
     assert statement.startswith("INSERT INTO `bronze_test`.`bronze_overwrite_fixture`\n")
     assert projection_of(statement) == "`id`, `label`, `amount`, `when`, `ingestion_date`"
+    assert session.table_calls == ["bronze_test.bronze_overwrite_fixture"]
 
 
 def test_no_append_ever_selects_star(tmp_path):
@@ -198,6 +196,7 @@ def test_a_batch_column_the_table_lacks_is_refused_before_any_insert(tmp_path):
 
     assert issubclass(UnreconciledAppendError, ValueError)
     assert "note" in str(raised.value)
+    assert "bronze_overwrite_fixture" in str(raised.value)
     assert inserts(session) == []
     assert len(session.dropped_temp_views) == 1
 

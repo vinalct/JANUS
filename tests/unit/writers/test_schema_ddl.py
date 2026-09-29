@@ -10,7 +10,6 @@ import pytest
 
 from janus.writers import build_insert_overwrite_sql
 
-RED_TASK = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 RED_TASK_2 = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -21,7 +20,6 @@ VIEW = "janus_bronze_events_0f"
 # ── the by-name insert and the one projection renderer ─────────────
 
 
-@RED_TASK
 def test_insert_into_renders_an_explicit_projection():
     from janus.writers.schema_ddl import build_insert_into_sql
 
@@ -35,7 +33,6 @@ def test_insert_into_renders_an_explicit_projection():
     )
 
 
-@RED_TASK
 def test_insert_into_quotes_every_column_with_the_identifier_defence():
     from janus.writers.schema_ddl import build_insert_into_sql
 
@@ -44,7 +41,6 @@ def test_insert_into_quotes_every_column_with_the_identifier_defence():
     assert "SELECT `we``ird` FROM" in sql
 
 
-@RED_TASK
 def test_an_empty_projection_is_refused():
     from janus.writers.schema_ddl import build_insert_into_sql, render_projection
 
@@ -54,7 +50,6 @@ def test_an_empty_projection_is_refused():
         render_projection(())
 
 
-@RED_TASK
 def test_insert_overwrite_and_insert_into_share_one_projection_renderer():
     from janus.writers.schema_ddl import build_insert_into_sql, render_projection
 
@@ -70,7 +65,6 @@ def test_insert_overwrite_and_insert_into_share_one_projection_renderer():
     assert insert == f"INSERT INTO `bronze`.`events`\nSELECT {rendered} FROM `{VIEW}`"
 
 
-@RED_TASK
 def test_build_add_columns_sql_moved_but_keeps_its_public_import_path():
     from janus.writers import build_add_columns_sql as exported
     from janus.writers.schema_ddl import build_add_columns_sql
@@ -82,7 +76,6 @@ def test_build_add_columns_sql_moved_but_keeps_its_public_import_path():
     assert build_add_columns_sql(table_identifier=TABLE, columns=[]) is None
 
 
-@RED_TASK
 def test_the_ddl_module_imports_no_spark():
     import_paths = (str(PROJECT_ROOT / "src"), *(entry for entry in sys.path if entry))
     command = (

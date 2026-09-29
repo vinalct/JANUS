@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from test_bronze_append_by_name import (
     BASE_TABLE,
     INSERT_INTENT,
@@ -23,7 +22,6 @@ from test_bronze_overwrite_writer import ENVIRONMENT_CONFIG, PARTITION_OVERWRITE
 from janus.utils.storage import StorageLayout
 from janus.writers import SparkDatasetWriter
 
-RED_TASK = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 RED_TASK_2 = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 
 INT_TABLE = tuple(
@@ -65,7 +63,6 @@ def _metadata(result: Any) -> dict[str, str]:
 # ── the matching append is by name and changes nothing else ─────────
 
 
-@RED_TASK
 def test_a_matching_append_is_by_name_and_issues_no_ddl(tmp_path):
     declared = contract("base")
     session = ContractAwareSession(stamp=stamp_of(declared))

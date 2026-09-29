@@ -38,8 +38,6 @@ from tests.support.contract_enforcement import (
     write_parquet,
 )
 
-RED_05 = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HOSTILE = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "hostile"
 BASELINE = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "baseline"
@@ -212,7 +210,6 @@ BASE_PAGE_TWO = [
 ]
 
 
-@RED_05
 def test_a_reordered_contract_appends_in_target_table_order(factory, tmp_path):
     first_case = EnforcementCase.from_contract_file(
         "ac3_reordered", HOSTILE / "base.yaml", enforcement="lenient"
@@ -237,7 +234,6 @@ def test_a_reordered_contract_appends_in_target_table_order(factory, tmp_path):
         ]
 
 
-@RED_05
 def test_a_same_arity_swap_of_same_typed_columns_lands_by_name(factory, tmp_path):
     case = EnforcementCase.for_source(
         "ac3_swap", (contract_property("id", "string"), contract_property("label", "string"))
