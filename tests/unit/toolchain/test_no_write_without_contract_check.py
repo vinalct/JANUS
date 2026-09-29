@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import ast
 import inspect
+import re
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import pytest
 
 import janus
-
-pytestmark = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 
 PACKAGE_ROOT = Path(inspect.getfile(janus)).parent
 
@@ -52,34 +52,226 @@ INLINE_SQL_ALLOWLIST = {
     ),
 }
 
-Site = tuple[str, int] 
+Site = tuple[str, int]
 
 
 # ── the detectors: declared here ─────────────────────────
 
 
+def _callee_name(call: ast.Call) -> str | None:
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return None
+
+
+def _scope_calls(
+    node: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[ast.Call, ...]:
+    """Find calls in one scope, excluding nested functions and classes."""
+    calls: list[ast.Call] = []
+
+    class Collector(ast.NodeVisitor):
+        def visit_FunctionDef(self, nested: ast.FunctionDef) -> None:
+            pass
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_ClassDef(self, nested: ast.ClassDef) -> None:
+            pass
+
+        def visit_Call(self, call: ast.Call) -> None:
+            calls.append(call)
+            self.generic_visit(call)
+
+    collector = Collector()
+    for statement in node.body:
+        collector.visit(statement)
+    return tuple(calls)
+
+
+def _scopes(
+    source: str,
+) -> tuple[tuple[str, ast.Module | ast.FunctionDef | ast.AsyncFunctionDef], ...]:
+    tree = ast.parse(source)
+    scopes = [("<module>", tree)]
+    scopes.extend(
+        (node.name, node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    )
+    return tuple(scopes)
+
+
+def _scope_assignments(
+    node: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[tuple[str, int, ast.expr], ...]:
+    assignments: list[tuple[str, int, ast.expr]] = []
+
+    class Collector(ast.NodeVisitor):
+        def visit_FunctionDef(self, nested: ast.FunctionDef) -> None:
+            pass
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_ClassDef(self, nested: ast.ClassDef) -> None:
+            pass
+
+        def visit_Assign(self, assignment: ast.Assign) -> None:
+            assignments.extend(
+                (target.id, assignment.lineno, assignment.value)
+                for target in assignment.targets
+                if isinstance(target, ast.Name)
+            )
+            self.generic_visit(assignment)
+
+    collector = Collector()
+    for statement in node.body:
+        collector.visit(statement)
+    return tuple(assignments)
+
+
 def _statement_literals(source: str) -> tuple[tuple[str, int, str], ...]:
-    raise NotImplementedError("the statement detector")
+    statements: list[tuple[str, int, str]] = []
+    functions: list[str] = []
+
+    class Collector(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            functions.append(node.name)
+            self.generic_visit(node)
+            functions.pop()
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def _record(self, node: ast.AST, value: str) -> None:
+            text = value.strip()
+            if any(text.upper().startswith(prefix) for prefix in STATEMENT_PREFIXES):
+                statements.append((functions[-1] if functions else "<module>", node.lineno, text))
+
+        def visit_Constant(self, node: ast.Constant) -> None:
+            if isinstance(node.value, str):
+                self._record(node, node.value)
+
+        def visit_JoinedStr(self, node: ast.JoinedStr) -> None:
+            # Keep literal pieces on both sides of substitutions in one statement.
+            text = "".join(
+                part.value if isinstance(part, ast.Constant) else "{...}" for part in node.values
+            )
+            self._record(node, text)
+            for part in node.values:
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    self._record(part, part.value)
+                elif isinstance(part, ast.FormattedValue):
+                    self.visit(part.value)
+
+    Collector().visit(ast.parse(source))
+    return tuple(statements)
 
 
 def _positional_inserts(source: str) -> tuple[Site, ...]:
-    raise NotImplementedError("the statement detector")
+    return tuple(
+        dict.fromkeys(
+            (function, line)
+            for function, line, statement in _statement_literals(source)
+            if re.search(r"\bSELECT\s+\*", statement, flags=re.IGNORECASE)
+            and function not in SELECT_STAR_ALLOWLIST
+        )
+    )
+
+
+def _sql_builder_names() -> set[str]:
+    builders = set()
+    for module in BUILDER_MODULE_ANCHORS:
+        tree = ast.parse((PACKAGE_ROOT / module).read_text(encoding="utf-8"))
+        builders.update(
+            node.name
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name.startswith("build_")
+            and node.name.endswith("_sql")
+        )
+    return builders
 
 
 def _inline_sql_calls(source: str) -> tuple[Site, ...]:
-    raise NotImplementedError("the statement detector")
+    builders = _sql_builder_names()
+    findings: list[Site] = []
+
+    for scope_name, node in _scopes(source):
+        assignments = _scope_assignments(node)
+        for call in _scope_calls(node):
+            if not (
+                isinstance(call.func, ast.Attribute)
+                and call.func.attr == "sql"
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "spark"
+            ):
+                continue
+            argument = call.args[0] if call.args else None
+            if isinstance(argument, ast.Call) and _callee_name(argument) in builders:
+                continue
+            if isinstance(argument, ast.JoinedStr):
+                prefix = (
+                    argument.values[0].value.strip().upper()
+                    if argument.values and isinstance(argument.values[0], ast.Constant)
+                    else ""
+                )
+                if any(prefix.startswith(allowed) for allowed in INLINE_SQL_ALLOWLIST):
+                    continue
+            if isinstance(argument, ast.Name):
+                prior = [
+                    (line, value)
+                    for name, line, value in assignments
+                    if name == argument.id and line < call.lineno
+                ]
+                if prior:
+                    _, value = max(prior, key=lambda item: item[0])
+                    if isinstance(value, ast.Call) and _callee_name(value) in builders:
+                        continue
+            findings.append((scope_name, call.lineno))
+    return tuple(findings)
+
+
+def _is_bronze_write(call: ast.Call) -> bool:
+    if not isinstance(call.func, ast.Attribute) or call.func.attr != "write":
+        return False
+    zone = (
+        call.args[2]
+        if len(call.args) > 2
+        else next((keyword.value for keyword in call.keywords if keyword.arg == "zone"), None)
+    )
+    return isinstance(zone, ast.Constant) and zone.value == "bronze"
 
 
 def _bronze_writes(source: str) -> tuple[Site, ...]:
-    raise NotImplementedError("the caller detector")
+    writes: list[Site] = []
+    for scope_name, node in _scopes(source):
+        writes.extend(
+            (scope_name, call.lineno) for call in _scope_calls(node) if _is_bronze_write(call)
+        )
+    return tuple(writes)
 
 
 def _unguarded_bronze_writes(source: str) -> tuple[Site, ...]:
-    raise NotImplementedError("the caller detector")
+    unguarded: list[Site] = []
+    for scope_name, node in _scopes(source):
+        calls = _scope_calls(node)
+        passes = [call.lineno for call in calls if _callee_name(call) == PRE_WRITE_PASS]
+        unguarded.extend(
+            (scope_name, call.lineno)
+            for call in calls
+            if _is_bronze_write(call) and not any(line < call.lineno for line in passes)
+        )
+    return tuple(unguarded)
 
 
 def _calls_to(source: str, name: str) -> tuple[int, ...]:
-    raise NotImplementedError("the single-caller detector")
+    return tuple(
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call) and _callee_name(node) == name
+    )
 
 
 # ── the sweep ────────────────────────────────────────────────────────────────
@@ -108,9 +300,7 @@ def _caller_modules() -> dict[str, str]:
     return _modules(CALLER_PACKAGES, CALLER_FILES)
 
 
-def _findings(
-    modules: dict[str, str], detector: Callable[[str], tuple]
-) -> dict[str, tuple]:
+def _findings(modules: dict[str, str], detector: Callable[[str], tuple]) -> dict[str, tuple]:
     return {name: found for name, source in modules.items() if (found := detector(source))}
 
 
@@ -148,9 +338,7 @@ def test_only_the_materializer_writes_bronze():
 
 def test_the_pre_write_pass_has_exactly_one_caller():
     callers = {
-        name
-        for name, source in _modules(("",)).items()
-        if _calls_to(source, PRE_WRITE_PASS)
+        name for name, source in _modules(("",)).items() if _calls_to(source, PRE_WRITE_PASS)
     }
 
     assert callers == {MATERIALIZER}
@@ -158,9 +346,7 @@ def test_the_pre_write_pass_has_exactly_one_caller():
 
 def test_the_structural_check_has_exactly_the_pass_and_the_report_as_callers():
     callers = {
-        name
-        for name, source in _modules(("",)).items()
-        if _calls_to(source, STRUCTURAL_CHECK)
+        name for name, source in _modules(("",)).items() if _calls_to(source, STRUCTURAL_CHECK)
     }
 
     assert callers == STRUCTURAL_CHECK_CALLERS
@@ -243,6 +429,14 @@ def test_the_statement_detector_flags_a_positional_insert_f_string():
     assert _positional_inserts(POSITIONAL_F_STRING) == (("append", 3),)
 
 
+def test_the_statement_detector_reads_literal_parts_after_f_string_substitutions():
+    source = """
+def append(spark, prefix):
+    spark.sql(f"{prefix}INSERT INTO t SELECT * FROM v")
+"""
+    assert _positional_inserts(source) == (("append", 3),)
+
+
 def test_the_statement_detector_spares_the_allowlisted_creation_builder():
     assert _statement_literals(ALLOWLISTED_CREATION)
     assert _positional_inserts(ALLOWLISTED_CREATION) == ()
@@ -250,6 +444,18 @@ def test_the_statement_detector_spares_the_allowlisted_creation_builder():
 
 def test_the_statement_detector_accepts_builder_calls_and_the_namespace_bootstrap():
     assert _inline_sql_calls(BUILDER_CALL) == ()
+
+
+def test_the_statement_detector_checks_module_level_sql_and_builder_results():
+    assert _inline_sql_calls('spark.sql("INSERT INTO t SELECT * FROM v")') == (("<module>", 1),)
+    assigned_builder = """
+def overwrite(spark, table, view, projection):
+    statement = build_insert_overwrite_sql(
+        table_identifier=table, source_view=view, projection=projection
+    )
+    spark.sql(statement)
+"""
+    assert _inline_sql_calls(assigned_builder) == ()
 
 
 def test_the_statement_detector_flags_an_inline_statement():
@@ -263,6 +469,12 @@ def test_the_statement_detector_flags_an_inline_statement():
 )
 def test_the_caller_detector_flags_a_bronze_write_without_the_pass_before_it(source):
     assert len(_unguarded_bronze_writes(source)) == 1
+
+
+def test_the_caller_detector_flags_a_module_level_bronze_write():
+    source = 'writer.write(frame, plan, "bronze")'
+    assert _bronze_writes(source) == (("<module>", 1),)
+    assert _unguarded_bronze_writes(source) == (("<module>", 1),)
 
 
 def test_the_caller_detector_accepts_a_guarded_bronze_write():

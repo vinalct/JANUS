@@ -134,7 +134,6 @@ class BronzeMaterializer:
 
         # Resolve the write intent exactly once per run
         run_intent = resolve_bronze_write_intent(plan)
-        contract_fields = {"contract_id": contract.id, "schema_version": contract.schema_version}
         # Keys the run wrote, accumulated across every batch so the bronze uniqueness
         # oracle covers rows from batches 1..n-1, not only the last one it validates.
         unique_fields = plan.source_config.quality.unique_fields
@@ -154,32 +153,9 @@ class BronzeMaterializer:
                 batch_artifacts,
             )
 
-            _log_info(
-                logger,
-                "spark_read_started",
-                artifact_count=len(batch_artifacts),
-                **contract_fields,
-                **batch_metadata,
+            raw_dataframe = _read_batch(
+                self.reader, spark, batch_handoff, plan, contract, logger, batch_metadata
             )
-            handoff_format = batch_handoff.single_artifact_format()
-            spark_schema = (
-                resolve_spark_schema_for_plan(plan)
-                if handoff_format == plan.source_config.spark.input_format
-                else None
-            )
-            read_options = (
-                plan.source_config.spark.read_options
-                if handoff_format == plan.source_config.spark.input_format
-                else None
-            )
-            raw_dataframe = self.reader.read_extraction_result(
-                spark,
-                batch_handoff,
-                format_name=handoff_format,
-                schema=spark_schema,
-                options=read_options,
-            )
-            _log_info(logger, "spark_read_finished", **batch_metadata)
 
             # A strict pass aggregates before the write reads the same rows again: persist so
             # the two share one scan, and release it only after the write (or its failure).
@@ -187,14 +163,21 @@ class BronzeMaterializer:
             if persisted:
                 raw_dataframe = _persist(raw_dataframe)
             try:
-                checked_dataframe = _checked_batch(
-                    raw_dataframe,
-                    contract,
-                    evidence,
-                    committed=bronze_results,
-                    logger=logger,
-                    batch_metadata=batch_metadata,
-                )
+                try:
+                    checked_dataframe, batch_evidence = run_pre_write_pass(
+                        raw_dataframe,
+                        contract,
+                        enforcement=contract.janus.enforcement,
+                        batch_index=batch_metadata["batch_index"],
+                        batch_count=batch_metadata["batch_count"],
+                    )
+                except ContractEnforcementError as exc:
+                    _annotate_contract_failure(
+                        exc, evidence, bronze_results, logger, contract.id, batch_metadata
+                    )
+                    raise
+                evidence.append(batch_evidence)
+                _log_contract_check_passed(logger, batch_evidence, batch_metadata)
 
                 _log_info(logger, "normalization_started", **batch_metadata)
                 normalized_dataframe = self.normalizer.normalize(checked_dataframe, plan)
@@ -247,49 +230,79 @@ class BronzeMaterializer:
         return tuple(bronze_results), normalized_dataframe, run_keys, tuple(evidence)
 
 
-def _checked_batch(
-    dataframe: Any,
+def _read_batch(
+    reader: SparkDatasetReader,
+    spark: SparkSession,
+    handoff: ExtractionResult,
+    plan: ExecutionPlan,
     contract: DataContract,
-    evidence: list[PreWriteEvidence],
-    *,
-    committed: Sequence[WriteResult],
     logger: StructuredLogger | None,
     batch_metadata: Mapping[str, Any],
 ) -> Any:
-    """Run one batch's pre-write pass and append its evidence; the frame it returns may be written.
+    """Read one batch with the source's schema and options when its format matches."""
+    _log_info(
+        logger,
+        "spark_read_started",
+        artifact_count=len(handoff.artifacts),
+        contract_id=contract.id,
+        schema_version=contract.schema_version,
+        **batch_metadata,
+    )
+    handoff_format = handoff.single_artifact_format()
+    spark_schema = (
+        resolve_spark_schema_for_plan(plan)
+        if handoff_format == plan.source_config.spark.input_format
+        else None
+    )
+    read_options = (
+        plan.source_config.spark.read_options
+        if handoff_format == plan.source_config.spark.input_format
+        else None
+    )
+    dataframe = reader.read_extraction_result(
+        spark,
+        handoff,
+        format_name=handoff_format,
+        schema=spark_schema,
+        options=read_options,
+    )
+    _log_info(logger, "spark_read_finished", **batch_metadata)
+    return dataframe
 
-    A refusal leaves with what the run knew: the evidence of every batch checked so far, this one
-    last, and the bronze results of the batches already committed.
-    """
-    try:
-        checked_dataframe, batch_evidence = run_pre_write_pass(
-            dataframe,
-            contract,
-            enforcement=contract.janus.enforcement,
-            batch_index=batch_metadata["batch_index"],
-            batch_count=batch_metadata["batch_count"],
-        )
-    except ContractEnforcementError as exc:
-        exc.evidence = (*evidence, *exc.evidence)
-        exc.committed_results = tuple(committed)
-        _log_error(
-            logger,
-            "contract_check_failed",
-            failure_stage=exc.failure_stage,
-            error_type=type(exc).__name__,
-            contract_id=contract.id,
-            **batch_metadata,
-        )
-        raise
-    evidence.append(batch_evidence)
+
+def _annotate_contract_failure(
+    exc: ContractEnforcementError,
+    evidence: Sequence[PreWriteEvidence],
+    committed: Sequence[WriteResult],
+    logger: StructuredLogger | None,
+    contract_id: str,
+    batch_metadata: Mapping[str, Any],
+) -> None:
+    """Keep checked-batch evidence and earlier commits on a refused batch."""
+    exc.evidence = (*evidence, *exc.evidence)
+    exc.committed_results = tuple(committed)
+    _log_error(
+        logger,
+        "contract_check_failed",
+        failure_stage=exc.failure_stage,
+        error_type=type(exc).__name__,
+        contract_id=contract_id,
+        **batch_metadata,
+    )
+
+
+def _log_contract_check_passed(
+    logger: StructuredLogger | None,
+    evidence: PreWriteEvidence,
+    batch_metadata: Mapping[str, Any],
+) -> None:
     _log_info(
         logger,
         "contract_check_passed",
         mismatches=0,
-        nullability_relaxed=list(batch_evidence.contract_check.nullability_relaxed),
+        nullability_relaxed=list(evidence.contract_check.nullability_relaxed),
         **batch_metadata,
     )
-    return checked_dataframe
 
 
 def _persist(dataframe: Any) -> Any:
@@ -320,7 +333,7 @@ def _accumulate_run_keys(
     unique_fields: tuple[str, ...],
 ) -> Any | None:
     """Union this batch's distinct key frame into the run-level key set."""
-    
+
     if not unique_fields:
         return run_keys
     columns = getattr(normalized_dataframe, "columns", ())

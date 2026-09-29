@@ -12,12 +12,12 @@ from janus.models import (
     resolve_bronze_write_intent,
 )
 from janus.normalizers import NORMALIZATION_METADATA_COLUMNS
+from janus.quality.contract_checks import check_frame_against_contract
 from janus.quality.models import QualityValidationError, ValidationCheck, ValidationReport
 from janus.quality.pre_write import (
     PreWriteEvidence,
     required_fields_check,
     required_null_aggregations,
-    structural_check,
     summarize_pre_write_evidence,
 )
 from janus.quality.schema_expectation import SchemaExpectation, resolve_schema_expectation
@@ -137,8 +137,7 @@ def validate_quality_contract(quality_config: QualityConfig) -> ValidationCheck:
     ]
     if missing_from_required:
         issues.append(
-            "unique_fields must also appear in required_fields: "
-            + ", ".join(missing_from_required)
+            "unique_fields must also appear in required_fields: " + ", ".join(missing_from_required)
         )
 
     if issues:
@@ -275,7 +274,7 @@ def validate_bronze_key_uniqueness(
     run_keys: DataFrame | None,
 ) -> ValidationCheck:
     """Assert the committed bronze table holds one row per key this run wrote."""
-    
+
     unique_fields = plan.source_config.quality.unique_fields
     if not unique_fields:
         return ValidationCheck.skipped(
@@ -359,9 +358,16 @@ def validate_schema_expectations(
             "schema_expectations",
             "No explicit schema expectation was available for comparison.",
         )
-    return structural_check(
-        dataframe, plan.data_contract, ignored_columns=NORMALIZATION_METADATA_COLUMNS
-    ).to_validation_check()
+    from janus.schema_contracts import frame_columns_from_spark_schema
+
+    contract = plan.data_contract
+    declared = set(contract.column_names)
+    columns = [
+        column
+        for column in frame_columns_from_spark_schema(dataframe.schema)
+        if column.name in declared or column.name not in NORMALIZATION_METADATA_COLUMNS
+    ]
+    return check_frame_against_contract(columns, contract).to_validation_check()
 
 
 def validate_output_columns(
