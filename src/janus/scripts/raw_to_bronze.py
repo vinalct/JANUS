@@ -35,6 +35,13 @@ from janus.quality import (
     ValidationReportStore,
 )
 from janus.readers import SparkDatasetReader
+from janus.runtime.contract_preflight import (
+    PREFLIGHT_ATTRIBUTE,
+    LiveTable,
+    enforce_preflight,
+    load_live_table,
+    run_contract_preflight,
+)
 from janus.runtime.executor import _plan_with_storage_layout_outputs
 from janus.runtime.materialize import (
     BronzeMaterializer,
@@ -171,7 +178,9 @@ class RawToBronzeLoader:
         default_factory=lambda: _default_storage_layout
     )
 
-    def ingest(
+    preflight_loader: Callable[..., LiveTable | None] = load_live_table
+
+    def ingest( 
         self,
         planned_run: PlannedRun,
         spark: SparkSessionProvider | SparkSession,
@@ -217,6 +226,36 @@ class RawToBronzeLoader:
 
                 observer.start_run(plan)
                 _log_info(logger, "run_observation_started")
+
+                preflight = run_contract_preflight(
+                    plan,
+                    environment_config,
+                    spark_provider.resolved_paths,
+                    identifier=_bronze_target_identifier(plan),
+                    logger=logger,
+                    loader=self.preflight_loader,
+                )
+                plan = replace(
+                    plan,
+                    run_context=plan.run_context.with_attribute(
+                        PREFLIGHT_ATTRIBUTE, preflight.outcome
+                    ),
+                )
+                runtime_planned_run = replace(runtime_planned_run, plan=plan)
+                _log_info(
+                    logger,
+                    "contract_preflight_finished",
+                    outcome=preflight.outcome,
+                    reason=preflight.reason,
+                    duration_seconds=preflight.duration_seconds,
+                )
+                enforce_preflight(
+                    preflight,
+                    enforcement=(
+                        plan.data_contract.janus.enforcement if plan.data_contract else "strict"
+                    ),
+                    logger=logger,
+                )
 
                 extraction_result = _build_extraction_result_from_raw(
                     runtime_planned_run,

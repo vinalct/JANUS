@@ -22,6 +22,13 @@ from janus.quality import (
     ValidationReportStore,
 )
 from janus.readers import SparkDatasetReader
+from janus.runtime.contract_preflight import (
+    PREFLIGHT_ATTRIBUTE,
+    LiveTable,
+    enforce_preflight,
+    load_live_table,
+    run_contract_preflight,
+)
 from janus.runtime.materialize import (
     BronzeMaterializer,
     _bind_execution_logger,
@@ -34,7 +41,7 @@ from janus.runtime.materialize import (
 )
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.utils.logging import StructuredLogger
-from janus.utils.storage import StorageLayout
+from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SparkDatasetWriter
 
 
@@ -144,7 +151,9 @@ class SourceExecutor:
         default_factory=lambda: _default_storage_layout
     )
 
-    def execute(
+    preflight_loader: Callable[..., LiveTable | None] = load_live_table
+
+    def execute( 
         self,
         planned_run: PlannedRun,
         spark_provider: SparkSessionProvider,
@@ -181,6 +190,41 @@ class SourceExecutor:
 
                 observer.start_run(plan)
                 _log_info(logger, "run_observation_started")
+
+                preflight = run_contract_preflight(
+                    plan,
+                    environment_config,
+                    spark_provider.resolved_paths,
+                    identifier=bronze_table_identifier(
+                        plan.bronze_output.path,
+                        fallback_name=plan.source.source_id,
+                        namespace=plan.bronze_output.namespace,
+                        table_name=plan.bronze_output.table_name,
+                    ),
+                    logger=logger,
+                    loader=self.preflight_loader,
+                )
+                plan = replace(
+                    plan,
+                    run_context=plan.run_context.with_attribute(
+                        PREFLIGHT_ATTRIBUTE, preflight.outcome
+                    ),
+                )
+                runtime_planned_run = replace(runtime_planned_run, plan=plan)
+                _log_info(
+                    logger,
+                    "contract_preflight_finished",
+                    outcome=preflight.outcome,
+                    reason=preflight.reason,
+                    duration_seconds=preflight.duration_seconds,
+                )
+                enforce_preflight(
+                    preflight,
+                    enforcement=(
+                        plan.data_contract.janus.enforcement if plan.data_contract else "strict"
+                    ),
+                    logger=logger,
+                )
 
                 _log_info(
                     logger,

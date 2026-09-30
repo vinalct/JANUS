@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from test_spark_lifecycle_evidence import ArmedSpyProvider
 
 from janus.lineage import RunObserver
@@ -34,8 +33,6 @@ from janus.utils.catalog_properties import (
 from janus.utils.logging import build_structured_logger
 from janus.utils.storage import StorageLayout
 from tests.support.spark_sessions import sqlite_catalog_target
-
-pytestmark = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HOSTILE = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "hostile"
@@ -246,6 +243,22 @@ def test_decide_preflight_reaches_every_outcome(
     assert (result.plan is None) is (outcome in {"catalog_unavailable", "table_missing"})
 
 
+
+def test_pure_decision_does_not_repeat_a_catalog_error_message():
+    from janus.runtime.contract_preflight import decide_preflight
+
+    result = decide_preflight(
+        contract=_contract("base"),
+        live=None,
+        catalog_error="OperationalError: postgresql://janus:secret@db.internal/catalog",
+        write_strategy="insert",
+    )
+
+    assert result.outcome == "catalog_unavailable"
+    assert result.reason == "CatalogError"
+    assert "secret" not in result.reason
+
+
 def test_the_eight_normalization_columns_are_not_drift():
     from janus.runtime.contract_preflight import decide_preflight
     from janus.writers.evolution import LiveColumn
@@ -357,8 +370,21 @@ def test_a_hanging_catalog_is_cut_off_by_the_budget(tmp_path):
     def hanging(*args: Any, **kwargs: Any) -> Any:
         time.sleep(budget + 3)
 
+    from janus.runtime.contract_preflight import run_contract_preflight
+
+    config, resolved_paths = _catalog_config(tmp_path)
+    plan = _plan(tmp_path, _contract("base"))
+    logger = build_structured_logger("janus.tests.preflight", stream=StringIO())
     started = time.monotonic()
-    result = _run(tmp_path, "base", hanging, budget_seconds=budget)
+    result = run_contract_preflight(
+        plan,
+        config,
+        resolved_paths,
+        identifier=IDENTIFIER,
+        logger=logger,
+        loader=hanging,
+        budget_seconds=budget,
+    )
     elapsed = time.monotonic() - started
 
     assert result.outcome == "catalog_unavailable"
@@ -448,6 +474,19 @@ def test_lenient_warns_once_and_proceeds(outcome):
 
     warnings = [event for event in _events(stream) if event["level"] == "WARNING"]
     assert [event["event"] for event in warnings] == ["contract_preflight_warning"]
+
+
+
+def test_lenient_warns_without_an_injected_logger(caplog):
+    from janus.runtime.contract_preflight import PreflightResult, enforce_preflight
+
+    enforce_preflight(
+        PreflightResult("catalog_unavailable", "OperationalError", None, 0.1),
+        enforcement="lenient",
+        logger=None,
+    )
+
+    assert sum("contract_preflight_warning" in record.message for record in caplog.records) == 1
 
 
 @pytest.mark.parametrize("outcome", ["ok", "will_evolve", "table_missing"])
@@ -542,6 +581,8 @@ def test_a_strict_refusal_fails_the_run_before_extraction_and_starts_no_session(
     metadata = json.loads(run.run_metadata_path.read_text(encoding="utf-8"))
     assert metadata["failure_stage"] == "contract_preflight"
     assert metadata["run_attributes"]["contract_preflight_outcome"] == "refused"
+    lineage = json.loads(run.lineage_path.read_text(encoding="utf-8"))
+    assert lineage["run_attributes"]["contract_preflight_outcome"] == "refused"
 
 
 def test_a_lenient_refusal_warns_and_the_run_proceeds(tmp_path):
@@ -580,3 +621,64 @@ def test_importing_the_preflight_module_loads_no_engine():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_non_iceberg_bronze_never_opens_the_catalog(tmp_path):
+    from janus.runtime.contract_preflight import run_contract_preflight
+
+    plan = _plan(tmp_path, _contract("base"))
+    plan = replace(plan, bronze_output=replace(plan.bronze_output, format="parquet"))
+
+    def forbidden_loader(*args, **kwargs):
+        raise AssertionError("catalog must not be queried for path-based bronze")
+
+    result = run_contract_preflight(
+        plan,
+        {},
+        {},
+        identifier=IDENTIFIER,
+        logger=None,
+        loader=forbidden_loader,
+    )
+
+    assert result.outcome == "ok"
+    assert result.reason == "bronze is not an iceberg table"
+
+
+def test_replay_refusal_precedes_raw_rediscovery_and_records_the_attribute(tmp_path):
+    from janus.scripts.raw_to_bronze import RawToBronzeLoader
+
+    plan = _plan(tmp_path, _contract("base"))
+    planned_run = PlannedRun(plan=plan, strategy=RecordingStrategy([]), hook=None)
+    provider = ArmedSpyProvider()
+    loader = RawToBronzeLoader(
+        observer=RunObserver(),
+        quality_gate=QualityGate(ValidationReportStore()),
+        storage_layout_resolver=lambda plan, config: StorageLayout.from_environment_config(
+            {
+                "storage": {
+                    "root_dir": str(tmp_path / "data"),
+                    "raw_dir": str(tmp_path / "data" / "raw"),
+                    "bronze_dir": str(tmp_path / "data" / "bronze"),
+                    "metadata_dir": str(tmp_path / "data" / "metadata"),
+                }
+            },
+            tmp_path,
+        ),
+        preflight_loader=_refusing_loader,
+    )
+
+    run = loader.ingest(
+        planned_run,
+        provider,
+        {},
+        bronze_table=IDENTIFIER,
+    )
+
+    assert run.status == "failed"
+    assert run.failure_stage == "contract_preflight"
+    assert run.write_results == ()
+    assert run.extraction_result.artifacts == ()
+    assert provider.was_started is False
+    metadata = json.loads(run.run_metadata_path.read_text(encoding="utf-8"))
+    assert metadata["run_attributes"]["contract_preflight_outcome"] == "refused"

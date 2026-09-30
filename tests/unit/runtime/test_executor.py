@@ -833,6 +833,10 @@ class SpySparkSessionProvider:
     start_count: int = 0
     stop_calls: int = 0
 
+    @property
+    def resolved_paths(self) -> dict[str, Any]:
+        return {}
+
     def get(self) -> Any:
         self.get_calls += 1
         if self.session is None:
@@ -863,6 +867,7 @@ def _boundary_executor(tmp_path: Path, calls: list[str], validation_report, **ov
         "observer": FakeObserver(calls, metadata_root),
         "writer_factory": lambda storage_layout: FakeWriter(calls, bronze_path),
         "storage_layout_resolver": lambda plan, config: _storage_layout(tmp_path),
+        "preflight_loader": lambda *args, **kwargs: calls.append("preflight") or None,
     }
     defaults.update(overrides)
     return SourceExecutor(**defaults)

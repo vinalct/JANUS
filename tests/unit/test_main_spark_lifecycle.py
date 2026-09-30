@@ -244,6 +244,37 @@ def test_the_session_is_released_when_the_contract_check_refuses_a_batch(
     assert _summary(capsys)[summary_key]["failure_stage"] == "contract_check"
 
 
+
+@pytest.mark.parametrize(
+    ("argv", "summary_key"),
+    [
+        (["--execute", "--source-id", SOURCE_ID], "executed_run"),
+        (
+            [
+                "--ingest-raw-to-bronze",
+                "--source-id",
+                SOURCE_ID,
+                "--bronze-table",
+                "bronze_example.federal_open_data_example",
+            ],
+            "raw_to_bronze_run",
+        ),
+    ],
+    ids=["execute", "ingest_raw_to_bronze"],
+)
+def test_preflight_refusal_exits_one_without_starting_spark(cli, capsys, argv, summary_key):
+    cli.status = "failed"
+    cli.failure_stage = "contract_preflight"
+
+    exit_code = main(argv)
+
+    assert exit_code == 1
+    assert cli.sessions == []
+    summary = _summary(capsys)
+    assert summary[summary_key]["failure_stage"] == "contract_preflight"
+    assert "spark_session" not in summary
+
+
 def test_the_session_is_released_when_the_run_raises(cli):
     """FR-4: the CLI's `finally` is the backstop for anything the executor missed."""
 

@@ -300,6 +300,7 @@ def test_extraction_completes_without_being_able_to_obtain_a_session(
     # Exactly one session, and it opens only after the handoff is prepared.
     assert provider.start_count == 1
     assert provider.stop_count == 1
+    assert calls.index("observe_start") < calls.index("preflight") < calls.index("extract_started")
     assert calls.index("extract_finished") < calls.index("handoff")
     assert calls.index("handoff") < calls.index("read")
 
@@ -566,6 +567,7 @@ def _executor(tmp_path: Path, calls: list[str]) -> SourceExecutor:
         observer=StubObserver(calls, metadata_root),
         writer_factory=lambda storage_layout: StubWriter(calls, bronze_path),
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
+        preflight_loader=lambda *args, **kwargs: calls.append("preflight") or None,
     )
 
 
