@@ -31,6 +31,7 @@ from janus.models.data_contracts.vocabulary import (
     physical_type_from_iceberg_name,
     physical_type_from_spark_json,
     spark_json_type,
+    spark_sql_type,
     spark_struct_json,
 )
 
@@ -62,5 +63,6 @@ __all__ = [
     "physical_type_from_iceberg_name",
     "physical_type_from_spark_json",
     "spark_json_type",
+    "spark_sql_type",
     "spark_struct_json",
 ]

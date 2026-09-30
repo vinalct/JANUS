@@ -18,9 +18,10 @@ from janus.models import (
     resolve_bronze_write_intent,
 )
 from janus.registry import SourceRegistry, load_registry
-from janus.utils.storage import StorageLayout
+from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SparkDatasetWriter
 from tests.support.spark_sessions import build_iceberg_session
+from tests.support.writer_contracts import contract_for_frame
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_PROJECT_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "full_refresh_history"
@@ -101,6 +102,26 @@ class FullRefreshHarness:
         intent: BronzeWriteIntent | None = None,
     ) -> WriteResult:
         dataframe = self.spark.createDataFrame(rows, schema)
+        table_identifier = bronze_table_identifier(
+            plan.bronze_output.path,
+            fallback_name=plan.source.source_id,
+            namespace=plan.bronze_output.namespace,
+            table_name=plan.bronze_output.table_name,
+        )
+        version = "1.0.0"
+        if self.spark.catalog.tableExists(table_identifier):
+            live_fields = {
+                (field.name, field.dataType.jsonValue())
+                for field in self.spark.table(table_identifier).schema.fields
+            }
+            batch_fields = {
+                (field.name, field.dataType.jsonValue()) for field in dataframe.schema.fields
+            }
+            if live_fields != batch_fields:
+                version = "2.0.0"
+        plan = plan.with_data_contract(
+            contract_for_frame(dataframe, source_id=plan.source.source_id, version=version)
+        )
         return self.writer.write(
             dataframe,
             plan,

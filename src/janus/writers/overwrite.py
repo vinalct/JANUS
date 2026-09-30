@@ -1,37 +1,15 @@
-"""How a full refresh replaces the contents of an existing bronze table.
+"""Pure planning and SQL builders for a full refresh of an Iceberg bronze table.
 
-``REPLACE TABLE ... AS SELECT`` drops and recreates the Iceberg table: new table UUID, empty
-snapshot log, history gone — which defeats time travel and rollback, one of the main reasons
-to use Iceberg at all. ``INSERT OVERWRITE`` writes *into* the existing table instead, so the
-snapshot log grows rather than resetting. The price is that three kinds of schema drift the
-recreate absorbed silently now have to be decided explicitly:
+An ``INSERT OVERWRITE`` preserves snapshot ancestry. On the pinned Iceberg pair,
+``REPLACE TABLE`` creates a new snapshot root: older snapshots remain readable by ID,
+but rollback to them is unavailable because they are no longer ancestors. The caller
+records ``history_reset_reason`` whenever it chooses replacement.
 
-===========================  =========================================================
-Drift                        Decision
-===========================  =========================================================
-source has a new column      ``ALTER TABLE ... ADD COLUMNS``, then insert
-source dropped a column      fall back to ``REPLACE TABLE`` (it would survive as NULLs)
-a column changed type        fall back to ``REPLACE TABLE``
-``spark.partition_by`` moved fall back to ``REPLACE TABLE`` (physical layout differs)
-===========================  =========================================================
-
-The fallback is what keeps the change output-neutral: every full refresh that succeeds today
-still succeeds, and the only observable difference is that history is retained in the common
-case. When the fallback fires the caller records *why* in the write metadata — a silent
-history reset would be worse than the current behaviour, because operators would believe in
-time travel that is not there.
-
-**Additive columns are not gated on ``quality.allow_schema_evolution``.** The merge path gates
-them because a MERGE against an older table is a genuine incremental-semantics question. A full
-refresh has *always* accepted new columns — ``REPLACE TABLE`` recreated the schema every run —
-so gating them here would be a regression, not a hardening.
-
-Everything in this module is pure: the planner takes the two schemas and the two partition
-specs as plain tuples and the builders take strings, so the interesting logic is unit-testable
-on a host without PySpark. This is the same split :func:`janus.models.resolve_bronze_write_intent`
-already uses for the write decision itself; the difference in scope is that ``BronzeWriteIntent``
-answers "what does the *contract* ask for" from config alone, while this answers "what can the
-*target table* accept", which needs the live table's state — hence ``writers/``, not ``models/``.
+The evolution planner decides schema compatibility before this planner runs. Additions
+and promotions are applied to the live table first, so this planner sees their final
+types. A declared breaking change on a full refresh forces replacement; partition
+spec drift retains the replacement behavior. Calls without an evolution
+plan preserve the earlier pure planner behavior for existing callers.
 """
 
 from __future__ import annotations
@@ -39,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from janus.writers.evolution import EvolutionPlan
 from janus.writers.identifiers import partition_clause, quote_identifier
 from janus.writers.schema_ddl import render_projection
 
@@ -75,25 +54,30 @@ def plan_full_refresh_overwrite(
     target_columns: Sequence[tuple[str, str]],  # (name, type) in table order
     configured_partitions: Sequence[str],
     target_partitions: Sequence[str] | None,  # None => unreadable, assume drift
+    evolution: EvolutionPlan | None = None,
 ) -> FullRefreshOverwritePlan:
     """Decide how a full refresh overwrites an existing bronze table.
 
-    Total: every input returns a plan, drift never raises — an unreadable partition spec or a
-    schema this module will not reconcile degrades to ``REPLACE TABLE``, which is always safe
-    because it is exactly what the writer does today.
+    With ``evolution``, the declared compatibility decision is already settled.
+    Without it, this function retains the earlier total fallback behavior.
 
     Name comparison is case-sensitive and order-independent. Iceberg column names round-trip
     exactly, so lower-casing would merge columns the table keeps distinct; and the explicit
     projection makes the DataFrame's column order irrelevant, so a pure reordering is absorbed
     rather than treated as drift.
     """
+    breaking = evolution is not None and evolution.outcome == "breaking_replace"
     source_types = dict(source_columns)
     target_names = tuple(name for name, _ in target_columns)
 
-    if not source_columns:
+    if not source_columns or breaking:
         return FullRefreshOverwritePlan(
             mechanism="replace_table",
-            reason="source schema is empty; there is nothing to project",
+            reason=(
+                evolution.reason
+                if breaking and evolution is not None
+                else "source schema is empty; there is nothing to project"
+            ),
         )
 
     if target_partitions is None:
@@ -131,9 +115,7 @@ def plan_full_refresh_overwrite(
         )
 
     added = tuple(
-        (name, column_type)
-        for name, column_type in source_columns
-        if name not in set(target_names)
+        (name, column_type) for name, column_type in source_columns if name not in set(target_names)
     )
     if added:
         reason = (

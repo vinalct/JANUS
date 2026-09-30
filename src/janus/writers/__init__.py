@@ -1,3 +1,4 @@
+from janus.writers.errors import SchemaEvolutionRefusedError
 from janus.writers.evolution import (
     PLAN_METADATA_KEY,
     EvolutionPlan,
@@ -46,6 +47,7 @@ __all__ = [
     "PersistedArtifact",
     "RawArtifactWriter",
     "RawWriteLimitError",
+    "SchemaEvolutionRefusedError",
     "SparkDatasetWriter",
     "StagedWrite",
     "build_add_columns_sql",

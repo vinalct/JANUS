@@ -17,15 +17,24 @@ class UnreconciledAppendError(ValueError):
     """An append needs a schema change or a missing-column projection before it can write."""
 
 
-def render_projection(columns: Sequence[str]) -> str:
-    """Render a nonempty, quoted SELECT column list."""
+def render_projection(columns: Sequence[str | tuple[str, str | None]]) -> str:
+    """Render a nonempty, quoted SELECT column list with optional NULL aliases."""
     if not columns:
         raise ValueError("insert requires at least one projected column")
-    return ", ".join(quote_identifier(column) for column in columns)
+    return ", ".join(
+        quote_identifier(column)
+        if isinstance(column, str)
+        else (
+            f"NULL AS {quote_identifier(column[0])}"
+            if column[1] is None
+            else f"{quote_identifier(column[1])} AS {quote_identifier(column[0])}"
+        )
+        for column in columns
+    )
 
 
 def build_insert_into_sql(
-    *, table_identifier: str, source_view: str, projection: Sequence[str]
+    *, table_identifier: str, source_view: str, projection: Sequence[str | tuple[str, str | None]]
 ) -> str:
     """Render an append whose SELECT follows target-table column order."""
     return (
@@ -53,7 +62,9 @@ def plan_append_projection(
             details.append(f"has columns missing from this batch: {', '.join(missing_in_source)}")
         target = f"bronze target {table_identifier!r}" if table_identifier else "bronze target"
         raise UnreconciledAppendError(
-            target + " " + "; ".join(details)
+            target
+            + " "
+            + "; ".join(details)
             + " — the contract's compatibility decides whether they may be added or projected."
         )
     return tuple(name for name, _ in target_columns)
@@ -69,19 +80,62 @@ def build_add_columns_sql(
         return None
 
     quoted_table = quote_identifier(table_identifier)
-    rendered = ", ".join(
-        f"{quote_identifier(name)} {column_type}" for name, column_type in columns
-    )
+    rendered = ", ".join(f"{quote_identifier(name)} {column_type}" for name, column_type in columns)
     return f"ALTER TABLE {quoted_table} ADD COLUMNS ({rendered})"
 
 
-def build_alter_column_type_sql(
-    *, table_identifier: str, column: str, spark_type: str
-) -> str:
-    raise NotImplementedError("implements build_alter_column_type_sql")
+def build_alter_column_type_sql(*, table_identifier: str, column: str, spark_type: str) -> str:
+    return (
+        f"ALTER TABLE {quote_identifier(table_identifier)} "
+        f"ALTER COLUMN {quote_identifier(column)} TYPE {spark_type}"
+    )
+
+
+CONTRACT_PROPERTY_KEYS = (
+    "janus.contract_id",
+    "janus.contract_version",
+    "janus.schema_version",
+)
+
+
+def _quote_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 def build_set_contract_properties_sql(
     *, table_identifier: str, contract_id: str, contract_version: str, schema_version: str
 ) -> str:
-    raise NotImplementedError("implements build_set_contract_properties_sql")
+    values = (contract_id, contract_version, schema_version)
+    properties = ", ".join(
+        f"{_quote_literal(key)} = {_quote_literal(value)}"
+        for key, value in zip(CONTRACT_PROPERTY_KEYS, values, strict=True)
+    )
+    return f"ALTER TABLE {quote_identifier(table_identifier)} SET TBLPROPERTIES ({properties})"
+
+
+def build_show_contract_properties_sql(*, table_identifier: str) -> str:
+    return f"SHOW TBLPROPERTIES {quote_identifier(table_identifier)}"
+
+
+def project_append_columns(
+    *,
+    source_names: set[str],
+    target_names: tuple[str, ...],
+    required_names: set[str],
+    table_identifier: str,
+) -> tuple[str | tuple[str, None], ...]:
+    """Build target-order projection, filling only absent nullable columns with NULL."""
+    target_set = set(target_names)
+    extra = sorted(source_names - target_set)
+    if extra:
+        raise UnreconciledAppendError(
+            f"bronze target {table_identifier!r} lacks columns present in this batch: "
+            + ", ".join(extra)
+        )
+    missing_required = sorted(required_names & (target_set - source_names))
+    if missing_required:
+        raise UnreconciledAppendError(
+            f"bronze target {table_identifier!r} has required columns missing from this batch: "
+            + ", ".join(missing_required)
+        )
+    return tuple(name if name in source_names else (name, None) for name in target_names)

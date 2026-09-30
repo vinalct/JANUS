@@ -138,6 +138,20 @@ def odcs_logical_type_for(physical: str) -> str:
     return parse_physical_type(physical).type.odcs_logical_type
 
 
+def spark_sql_type(physical_type: str) -> str:
+    """Return the scalar Spark SQL spelling used by Iceberg schema DDL."""
+    parsed = parse_physical_type(physical_type)
+    if parsed.name in CONTAINER_TYPE_NAMES:
+        raise UnknownPhysicalTypeError(
+            f"nested type {physical_type!r} requires a property tree for Spark SQL DDL"
+        )
+    if parsed.name == "long":
+        return "bigint"
+    if parsed.name == "integer":
+        return "int"
+    return parsed.spark_json_type
+
+
 def iceberg_type_name(prop: ContractProperty) -> str:
     """The Iceberg type name for one property, recursing through containers."""
     parsed = parse_physical_type(prop.physical_type)

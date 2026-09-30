@@ -9,7 +9,8 @@ regression that would otherwise need the Iceberg suite to surface.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ import pytest
 import yaml
 
 from janus.models import BronzeWriteIntent, ExecutionPlan, RunContext, SourceConfig
+from janus.models.data_contracts import ContractProperty, load_data_contract, odcs_logical_type_for
 from janus.utils.storage import StorageLayout
 from janus.writers import SparkDatasetWriter
 
@@ -56,6 +58,9 @@ class FakeType:
 
     def simpleString(self) -> str:
         return self._simple
+
+    def jsonValue(self) -> str:
+        return {"bigint": "long", "int": "integer"}.get(self._simple, self._simple)
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,14 @@ class FakeConf:
         return dict(self._values)
 
 
+class FakeResult:
+    def __init__(self, rows=()) -> None:
+        self.rows = list(rows)
+
+    def collect(self):
+        return self.rows
+
+
 class FakeSparkSession:
     """Records every statement and session-config mutation the writer performs."""
 
@@ -132,15 +145,37 @@ class FakeSparkSession:
         self.dropped_temp_views: list[str] = []
         self.catalog = FakeCatalog(self)
         self.conf = FakeConf(self, conf_values or {})
+        self.stamp: dict[str, str] = {}
 
     @property
     def statements(self) -> list[str]:
         return [operation[1] for operation in self.operations if operation[0] == "sql"]
 
-    def sql(self, statement: str) -> None:
+    def sql(self, statement: str) -> FakeResult:
         self.operations.append(("sql", statement))
         if self.failing_statement and self.failing_statement in statement:
             raise RuntimeError("commit failed")
+        if statement.startswith("SHOW TBLPROPERTIES"):
+            return FakeResult([{"key": key, "value": value} for key, value in self.stamp.items()])
+        added = re.search(r"ADD COLUMNS \((.*)\)$", statement)
+        if added:
+            self.target_columns = (
+                *self.target_columns,
+                *(tuple(column.split(" ", 1)) for column in added.group(1).split(", ")),
+            )
+            self.target_columns = tuple(
+                (name.strip("`"), type_) for name, type_ in self.target_columns
+            )
+        altered = re.search(r"ALTER COLUMN `([^`]+)` TYPE (\S+)$", statement)
+        if altered:
+            name, type_ = altered.groups()
+            self.target_columns = tuple(
+                (column, type_ if column == name else current)
+                for column, current in self.target_columns
+            )
+        for key, value in re.findall(r"'(janus\.[a-z_]+)' = '((?:[^']|'')*)'", statement):
+            self.stamp[key] = value.replace("''", "'")
+        return FakeResult()
 
     def table(self, identifier: str) -> FakeTable:
         self.table_calls.append(identifier)
@@ -149,10 +184,7 @@ class FakeSparkSession:
                 raise RuntimeError("partitions metadata table is unavailable")
             partition_struct = FakeType(
                 "struct",
-                tuple(
-                    FakeField(column, FakeType("date"))
-                    for column in self.target_partitions
-                ),
+                tuple(FakeField(column, FakeType("date")) for column in self.target_partitions),
             )
             return FakeTable(
                 FakeSchema(
@@ -197,13 +229,36 @@ def _write(
     source_id: str = "bronze_overwrite_fixture",
 ):
     plan = _plan(tmp_path, partition_by=partition_by, source_id=source_id)
-    writer = SparkDatasetWriter(
-        StorageLayout.from_environment_config(ENVIRONMENT_CONFIG, tmp_path)
+    base = load_data_contract(
+        Path(__file__).resolve().parents[2] / "fixtures" / "contracts" / "hostile" / "base.yaml"
     )
+    properties = tuple(
+        ContractProperty(
+            name=name,
+            physical_type={"bigint": "long", "int": "integer"}.get(type_, type_),
+            logical_type=odcs_logical_type_for(
+                {"bigint": "long", "int": "integer"}.get(type_, type_)
+            ),
+        )
+        for name, type_ in source_columns
+        if name != "ingestion_date"
+    )
+    dropped = any(name not in dict(source_columns) for name, _ in session.target_columns)
+    contract = replace(
+        base,
+        version="2.0.0" if dropped else "1.0.0",
+        schema=replace(base.schema, properties=properties),
+    )
+    plan = plan.with_data_contract(contract)
+    if session.table_exists and not session.stamp:
+        session.stamp = {
+            "janus.contract_id": contract.id,
+            "janus.contract_version": "1.0.0",
+            "janus.schema_version": contract.schema_version,
+        }
+    writer = SparkDatasetWriter(StorageLayout.from_environment_config(ENVIRONMENT_CONFIG, tmp_path))
     frame = FakeDataFrame(session, source_columns)
-    return writer.write(
-        frame, plan, "bronze", intent=OVERWRITE_INTENT, count_records=True
-    )
+    return writer.write(frame, plan, "bronze", intent=OVERWRITE_INTENT, count_records=True)
 
 
 def test_matching_schema_emits_insert_overwrite_and_no_replace(tmp_path):
@@ -229,9 +284,7 @@ def test_first_write_still_creates_the_table(tmp_path):
 def test_added_column_emits_alter_then_insert_overwrite(tmp_path):
     session = FakeSparkSession()
 
-    result = _write(
-        tmp_path, session, source_columns=(*BASE_COLUMNS, ("extra", "string"))
-    )
+    result = _write(tmp_path, session, source_columns=(*BASE_COLUMNS, ("extra", "string")))
 
     kinds = [
         "alter" if "ADD COLUMNS" in statement else "insert"
@@ -255,7 +308,7 @@ def test_dropped_column_falls_back_to_replace_table(tmp_path):
     assert not any("INSERT OVERWRITE" in statement for statement in session.statements)
     metadata = result.metadata_as_dict()
     assert metadata["overwrite_mechanism"] == "replace_table"
-    assert "legacy" in metadata["history_reset_reason"]
+    assert metadata["history_reset_reason"].startswith("contract major version 1 -> 2")
 
 
 def test_unreadable_partition_spec_falls_back(tmp_path):
@@ -364,9 +417,7 @@ def test_dotted_source_id_stages_through_a_single_quoted_view(tmp_path):
 
     view_name = session.dropped_temp_views[0]
     assert "." not in view_name
-    insert = next(
-        statement for statement in session.statements if "INSERT OVERWRITE" in statement
-    )
+    insert = next(statement for statement in session.statements if "INSERT OVERWRITE" in statement)
     assert f"`{view_name}`" in insert
     assert result.metadata_as_dict()["overwrite_mechanism"] == "insert_overwrite"
 

@@ -10,8 +10,6 @@ import pytest
 
 from janus.writers import build_insert_overwrite_sql
 
-RED_TASK_2 = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TABLE = "bronze.events"
 VIEW = "janus_bronze_events_0f"
@@ -28,8 +26,7 @@ def test_insert_into_renders_an_explicit_projection():
     )
 
     assert sql == (
-        "INSERT INTO `bronze`.`events`\n"
-        "SELECT `event_id`, `amount` FROM `janus_bronze_events_0f`"
+        "INSERT INTO `bronze`.`events`\nSELECT `event_id`, `amount` FROM `janus_bronze_events_0f`"
     )
 
 
@@ -98,7 +95,6 @@ def test_the_ddl_module_imports_no_spark():
 # ── in-place evolution and the contract stamp ───────────────────────
 
 
-@RED_TASK_2
 def test_alter_column_type_renders_the_iceberg_promotion():
     from janus.writers.schema_ddl import build_alter_column_type_sql
 
@@ -107,7 +103,6 @@ def test_alter_column_type_renders_the_iceberg_promotion():
     assert sql == "ALTER TABLE `t` ALTER COLUMN `amount` TYPE bigint"
 
 
-@RED_TASK_2
 def test_the_contract_stamp_single_quotes_and_escapes_every_value():
     from janus.writers.schema_ddl import (
         CONTRACT_PROPERTY_KEYS,
@@ -134,7 +129,6 @@ def test_the_contract_stamp_single_quotes_and_escapes_every_value():
     )
 
 
-@RED_TASK_2
 def test_the_stamp_is_read_back_with_show_tblproperties():
     from janus.writers.schema_ddl import build_show_contract_properties_sql
 
@@ -143,7 +137,6 @@ def test_the_stamp_is_read_back_with_show_tblproperties():
     )
 
 
-@RED_TASK_2
 @pytest.mark.parametrize(
     ("physical_type", "ddl_type"),
     [
@@ -164,3 +157,9 @@ def test_every_scalar_has_one_ddl_spelling(physical_type, ddl_type):
     from janus.models.data_contracts.vocabulary import spark_sql_type
 
     assert spark_sql_type(physical_type) == ddl_type
+
+
+def test_projection_renders_missing_nullable_column_as_null():
+    from janus.writers.schema_ddl import render_projection
+
+    assert render_projection(("id", ("note", None))) == "`id`, NULL AS `note`"

@@ -209,6 +209,7 @@ class BronzeMaterializer:
                     plan,
                     "bronze",
                     intent=batch_intent,
+                    batch_index=batch_index,
                     count_records=_should_count_records_for_handoff(planned_run),
                 )
             finally:

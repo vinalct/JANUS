@@ -94,6 +94,7 @@ def _decimal_relation(before: str, after: str) -> str | None:
         return None
     if old.scale != new.scale:
         return None
+    assert old.precision is not None and new.precision is not None
     if old.precision < new.precision:
         return "promote"
     if old.precision > new.precision:
@@ -260,9 +261,10 @@ def plan_schema_evolution(
         )
         outcome = "breaking_replace" if allowed_replace else "refused"
         kinds = ", ".join(sorted({item.kind for item in ordered_refusals}))
+        columns = ", ".join(sorted({item.column for item in ordered_refusals}))
         reason = (
             f"contract major version {recorded_major} -> {major} authorizes "
-            f"full refresh table replacement ({kinds})"
+            f"full refresh table replacement ({kinds}; columns: {columns})"
             if allowed_replace
             else f"schema change refused ({kinds}); bump the contract MAJOR and run a full refresh"
         )

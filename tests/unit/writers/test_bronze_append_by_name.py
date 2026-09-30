@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -84,7 +83,6 @@ class ContractAwareSession(FakeSparkSession):
         super().sql(statement)
         if statement.startswith("SHOW TBLPROPERTIES"):
             return Result([Row(key=key, value=value) for key, value in self.stamp.items()])
-        self._apply(statement)
         return Result()
 
     def table(self, identifier: str) -> FakeTable:
@@ -92,22 +90,6 @@ class ContractAwareSession(FakeSparkSession):
         if identifier.endswith(".partitions"):
             return table
         return FakeTable(typed_schema(self.target_columns))
-
-    def _apply(self, statement: str) -> None:
-        added = re.search(r"ADD COLUMNS \((.*)\)$", statement)
-        if added:
-            for column in added.group(1).split(", "):
-                name, spelled = column.split(" ", 1)
-                self.target_columns = (*self.target_columns, (name.strip("`"), spelled))
-        altered = re.search(r"ALTER COLUMN `([^`]+)` TYPE (\S+)$", statement)
-        if altered:
-            name, spelled = altered.groups()
-            self.target_columns = tuple(
-                (column, spelled if column == name else current)
-                for column, current in self.target_columns
-            )
-        for key, value in re.findall(r"'(janus\.[a-z_]+)' = '((?:[^']|'')*)'", statement):
-            self.stamp[key] = value.replace("''", "'")
 
 
 class TypedFakeDataFrame(FakeDataFrame):
@@ -172,7 +154,7 @@ def test_a_reordered_batch_is_projected_in_target_table_order(tmp_path):
     [statement] = inserts(session)
     assert statement.startswith("INSERT INTO `bronze_test`.`bronze_overwrite_fixture`\n")
     assert projection_of(statement) == "`id`, `label`, `amount`, `when`, `ingestion_date`"
-    assert session.table_calls == ["bronze_test.bronze_overwrite_fixture"]
+    assert session.table_calls == ["bronze_test.bronze_overwrite_fixture"] * 2
 
 
 def test_no_append_ever_selects_star(tmp_path):
@@ -201,18 +183,14 @@ def test_a_batch_column_the_table_lacks_is_refused_before_any_insert(tmp_path):
     assert len(session.dropped_temp_views) == 1
 
 
-def test_a_table_column_the_batch_lacks_is_refused_before_any_insert(tmp_path):
-    from janus.writers.schema_ddl import UnreconciledAppendError
-
+def test_a_missing_nullable_column_is_projected_as_null(tmp_path):
     declared = contract("base")
     session = ContractAwareSession(stamp=stamp_of(declared))
     without_label = tuple(column for column in BASE_TABLE if column[0] != "label")
 
-    with pytest.raises(UnreconciledAppendError) as raised:
-        write(tmp_path, session, declared, without_label)
+    write(tmp_path, session, declared, without_label)
 
-    assert "label" in str(raised.value)
-    assert inserts(session) == []
+    assert projection_of(inserts(session)[0]).startswith("`id`, NULL AS `label`, `amount`")
 
 
 def test_plan_append_projection_is_pure_and_returns_target_order():

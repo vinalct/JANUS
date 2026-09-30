@@ -21,6 +21,7 @@ from tests.support.spark_sessions import (
     catalog_acceptance_prerequisites_available,
     require_pyiceberg,
 )
+from tests.support.writer_contracts import contract_for_frame
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_PROJECT_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "catalog_commits"
@@ -71,8 +72,10 @@ def spark_written_table(shared_catalog_session, tmp_path_factory) -> str:
         StorageLayout.from_environment_config(ENVIRONMENT_CONFIG, project_root)
     )
 
+    frame = shared_catalog_session.createDataFrame(SPARK_ROWS, SPARK_SCHEMA)
+    plan = plan.with_data_contract(contract_for_frame(frame, source_id=SOURCE_ID))
     result = writer.write(
-        shared_catalog_session.createDataFrame(SPARK_ROWS, SPARK_SCHEMA),
+        frame,
         plan,
         "bronze",
         intent=resolve_bronze_write_intent(plan),
@@ -121,9 +124,7 @@ def pyiceberg_initial_read(pyiceberg_table) -> tuple[tuple[tuple[str, str], ...]
     cannot be perturbed by the write — however the tests are ordered or selected.
     """
 
-    fields = tuple(
-        (field.name, str(field.field_type)) for field in pyiceberg_table.schema().fields
-    )
+    fields = tuple((field.name, str(field.field_type)) for field in pyiceberg_table.schema().fields)
     return fields, _rows(pyiceberg_table)
 
 
