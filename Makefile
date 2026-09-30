@@ -61,6 +61,7 @@ GUARDRAIL_CLASSES := \
 SPARK_ORCHESTRATION_CLASS := tests.integration.orchestration.test_dependency_execution
 QUERYABLE_CLASS := tests.integration.catalog_commits.test_queryable_observability
 RUNS_SINK_CLASS := tests.integration.catalog_commits.test_runs_table_append_sink
+PREFLIGHT_REAL_CATALOG_CLASS := tests.integration.catalog_commits.test_contract_preflight_real_catalog
 CROSS_ENGINE_CLASS := tests.integration.catalog_commits.test_pyiceberg_round_trip
 CONTRACTS_GOLDEN_CLASS := tests.integration.contracts.test_bronze_unchanged_after_migration
 AC1_TEST := test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources
@@ -239,6 +240,7 @@ ci: ensure-up
 	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage $(SERVICE) python -m pytest -ra -m 'not cluster' --cov=janus --cov-report=term-missing --cov-report=xml:data/coverage.xml --junitxml=$(CI_TEST_REPORT))
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_SINK_CLASS) --minimum-passed 3)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(PREFLIGHT_REAL_CATALOG_CLASS) --minimum-passed 8)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)

@@ -29,6 +29,7 @@ from tests.support.contracts import DECLARED_CONTRACT_PATH
 from tests.support.orchestration import GraphCase, SourceSpec, source_documents, write_project
 from tests.support.orchestration_capture import EmptyHandoffHook
 from tests.support.spark_sessions import (
+    CatalogTarget,
     build_iceberg_session,
     catalog_target_params,
     require_iceberg_runtime,
@@ -79,8 +80,10 @@ class _TrackingProvider(SparkSessionProvider):
         session_factory,
         events: list[str],
         active_sources: set[str],
+        provider_config: Mapping[str, Any],
+        provider_paths: Mapping[str, Any],
     ) -> None:
-        super().__init__({}, {}, session_factory=session_factory)
+        super().__init__(provider_config, provider_paths, session_factory=session_factory)
         self.source_id = source_id
         self.events = events
         self.active_sources = active_sources
@@ -143,6 +146,8 @@ class _EvidenceExecution:
     session_factory: Callable[[], Any]
     events: list[str]
     active_sources: set[str]
+    provider_config: Mapping[str, Any] = field(default_factory=dict)
+    provider_paths: Mapping[str, Any] = field(default_factory=dict)
     raise_sources: set[str] = field(default_factory=set)
     provider_acquisitions: list[str] = field(default_factory=list)
 
@@ -156,6 +161,8 @@ class _EvidenceExecution:
             self.session_factory,
             self.events,
             self.active_sources,
+            self.provider_config,
+            self.provider_paths,
         )
         self.provider_acquisitions.append(source_id)
         service = SourceExecutionService(
@@ -410,6 +417,74 @@ def test_all_failure_forms_block_descendants_while_independent_source_commits(
     assert not any(source_id in {"B", "D"} for source_id, _params in result.transport.requests)
 
 
+@pytest.mark.parametrize("target_factory", catalog_target_params())
+def test_refused_contract_preflight_skips_dependent_without_extraction(
+    tmp_path, target_factory
+):
+    root = tmp_path / "preflight-refusal"
+    target = target_factory(root / "catalog")
+    target.prepare()
+    suffix = _table_suffix(root)
+    specs = (
+        SourceSpec("B", ("A",), table_name=f"b_{suffix}"),
+        SourceSpec("A", table_name=f"a_{suffix}"),
+    )
+    tables = _table_identifiers(specs)
+
+    def session_factory():
+        return start_session(
+            f"janus-orchestration-preflight-{target.id}", target.session_options()
+        )
+
+    _seed_table(
+        session_factory,
+        tables["A"],
+        [("seed", 1, None, None, None, None, None, None)],
+        "id string, value bigint, upstream_id string, consumer string, "
+        "title string, a_id string, c_id string, day string",
+    )
+    def add_stray(spark):
+        spark.sql(
+            f"ALTER TABLE {tables['A']} "
+            "SET TBLPROPERTIES ('janus.contract_version' = '1.0.0')"
+        )
+        spark.sql(f"ALTER TABLE {tables['A']} ADD COLUMNS (stray string)")
+
+    _with_session(session_factory, add_stray)
+
+    def reject_request(source_id, _params):
+        raise AssertionError(f"refused batch reached HTTP for {source_id}")
+
+    result = _execute_graph(
+        root,
+        specs,
+        session_factory,
+        reject_request,
+        catalog_target=target,
+        contract_enforcement="strict",
+    )
+    summary = result.outcome.to_summary()
+    sources = {source["source_id"]: source for source in summary["sources"]}
+    a, b = sources["A"], sources["B"]
+
+    assert a["status"] == "failed"
+    assert a["failure"]["error_type"] == "ContractPreflightError"
+    assert b["status"] == "skipped"
+    assert b["skip"]["reason_code"] == "upstream_failed"
+    assert b["skip"]["direct_blocking_upstream_ids"] == ["A"]
+    assert result.transport.requests == []
+    raw_root = root / "data" / "raw" / "A"
+    assert not raw_root.exists() or not any(path.is_file() for path in raw_root.rglob("*"))
+    assert not any(event.startswith("session_start:A") for event in result.events)
+    assert result.execution.provider_acquisitions == ["A"]
+    evidence = a["attempts"][0]["evidence"]
+    metadata_path = Path(evidence["metadata_outputs"]["run_metadata_path"])
+    assert metadata_path.is_file()
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["run_attributes"][
+        "contract_preflight_outcome"
+    ] == "refused"
+
+
 def test_failed_current_upstream_blocks_consumer_even_when_stale_table_exists(tmp_path):
     require_iceberg_runtime()
     root = tmp_path / "stale"
@@ -503,6 +578,8 @@ def _execute_graph(
     documents: list[dict[str, Any]] | None = None,
     hooks=(),
     raise_sources: set[str] | None = None,
+    catalog_target: CatalogTarget | None = None,
+    contract_enforcement: str | None = None,
 ) -> _HarnessResult:
     write_project(root, documents or source_documents(GraphCase(specs)))
     contract_path = root / DECLARED_CONTRACT_PATH
@@ -519,6 +596,11 @@ def _execute_graph(
         contract["schema"][0]["properties"].append(
             {"name": name, "logicalType": logical_type, "physicalType": physical_type}
         )
+    if contract_enforcement is not None:
+        next(
+            item for item in contract["customProperties"]
+            if item["property"] == "janus.enforcement"
+        )["value"] = contract_enforcement
     contract_path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
     environment_config = {
         "name": "local",
@@ -529,6 +611,9 @@ def _execute_graph(
             "metadata_dir": "data/metadata",
         },
     }
+    if catalog_target is not None:
+        environment_config.update(catalog_target.environment_config())
+    resolved_paths = catalog_target.resolved_paths if catalog_target is not None else {}
     events: list[str] = []
     active_sources: set[str] = set()
     transport = _FixtureTransport(respond, events, active_sources)
@@ -577,13 +662,15 @@ def _execute_graph(
         session_factory,
         events,
         active_sources,
+        environment_config if catalog_target is not None else {},
+        resolved_paths,
         raise_sources or set(),
     )
     outcome = BatchExecutor(source_execution=execution).execute(
         plan,
         registry,
         environment_config,
-        {},
+        resolved_paths,
     )
     return _HarnessResult(
         outcome=outcome,

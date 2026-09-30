@@ -27,7 +27,12 @@ from tests.support.contract_enforcement import (
     write_case_project,
     write_frame,
 )
-from tests.support.spark_sessions import CatalogTarget, catalog_acceptance_prerequisites_available
+from tests.support.spark_sessions import (
+    CatalogTarget,
+    catalog_acceptance_prerequisites_available,
+    sqlite_catalog_target,
+    start_session,
+)
 
 PREFLIGHT_REAL_CATALOG_UNAVAILABLE = (
     "PREFLIGHT_REAL_CATALOG_UNAVAILABLE: catalog engines or seeded jars are missing"
@@ -37,7 +42,6 @@ pytestmark = [
         not catalog_acceptance_prerequisites_available(),
         reason=PREFLIGHT_REAL_CATALOG_UNAVAILABLE,
     ),
-    pytest.mark.xfail(strict=True, reason="red until finish implementation"),
 ]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -279,9 +283,19 @@ def test_lenient_refused_run_warns_and_proceeds(
 def _hold_exclusive_lock(database: str, seconds: float, ready: Any) -> None:
     import sqlite3
 
-    connection = sqlite3.connect(database, timeout=0, isolation_level=None)
+    connection = sqlite3.connect(database, timeout=5, isolation_level=None)
     try:
-        connection.execute("BEGIN EXCLUSIVE")
+        connection.execute("PRAGMA locking_mode=EXCLUSIVE")
+        deadline = time.monotonic() + LOCK_READY_TIMEOUT_SECONDS - 1
+        while True:
+            try:
+                connection.execute("BEGIN EXCLUSIVE")
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
+        connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
         ready.set()
         time.sleep(seconds)
         connection.execute("ROLLBACK")
@@ -289,27 +303,44 @@ def _hold_exclusive_lock(database: str, seconds: float, ready: Any) -> None:
         connection.close()
 
 
-def test_budget_bounds_a_locked_catalog(catalog_target, shared_catalog_session, tmp_path):
-    if catalog_target.catalog_db is None:
-        pytest.skip("the lock is a SQLite file lock; server-backed catalogs have no file")
+def _seed_locked_catalog(target: CatalogTarget, project_root: Path, case: EnforcementCase) -> None:
+    spark = start_session("janus-preflight-locked-catalog", target.session_options())
+    try:
+        _create_table(spark, project_root, case)
+    finally:
+        spark.stop()
+
+
+def test_budget_bounds_a_locked_catalog(tmp_path):
+    target = sqlite_catalog_target(tmp_path / "locked_catalog")
+    target.prepare()
     case = _case("pf_locked", "base")
-    _create_table(shared_catalog_session, tmp_path, case)
     context = multiprocessing.get_context("spawn")
+    seed = context.Process(target=_seed_locked_catalog, args=(target, tmp_path, case))
+    seed.start()
+    seed.join(timeout=60)
+    if seed.is_alive():
+        seed.terminate()
+        seed.join(timeout=10)
+    assert seed.exitcode == 0, "the Spark writer did not seed the locked catalog"
+
     ready = context.Event()
     holder = context.Process(
         target=_hold_exclusive_lock,
-        args=(str(catalog_target.catalog_db), LOCK_BUDGET_SECONDS + 2, ready),
+        args=(str(target.catalog_db), LOCK_BUDGET_SECONDS + 2, ready),
     )
     holder.start()
     try:
         assert ready.wait(LOCK_READY_TIMEOUT_SECONDS), "the lock holder never took the lock"
         started = time.monotonic()
-        result = _preflight(
-            catalog_target, tmp_path, case, budget_seconds=LOCK_BUDGET_SECONDS
-        )
+        result = _preflight(target, tmp_path, case, budget_seconds=LOCK_BUDGET_SECONDS)
         elapsed = time.monotonic() - started
     finally:
         holder.join(timeout=LOCK_READY_TIMEOUT_SECONDS)
+        if holder.is_alive():
+            holder.terminate()
+            holder.join(timeout=10)
 
+    assert holder.exitcode == 0
     assert result.outcome == "catalog_unavailable"
     assert elapsed <= LOCK_BUDGET_SECONDS + 0.5

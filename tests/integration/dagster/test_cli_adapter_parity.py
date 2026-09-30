@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 dagster = pytest.importorskip("dagster")
 
@@ -20,7 +21,15 @@ from janus.adapters.dagster import (  # noqa: E402
 )
 from janus.main import main  # noqa: E402
 from janus.orchestration import BatchSelection  # noqa: E402
-from janus.runtime import BatchExecutor  # noqa: E402
+from janus.runtime import (  # noqa: E402
+    BatchExecutor,
+    SourceExecutionService,
+    SourceExecutor,
+    SparkSessionProvider,
+)
+from janus.runtime.contract_preflight import LiveTable  # noqa: E402
+from janus.writers.evolution import LiveColumn  # noqa: E402
+from tests.support.contracts import DECLARED_CONTRACT_PATH  # noqa: E402
 from tests.support.orchestration import build_graph_project  # noqa: E402
 
 PLANNED_AT = "2026-09-15T12:00:00Z"
@@ -121,6 +130,80 @@ def test_cli_and_dagster_have_identical_graph_selection_and_terminal_contract(
     assert [call[:2] for call in dagster_execution.calls] == [("A", 1), ("C", 1)]
 
 
+def test_cli_and_dagster_normalize_strict_preflight_refusal_identically(
+    tmp_path, monkeypatch, capsys
+):
+    root = _project(tmp_path, "chain")
+    contract_path = root / DECLARED_CONTRACT_PATH
+    contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    next(
+        item for item in contract["customProperties"]
+        if item["property"] == "janus.enforcement"
+    )["value"] = "strict"
+    contract_path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
+
+    def service_with_refused_live_table():
+        providers = []
+
+        def provider_factory(config, paths, _logger):
+            provider = SparkSessionProvider(
+                config,
+                paths,
+                session_factory=lambda: pytest.fail("preflight started Spark"),
+            )
+            providers.append(provider)
+            return provider
+
+        service = SourceExecutionService(
+            executor=SourceExecutor(
+                preflight_loader=lambda _config, _paths, _identifier: LiveTable(
+                    (LiveColumn("id", "string", False), LiveColumn("stray", "string", False)),
+                    "1.0.0",
+                )
+            ),
+            provider_factory=provider_factory,
+        )
+        return service, providers
+
+    cli_service, cli_providers = service_with_refused_live_table()
+    monkeypatch.setattr(
+        run_all_module,
+        "_build_batch_executor",
+        lambda _logger: BatchExecutor(source_execution=cli_service),
+    )
+    cli_status = main(
+        [
+            "run-all",
+            "--project-root",
+            str(root),
+            "--pipeline-run-id",
+            "task13-cli-preflight",
+            "--started-at",
+            PLANNED_AT,
+        ]
+    )
+    cli_summary = json.loads(capsys.readouterr().out)
+
+    adapter_service, adapter_providers = service_with_refused_live_table()
+    adapter = _adapter(root, adapter_service)
+    native, outcome = adapter.execute_in_process(instance=DagsterInstance.ephemeral())
+    adapter_summary = outcome.to_summary()
+
+    assert cli_status == 1
+    assert not native.success
+    assert _normalized_terminal_contract(cli_summary) == _normalized_terminal_contract(
+        adapter_summary
+    )
+    for summary in (cli_summary, adapter_summary):
+        sources = {item["source_id"]: item for item in summary["sources"]}
+        assert sources["A"]["failure"]["error_type"] == "ContractPreflightError"
+        assert sources["B"]["skip"]["reason_code"] == "upstream_failed"
+        assert sources["B"]["skip"]["direct_blocking_upstream_ids"] == ["A"]
+    assert len(cli_providers) == len(adapter_providers) == 1
+    assert not cli_providers[0].was_started
+    assert not adapter_providers[0].was_started
+
+
 def test_bounded_native_retry_is_collected_once_and_releases_the_consumer(tmp_path):
     root = _project(tmp_path, "chain")
     execution = _ScenarioExecution(fail_once={"A"})
@@ -166,7 +249,7 @@ storage:
     return root
 
 
-def _adapter(root: Path, execution: _ScenarioExecution, **kwargs: Any):
+def _adapter(root: Path, execution: Any, **kwargs: Any):
     return build_dagster_adapter(
         root,
         environment_config=_environment_config(),
