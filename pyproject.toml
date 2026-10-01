@@ -20,7 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dagster = [
-  "dagster==1.13.22",
+  "dagster==1.13.24",
 ]
 dev = [
   "jsonschema[format]==4.25.1",
