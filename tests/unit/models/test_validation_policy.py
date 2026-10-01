@@ -39,7 +39,6 @@ def test_default_policy_is_phase_one_strict():
     """AC-1 at the object level: the shipped default relaxes nothing."""
     assert DEFAULT_VALIDATION_POLICY.require_public_access is True
     assert DEFAULT_VALIDATION_POLICY.require_strategy_matches_source_type is True
-    assert DEFAULT_VALIDATION_POLICY.require_active_contract is True
     assert DEFAULT_VALIDATION_POLICY.allowed_federation_levels == frozenset({"federal"})
     assert DEFAULT_VALIDATION_POLICY.allowed_source_types == SUPPORTED_SOURCE_TYPES
     assert DEFAULT_VALIDATION_POLICY.allowed_strategies == SUPPORTED_STRATEGIES
@@ -100,60 +99,6 @@ def test_public_access_true_is_silent():
     assert issues == []
 
 
-@pytest.mark.parametrize(
-    ("contract_status", "expected_suffix"),
-    [
-        (None, " (no contract declared)"),
-        ("draft", " (found 'draft')"),
-    ],
-)
-def test_active_contract_message_is_verbatim(contract_status, expected_suffix):
-    issues: list[ValidationIssue] = []
-
-    DEFAULT_VALIDATION_POLICY.validate_schema_declaration(
-        enabled=True, contract_status=contract_status, issues=issues
-    )
-
-    message = (
-        "must reference a contract with status 'active' for an enabled source in phase 1"
-        + expected_suffix
-    )
-    assert issues == [ValidationIssue("schema.contract", message)]
-    assert issues[0].render() == f"schema.contract: {message}"
-
-
-def test_active_contract_is_silent():
-    issues: list[ValidationIssue] = []
-
-    DEFAULT_VALIDATION_POLICY.validate_schema_declaration(
-        enabled=True, contract_status="active", issues=issues
-    )
-
-    assert issues == []
-
-
-@pytest.mark.parametrize("contract_status", [None, "draft", "active", "deprecated"])
-def test_disabled_source_may_have_any_contract_status(contract_status):
-    issues: list[ValidationIssue] = []
-
-    DEFAULT_VALIDATION_POLICY.validate_schema_declaration(
-        enabled=False, contract_status=contract_status, issues=issues
-    )
-
-    assert issues == []
-
-
-def test_contract_requirement_can_be_relaxed_independently():
-    issues: list[ValidationIssue] = []
-    relaxed = replace(DEFAULT_VALIDATION_POLICY, require_active_contract=False)
-
-    relaxed.validate_schema_declaration(
-        enabled=True, contract_status="draft", issues=issues
-    )
-
-    assert issues == []
-
-
 def test_relaxed_policy_appends_nothing():
     """AC-2 in miniature: a different posture is a different object, not a code edit."""
     issues: list[ValidationIssue] = []
@@ -195,12 +140,6 @@ def test_a_minimal_stand_in_satisfies_the_protocol():
         ) -> None:
             return None
 
-        def validate_schema_declaration(
-            self, *, enabled: bool, contract_status: str | None,
-            issues: list[ValidationIssue],
-        ) -> None:
-            return None
-
     stand_in = PermissivePolicy()
 
     assert isinstance(stand_in, ValidationPolicy)
@@ -214,11 +153,8 @@ def test_issue_list_is_appended_to_never_replaced():
 
     DEFAULT_VALIDATION_POLICY.validate_strategy_pairing("api", "catalog", issues)
     DEFAULT_VALIDATION_POLICY.validate_public_access(False, issues)
-    DEFAULT_VALIDATION_POLICY.validate_schema_declaration(
-        enabled=True, contract_status="draft", issues=issues
-    )
 
     assert issues[0] is earlier
     assert [issue.path for issue in issues] == [
-        "source_id", "strategy", "public_access", "schema.contract"
+        "source_id", "strategy", "public_access"
     ]

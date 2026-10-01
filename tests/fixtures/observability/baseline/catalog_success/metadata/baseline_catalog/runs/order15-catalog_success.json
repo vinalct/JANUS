@@ -99,6 +99,7 @@
   ],
   "records_extracted": 2,
   "run_attributes": {
+    "contract_preflight_outcome": "catalog_unavailable",
     "source_id": "baseline_catalog",
     "source_type": "catalog",
     "strategy": "catalog",

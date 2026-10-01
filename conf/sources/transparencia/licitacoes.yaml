@@ -97,7 +97,6 @@ sources:
         - qntPessoas
         - qntVinculos
         - codOrgaoExercicioSiape
-      allow_schema_evolution: true
 
 
   - source_id: transparencia__licitacoes__unidades_gestoras__full_refresh
@@ -176,7 +175,6 @@ sources:
         - qntPessoas
         - qntVinculos
         - codOrgaoExercicioSiape
-      allow_schema_evolution: true
 
   - source_id: transparencia__licitacoes__modalidades__full_refresh
     name: Portal da Transparencia - Modalidades das Licitações
@@ -253,4 +251,3 @@ sources:
         - qntPessoas
         - qntVinculos
         - codOrgaoExercicioSiape
-      allow_schema_evolution: true

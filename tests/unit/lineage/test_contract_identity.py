@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -16,10 +15,7 @@ from janus.lineage import (
     compute_schema_version,
 )
 from janus.models import ExecutionPlan, RunContext
-from janus.models.data_contracts import (
-    contract_from_legacy_schema_file,
-    load_data_contract,
-)
+from janus.models.data_contracts import load_data_contract
 from janus.registry import load_registry
 from tests.support.contracts import MINIMAL_CONTRACT_FIXTURE
 
@@ -80,26 +76,25 @@ def test_real_contract_identity_is_copied_without_rereading_contract_bytes(tmp_p
     assert contract_reads == []
 
 
-def test_synthetic_legacy_contract_omits_placeholder_version(tmp_path):
-    legacy_path = tmp_path / "legacy-schema.json"
-    legacy_path.write_text(json.dumps({"columns": ["id"]}), encoding="utf-8")
-    plan = _plan().with_data_contract(
-        contract_from_legacy_schema_file(
-            legacy_path,
-            source_id="federal_open_data_example",
-            bronze_table="example",
-            domain="reference",
-            project_root=tmp_path,
-        )
-    )
+def test_every_checked_in_source_records_a_contract_version():
+    """With the legacy conversion gone, no new record can carry an unversioned contract."""
+    registry = load_registry(PROJECT_ROOT)
+    sources = registry.list_sources(enabled_only=False)
+    assert sources
 
-    run_metadata, lineage = _records(plan)
-    for record in (run_metadata, lineage):
-        payload = record.to_dict()
-        assert payload["schema_version"] == sha256(legacy_path.read_bytes()).hexdigest()
-        assert payload["contract_id"] == "legacy:legacy-schema.json"
-        assert "contract_version" not in payload
-        assert record.contract_version is None
+    for source in sources:
+        context = RunContext.create(
+            run_id=f"contract-identity-{source.source_id}",
+            environment="local",
+            project_root=PROJECT_ROOT,
+            started_at=datetime(2026, 9, 23, tzinfo=UTC),
+        )
+        plan = ExecutionPlan.from_source_config(
+            source, context, data_contract=registry.contract_for(source.source_id)
+        )
+        for record in _records(plan):
+            assert record.contract_version is not None
+            assert record.to_dict()["contract_version"] == plan.data_contract.version
 
 
 def test_no_contract_identity_is_omitted_from_both_serialized_records():

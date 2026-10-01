@@ -1032,13 +1032,11 @@ def _with_contract(plan: ExecutionPlan) -> ExecutionPlan:
 
 
 def _source_config_with_absolute_schema(source_config):
-    if source_config.schema.path is None:
-        return source_config
     return replace(
         source_config,
         schema=replace(
             source_config.schema,
-            path=str(PROJECT_ROOT / source_config.schema.path),
+            contract=str(PROJECT_ROOT / source_config.schema.contract),
         ),
     )
 

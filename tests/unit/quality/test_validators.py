@@ -9,11 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from janus.models import ExecutionPlan, RunContext, SourceConfig, WriteResult
-from janus.models.data_contracts import (
-    DataContract,
-    contract_from_legacy_schema_file,
-    load_data_contract,
-)
+from janus.models.data_contracts import DataContract, load_data_contract
 from janus.normalizers import BaseNormalizer
 from janus.quality import (
     ContractCheck,
@@ -50,18 +46,11 @@ def spark():
 
 
 def test_quality_gate_persists_successful_validation_report(spark: SparkSession, tmp_path):
-    schema_path = tmp_path / "contracts" / "source_schema.json"
-    schema_path.parent.mkdir(parents=True)
-    schema_path.write_text(
-        json.dumps({"fields": [{"name": "id"}, {"name": "updated_at"}]}),
-        encoding="utf-8",
-    )
     plan = _build_plan(
         tmp_path,
         run_id="run-quality-001",
         started_at=datetime(2026, 4, 9, 13, 0, tzinfo=UTC),
-        source_config=_source_config_with_schema_path(schema_path, tmp_path),
-        data_contract=_legacy_contract(schema_path, tmp_path),
+        data_contract=_example_contract(),
     )
     dataframe = BaseNormalizer().normalize(
         spark.createDataFrame(
@@ -152,14 +141,11 @@ def test_quality_gate_reports_an_undeclared_column_whatever_the_compatibility(
     tmp_path,
 ):
     """D-4: a column the contract does not declare is a mismatch; evolution is by declaration."""
-    schema_path = tmp_path / "contracts" / "source_schema.json"
-    schema_path.parent.mkdir(parents=True)
-    schema_path.write_text(json.dumps({"columns": ["id", "updated_at"]}), encoding="utf-8")
     plan = _build_plan(
         tmp_path,
         run_id="run-quality-004",
         started_at=datetime(2026, 4, 9, 13, 45, tzinfo=UTC),
-        data_contract=_legacy_contract(schema_path, tmp_path),
+        data_contract=_example_contract(),
     )
     dataframe = BaseNormalizer().normalize(
         spark.createDataFrame(
@@ -225,48 +211,20 @@ def test_quality_gate_uses_configured_bronze_iceberg_namespace_and_table(tmp_pat
     assert report.is_successful is True
 
 
-def test_a_spark_style_schema_file_still_names_the_expected_columns(tmp_path):
-    """The names the gate compares against now come from the converted contract."""
-    schema_path = tmp_path / "schema.json"
-    schema_path.write_text(
-        json.dumps(
-            {
-                "type": "struct",
-                "fields": [
-                    {"name": "id", "type": "string", "nullable": False},
-                    {"name": "updated_at", "type": "string", "nullable": False},
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    contract = _legacy_contract(schema_path, tmp_path)
-
-    assert contract.column_names == ("id", "updated_at")
-
-
 def test_the_schema_expectation_is_the_contract_the_plan_carries(tmp_path):
     """Its source stays the declared file, so the persisted report reads as it always did."""
-    schema_path = tmp_path / "contracts" / "source_schema.json"
-    schema_path.parent.mkdir(parents=True)
-    schema_path.write_text(
-        json.dumps({"fields": [{"name": "id"}, {"name": "updated_at"}]}),
-        encoding="utf-8",
-    )
-    contract = _legacy_contract(schema_path, tmp_path)
+    contract = _example_contract()
     plan = _build_plan(
         tmp_path,
         run_id="run-quality-expectation-001",
         started_at=datetime(2026, 4, 9, 13, 5, tzinfo=UTC),
-        source_config=_source_config_with_schema_path(schema_path, tmp_path),
         data_contract=contract,
     )
 
     expectation = resolve_schema_expectation(plan)
 
     assert expectation.fields == ("id", "updated_at")
-    assert expectation.source == str(schema_path)
+    assert expectation.source == str(contract.contract_path)
     assert expectation.error is None
 
 
@@ -427,28 +385,6 @@ def _base_source_config() -> SourceConfig:
 
 def _example_contract() -> DataContract:
     return load_data_contract(PROJECT_ROOT / _base_source_config().schema.contract)
-
-
-def _source_config_with_schema_path(schema_path: Path, project_root: Path) -> SourceConfig:
-    source_config = _base_source_config()
-    return replace(
-        source_config,
-        schema=replace(
-            source_config.schema,
-            path=str(schema_path.relative_to(project_root)),
-        ),
-    )
-
-
-def _legacy_contract(schema_path: Path, project_root: Path) -> DataContract:
-    """What the registry snapshot builds for an entry that still declares a legacy file."""
-    return contract_from_legacy_schema_file(
-        schema_path,
-        source_id="federal_open_data_example",
-        bronze_table="bronze.federal_open_data_example",
-        domain="example",
-        project_root=project_root,
-    )
 
 
 def _build_plan(

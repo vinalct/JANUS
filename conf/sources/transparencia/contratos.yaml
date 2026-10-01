@@ -86,4 +86,3 @@ sources:
         - qntPessoas
         - qntVinculos
         - codOrgaoExercicioSiape
-      allow_schema_evolution: true

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -127,9 +126,6 @@ class SourceRegistry:
                 policy=policy,
                 strategy_registry=strategy_registry,
             )
-            _warn_source_config_deprecations(
-                config_path, (source for source, _ in loaded)
-            )
             for source, entry in loaded:
                 previous_path = seen_source_ids.get(source.source_id)
                 if previous_path is not None:
@@ -157,7 +153,6 @@ class SourceRegistry:
                 locations=locations,
                 project_root=resolved_project_root,
                 sources_dir=sources_dir,
-                policy=policy,
             ),
         )
 
@@ -233,24 +228,17 @@ def _load_declared_contracts(
     locations: Iterable[SourceLocation],
     project_root: Path,
     sources_dir: Path,
-    policy: ValidationPolicy,
 ) -> dict[str, DataContract]:
-    """Load one contract snapshot and consult phase policy once for every source."""
+    """Load contracts and enforce active status as a structural write precondition."""
     entries_by_source = {location.source_id: location.entry for location in locations}
 
     def validate(source: SourceConfig, contract: DataContract | None) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
-        policy.validate_schema_declaration(
-            enabled=source.enabled,
-            contract_status=contract.status if contract is not None else None,
-            issues=issues,
-        )
+        _require_active_contract(source, contract, issues)
         entry = entries_by_source[source.source_id]
         if entry is None:
             return issues
-        return [
-            ValidationIssue(f"{entry}.{issue.path}", issue.message) for issue in issues
-        ]
+        return [ValidationIssue(f"{entry}.{issue.path}", issue.message) for issue in issues]
 
     return load_contract_snapshot(
         sources,
@@ -260,26 +248,21 @@ def _load_declared_contracts(
     )
 
 
-def _warn_source_config_deprecations(
-    config_path: Path, configs: Iterable[SourceConfig]
+def _require_active_contract(
+    config: SourceConfig, contract: DataContract | None, issues: list[ValidationIssue]
 ) -> None:
-    """Report a still-loading but deprecated declaration, once per config file.
-
-    Ten CNPJ entries in one grouped file repeat the same declaration; repeating the
-    warning ten times would train an operator to scroll past it.
-    """
-    reported: set[tuple[str, str]] = set()
-    for config in configs:
-        for issue in config.deprecations:
-            key = (issue.path, issue.message)
-            if key in reported:
-                continue
-            reported.add(key)
-            warnings.warn(
-                f"{config_path}: {issue.path}: {issue.message}",
-                DeprecationWarning,
-                stacklevel=2,
+    """Structural since, no longer policy: an enabled source needs an active contract."""
+    if not config.enabled:
+        return
+    if contract is None or contract.status != "active":
+        issues.append(
+            ValidationIssue(
+                "schema.contract",
+                "must reference a contract with status 'active' for an enabled source: "
+                "the materializer writes only under a reviewed contract (order-19)"
+                + (f" (found {contract.status!r})" if contract is not None else ""),
             )
+        )
 
 
 def _discover_source_config_paths(sources_dir: Path, file_pattern: str) -> tuple[Path, ...]:

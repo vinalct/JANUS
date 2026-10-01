@@ -56,7 +56,6 @@ sources:
     quality:
       required_fields: [reference_id, label]
       unique_fields: [reference_id]
-      allow_schema_evolution: true
 
   - source_id: B
     name: Example dependent consumer B
@@ -126,7 +125,6 @@ sources:
     quality:
       required_fields: [detail_id, reference_id, amount]
       unique_fields: [detail_id]
-      allow_schema_evolution: true
 
   - source_id: C
     name: Example independent source C
@@ -197,4 +195,3 @@ sources:
     quality:
       required_fields: [event_id, window_start, window_end]
       unique_fields: [event_id]
-      allow_schema_evolution: true

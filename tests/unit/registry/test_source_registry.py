@@ -1,9 +1,7 @@
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from janus.models.config.policy import DEFAULT_VALIDATION_POLICY
 from janus.models.source_config import (
     CombinedRequestInputsConfig,
     DateWindowRequestInputsConfig,
@@ -15,7 +13,6 @@ from janus.registry import SourceNotFoundError, load_registry
 from tests.support.contracts import DECLARED_CONTRACT_PATH, write_minimal_contract
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-LEGACY_POLICY = replace(DEFAULT_VALIDATION_POLICY, require_active_contract=False)
 
 
 def test_checked_in_registry_lists_enabled_sources():
@@ -56,7 +53,6 @@ def test_checked_in_registry_loads_cnpj_entity_source_contracts():
     contract = registry.contract_for(source.source_id)
 
     assert source.access.remote_file_pattern == "Empresas*.zip"
-    assert source.schema.mode == "contract"
     assert source.schema.contract == "conf/contracts/receita_federal/cnpj_empresas.yaml"
     assert contract is not None
     assert contract.status == "active"
@@ -310,8 +306,7 @@ outputs:
     path: data/metadata/example/broken
     format: json
 
-quality:
-  allow_schema_evolution: true
+quality: {}
 """,
         },
     )
@@ -335,7 +330,7 @@ quality:
         "extraction.checkpoint_field: is required when extraction.mode is "
         "'incremental'" in message
     )
-    assert "schema.path: is required when schema.mode is 'explicit'" in message
+    assert "schema.mode: is no longer supported (order-19)" in message
     assert "outputs.raw.path: is required" in message
 
 
@@ -549,40 +544,6 @@ def test_registry_rejects_concurrency_above_one_without_speculative_pagination(t
     assert "'cursor' pagination" in message
 
 
-def test_a_legacy_declaration_warns_once_per_config_file(tmp_path):
-    """Ten entries in one file repeat one declaration; the operator reads one warning."""
-    legacy_schema = _valid_source_yaml("legacy_source", enabled=True).replace(
-        f"schema:\n  contract: {DECLARED_CONTRACT_PATH}\n",
-        "schema:\n  mode: infer\n",
-    )
-    project_root = _create_project(
-        tmp_path,
-        {
-            "legacy.yaml": _grouped_sources_yaml(
-                legacy_schema,
-                _valid_source_yaml("legacy_peer", enabled=True).replace(
-                    f"schema:\n  contract: {DECLARED_CONTRACT_PATH}\n",
-                    "schema:\n  mode: infer\n",
-                ),
-            ),
-            "declared.yaml": _valid_source_yaml("declared_source", enabled=True),
-        },
-    )
-
-    with pytest.warns(DeprecationWarning) as records:
-        registry = load_registry(project_root, policy=LEGACY_POLICY)
-
-    assert len(records) == 1
-    assert str(records[0].message) == (
-        f"{project_root / 'conf' / 'sources' / 'legacy.yaml'}: schema: "
-        "`schema.mode`/`schema.path` are deprecated and will be removed; "
-        "declare `schema.contract: conf/contracts/<domain>/<table>.yaml` instead "
-        "(see docs/data-contracts.md)."
-    )
-    assert registry.get_source("declared_source").deprecations == ()
-    assert registry.get_source("legacy_source").deprecations != ()
-
-
 def _create_project(tmp_path: Path, sources: dict[str, str]) -> Path:
     conf_dir = tmp_path / "conf"
     sources_dir = conf_dir / "sources"
@@ -720,8 +681,7 @@ outputs:
     path: data/metadata/example/{source_id}
     format: json
 
-quality:
-  allow_schema_evolution: true
+quality: {{}}
 """
 
 

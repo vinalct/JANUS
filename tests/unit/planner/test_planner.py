@@ -909,8 +909,7 @@ outputs:
     path: data/metadata/example/{source_id}
     format: json
 
-quality:
-  allow_schema_evolution: true
+quality: {{}}
 """
 
 

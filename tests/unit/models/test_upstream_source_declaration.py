@@ -344,7 +344,7 @@ def _base_mapping(**overrides: Any) -> dict[str, Any]:
             "bronze": {"path": "data/bronze/example/upstream_declaration", "format": "iceberg"},
             "metadata": {"path": "data/metadata/example/upstream_declaration", "format": "json"},
         },
-        "quality": {"allow_schema_evolution": True},
+        "quality": {},
     }
     mapping.update(overrides)
     return mapping

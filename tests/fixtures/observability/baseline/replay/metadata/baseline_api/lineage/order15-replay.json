@@ -8,7 +8,7 @@
   ],
   "checkpoint_field": "updated_at",
   "checkpoint_strategy": "max_value",
-  "config_version": "f6f7a021ea1c935b8a8479b3afffc5d4a2934e0727e94019c1b14f8a83ee0131",
+  "config_version": "00faea7dd655f7af70b94d50cae7ff6d0196d9215d7a47c28d4bac458ee893b2",
   "configured_outputs": [
     {
       "format": "json",
@@ -83,6 +83,7 @@
     "dispatch:api.page_number_api"
   ],
   "run_attributes": {
+    "contract_preflight_outcome": "catalog_unavailable",
     "source_id": "baseline_api",
     "source_type": "api",
     "strategy": "api",

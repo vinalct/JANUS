@@ -22,7 +22,7 @@
         }
       ],
       "checkpoint_strategy": "none",
-      "config_version": "09d606867709e5bbd0d100cbdb59e1ea694dabfaa26817c2cae68de4936b85f4",
+      "config_version": "5d88b9f180ae00a4e8c04be6cd0d2414ea9161b635278fcf74c56320e7ff2c28",
       "configured_outputs": [
         {
           "format": "json",
@@ -97,6 +97,7 @@
         "dispatch:api.page_number_api"
       ],
       "run_attributes": {
+        "contract_preflight_outcome": "catalog_unavailable",
         "source_id": "C",
         "source_type": "api",
         "strategy": "api",
@@ -184,6 +185,7 @@
         "dispatch:api.page_number_api"
       ],
       "run_attributes": {
+        "contract_preflight_outcome": "catalog_unavailable",
         "source_id": "C",
         "source_type": "api",
         "strategy": "api",

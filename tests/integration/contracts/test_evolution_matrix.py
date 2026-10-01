@@ -301,32 +301,6 @@ def test_the_matrix_covers_every_difference_for_every_strategy(tmp_path):
             assert decision.render() == cell.expected_render, cell.id
 
 
-def test_a_legacy_zero_contract_cannot_authorise_a_breaking_replace(spark, tmp_path):
-    """Against an unstamped table a ``0.0.0`` contract is major 0 on both sides (D-8)."""
-    from tests.support.evolution_harness import EvolutionCell, run_cell
-
-    if not (PROJECT_ROOT / "src" / "janus" / "models" / "data_contracts" / "legacy.py").exists():
-        pytest.skip("legacy contracts were retired; the rule is pinned on the host")
-
-    result = run_cell(
-        spark,
-        tmp_path,
-        EvolutionCell(
-            id="legacy_zero-additive-replace_table",
-            live_contract=HOSTILE / "base.yaml",
-            next_contract=HOSTILE / "base_dropped.yaml",
-            compatibility="additive",
-            strategy="replace_table",
-            next_version="0.0.0",
-            stamp_live_table=False,
-            expected_outcome="refused",
-            expected_ddl=(),
-        ),
-    )
-
-    assert type(result.error).__name__ == "SchemaEvolutionRefusedError"
-
-
 def test_an_unstamped_table_admits_one_declared_breaking_refresh_then_refuses(spark, tmp_path):
     from tests.support.evolution_harness import EvolutionCell, run_cell
 

@@ -659,8 +659,9 @@ def test_the_postgres_credentials_are_the_same_on_both_sides(tmp_path):
 # ── containment: no second-engine dependency enters `src/janus` ──────────────
 
 FORBIDDEN_RUNTIME_IMPORTS = ("pyarrow", "pyiceberg", "sqlalchemy", "duckdb")
-ORDER_15_RUNTIME_IMPORTS = {
+ALLOWED_SESSION_FREE_IMPORTS = {
     "observability/iceberg_sink.py": frozenset({"pyarrow", "pyiceberg"}),
+    "runtime/contract_preflight.py": frozenset({"pyiceberg"}),
 }
 JANUS_PACKAGE = Path(janus.__file__).parent
 
@@ -683,8 +684,8 @@ def _source_modules() -> list[Path]:
     return sorted(JANUS_PACKAGE.rglob("*.py"))
 
 
-def test_only_sink_imports_a_second_engine():
-    """overrules the old prohibition only for its runtime append sink."""
+def test_only_session_free_catalog_adapters_import_a_second_engine():
+    """Allow lazy second-engine imports only in the sink and execution preflight."""
 
     offenders = {
         str(module.relative_to(JANUS_PACKAGE)): sorted(unexpected)
@@ -695,22 +696,22 @@ def test_only_sink_imports_a_second_engine():
         )
         and (
             unexpected := imported
-            - ORDER_15_RUNTIME_IMPORTS.get(
+            - ALLOWED_SESSION_FREE_IMPORTS.get(
                 str(module.relative_to(JANUS_PACKAGE)), frozenset()
             )
         )
     }
 
     assert not offenders, (
-        "only append sink may import the promoted second engine: "
+        "only session-free catalog adapters may import a second engine: "
         f"{offenders}"
     )
 
 
-def test_order_15_engine_import_is_present_and_lazy():
+def test_session_free_engine_imports_are_present_and_lazy():
     """The allowance stays exact and cannot acquire an import-time engine side effect."""
 
-    for relative_path, allowed_imports in ORDER_15_RUNTIME_IMPORTS.items():
+    for relative_path, allowed_imports in ALLOWED_SESSION_FREE_IMPORTS.items():
         source = (JANUS_PACKAGE / relative_path).read_text(encoding="utf-8")
         tree = ast.parse(source)
         imported = _imported_root_modules(source) & set(FORBIDDEN_RUNTIME_IMPORTS)

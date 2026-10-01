@@ -16,8 +16,6 @@ from janus.models.source_config import SchemaConfig, SourceConfigValidationError
 from janus.registry import load_registry
 from tests.support.contracts import DECLARED_CONTRACT_PATH, write_minimal_contract
 
-pytestmark = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
-
 CONFIG_PATH = Path("conf/sources/example/contract_only.yaml")
 LEGACY_SCHEMA = "conf/schemas/example/source_schema.json"
 SCHEMA_REPLACEMENT = ("schema.contract", "janus contract draft")
@@ -133,6 +131,7 @@ def test_every_retired_key_is_reported_in_one_error():
     assert {"schema.mode", "quality.allow_schema_evolution"} <= set(issues)
 
 
+@pytest.mark.xfail(strict=True, reason="TASK-15 moves incremental keys to the contract")
 def test_incremental_no_longer_needs_unique_fields_to_parse():
     """The order-07 key rule moved to the loader, where the contract's primaryKey is known."""
     payload = _payload({"contract": DECLARED_CONTRACT_PATH})
@@ -218,6 +217,13 @@ def test_an_enabled_draft_contract_is_refused_even_by_a_policy_that_relaxes_ever
     ]
     assert len(contract_issues) == 1
     _assert_names(contract_issues[0].message, "'active'", "'draft'")
+    assert policy.calls == [
+        "allowed_source_types",
+        "allowed_strategies",
+        "allowed_federation_levels",
+        "validate_strategy_pairing",
+        "validate_public_access",
+    ]
     assert isinstance(policy, ValidationPolicy)
 
 

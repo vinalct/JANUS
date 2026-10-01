@@ -90,7 +90,6 @@ sources:
         - mesExtrato
         - dataTransacao
         - valorTransacao
-      allow_schema_evolution: true
 
 
   - source_id: transparencia__gastos_cartoes__cartoes__incremental
@@ -186,4 +185,3 @@ sources:
         - valorTransacao
       unique_fields:
         - id
-      allow_schema_evolution: true

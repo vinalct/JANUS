@@ -6,11 +6,9 @@ written result — and none of them depends on how the data was fetched.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 from janus.models.config.coercion import (
-    _optional_bool,
     _optional_int,
     _optional_string,
     _optional_string_list,
@@ -20,10 +18,9 @@ from janus.models.config.coercion import (
     _require_string,
 )
 from janus.models.config.constants import (
-    DEPRECATED_SCHEMA_MODES,
-    SCHEMA_DECLARATION_DEPRECATION_MESSAGE,
+    RETIRED_QUALITY_KEYS,
+    RETIRED_SCHEMA_KEYS,
     SUPPORTED_DATA_FORMATS,
-    SUPPORTED_SCHEMA_MODES,
     SUPPORTED_WRITE_MODES,
 )
 from janus.models.config.issues import ValidationIssue
@@ -36,71 +33,21 @@ from janus.models.config.types import (
 )
 
 
-def _build_schema_config(
-    raw_value: Any,
-    issues: list[ValidationIssue],
-    *,
-    deprecations: list[ValidationIssue],
-) -> SchemaConfig:
-    """Validate the schema block: one data contract, or the legacy file it replaces."""
+def _build_schema_config(raw_value: Any, issues: list[ValidationIssue]) -> SchemaConfig:
+    """Require one declared contract and reject the retired schema keys."""
     data = _require_mapping(raw_value, "schema", issues)
-    contract = _optional_string(data, "contract", issues, "schema")
-    if contract is not None:
-        return _build_contract_schema_config(data, contract, issues)
-    return _build_legacy_schema_config(data, issues, deprecations)
-
-
-def _build_contract_schema_config(
-    data: Mapping[str, Any], contract: str, issues: list[ValidationIssue]
-) -> SchemaConfig:
-    declared_mode = data.get("mode")
-    if declared_mode is not None and declared_mode != "contract":
-        issues.append(
-            ValidationIssue(
-                "schema.mode",
-                "must be 'contract' or omitted when schema.contract is set",
+    for key in sorted(RETIRED_SCHEMA_KEYS):
+        if key in data:
+            issues.append(
+                ValidationIssue(
+                    f"schema.{key}",
+                    "is no longer supported: declare schema.contract: "
+                    "conf/contracts/<domain>/<table>.yaml — draft one with "
+                    "`janus contract draft --source-id <id>` (see docs/data-contracts.md)",
+                )
             )
-        )
-    if data.get("path") is not None:
-        issues.append(
-            ValidationIssue(
-                "schema.path",
-                "must not be set together with schema.contract",
-            )
-        )
-
-    return SchemaConfig(mode="contract", contract=contract or None)
-
-
-def _build_legacy_schema_config(
-    data: Mapping[str, Any],
-    issues: list[ValidationIssue],
-    deprecations: list[ValidationIssue],
-) -> SchemaConfig:
-
-    mode = _require_enum(data, "mode", SUPPORTED_SCHEMA_MODES, issues, "schema")
-    path = _optional_string(data, "path", issues, "schema")
-
-    if mode == "explicit" and not path:
-        issues.append(
-            ValidationIssue(
-                "schema.path",
-                "is required when schema.mode is 'explicit'",
-            )
-        )
-    if mode == "contract":
-        issues.append(
-            ValidationIssue(
-                "schema.contract",
-                "is required when schema.mode is 'contract'",
-            )
-        )
-    elif mode in DEPRECATED_SCHEMA_MODES:
-        deprecations.append(
-            ValidationIssue("schema", SCHEMA_DECLARATION_DEPRECATION_MESSAGE)
-        )
-
-    return SchemaConfig(mode=mode, path=path)
+    contract = _require_string(data, "contract", issues, "schema")
+    return SchemaConfig(contract=contract)
 
 
 def _build_spark_config(raw_value: Any, issues: list[ValidationIssue]) -> SparkConfig:
@@ -227,12 +174,18 @@ def _build_quality_config(raw_value: Any, issues: list[ValidationIssue]) -> Qual
     data = _require_mapping(raw_value, "quality", issues)
     required_fields = tuple(_optional_string_list(data, "required_fields", issues, "quality"))
     unique_fields = tuple(_optional_string_list(data, "unique_fields", issues, "quality"))
-    allow_schema_evolution = _optional_bool(
-        data, "allow_schema_evolution", issues, "quality", default=False
-    )
+    for key in sorted(RETIRED_QUALITY_KEYS):
+        if key in data:
+            issues.append(
+                ValidationIssue(
+                    f"quality.{key}",
+                    "is no longer supported: schema evolution is governed by "
+                    "the contract's customProperties janus.compatibility "
+                    "(additive | backward | frozen)",
+                )
+            )
 
     return QualityConfig(
         required_fields=required_fields,
         unique_fields=unique_fields,
-        allow_schema_evolution=allow_schema_evolution,
     )

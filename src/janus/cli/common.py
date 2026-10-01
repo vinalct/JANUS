@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import argparse
 import os
-from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-
-from janus.models.source_config import SourceConfig
-from janus.utils.logging import StructuredLogger
 
 
 def default_project_root() -> Path:
@@ -62,18 +58,3 @@ def format_runtime_permission_error(exc: PermissionError) -> str:
             "JANUS_SPARK_IVY_DIR to select a writable location."
         )
     return message
-
-
-def log_source_config_deprecations(
-    logger: StructuredLogger, sources: Iterable[SourceConfig]
-) -> None:
-    """Report every deprecated declaration a command planned against."""
-    for source in sources:
-        for issue in source.deprecations:
-            logger.warning(
-                "source_config_deprecated",
-                source_id=source.source_id,
-                config_path=str(source.config_path),
-                field=issue.path,
-                detail=issue.message,
-            )

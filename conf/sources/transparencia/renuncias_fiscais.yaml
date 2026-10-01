@@ -75,7 +75,6 @@ sources:
         - qntPessoas
         - qntVinculos
         - codOrgaoExercicioSiape
-      allow_schema_evolution: true
 
   - source_id: transparencia__renuncias_fiscais__empresas_imunes_isentas__full_refresh
     name: Portal da Transparencia - Renuncias Fiscais - Empresas Imunes e Isentas
@@ -155,7 +154,6 @@ sources:
         - qntPessoas
         - qntVinculos
         - codOrgaoExercicioSiape
-      allow_schema_evolution: true
 
   - source_id: transparencia__renuncias_fiscais__empresas_habilitadas__full_refresh
     name: Portal da Transparencia - Renuncias Fiscais - Empresas Habilitadas a Beneficios Fiscais
@@ -235,4 +233,3 @@ sources:
         - qntPessoas
         - qntVinculos
         - codOrgaoExercicioSiape
-      allow_schema_evolution: true

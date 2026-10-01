@@ -175,7 +175,7 @@ def validate_schema_contract_mode(
             "config",
             "schema_contract_mode",
             "No data contract is declared; bronze is materialized only under one.",
-            details={"schema_mode": plan.source_config.schema.mode},
+            details={"schema_contract": plan.source_config.schema.contract},
         )
 
     return ValidationCheck.passed(

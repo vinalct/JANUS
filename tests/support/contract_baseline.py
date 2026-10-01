@@ -29,7 +29,7 @@ import yaml
 from janus.checkpoints import CheckpointStore
 from janus.planner import HookCatalog, Planner, PlanningRequest, StrategyBinding, StrategyCatalog
 from janus.runtime import SourceExecutor, SparkSessionProvider
-from janus.schema_contracts import resolve_schema_path_for_plan, resolve_spark_schema_for_plan
+from janus.schema_contracts import resolve_contract_path_for_plan, resolve_spark_schema_for_plan
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.strategies.catalog import CatalogStrategy
 from janus.strategies.files import FileStrategy
@@ -515,20 +515,8 @@ def _strategy_for(case: BronzeCase, project_root: Path, case_root: Path):
 
 
 def _declared_schema_path(plan: Any, project_root: Path) -> Path | None:
-    legacy_path = resolve_schema_path_for_plan(plan)
-    if legacy_path is not None:
-        return legacy_path
-
-    configured = getattr(plan.source_config.schema, "contract", None)
-    if not configured:
-        return None
-    candidate = Path(configured)
-    if candidate.is_absolute():
-        return candidate
-    project_candidate = project_root / candidate
-    if project_candidate.exists():
-        return project_candidate
-    return plan.source_config.config_path.parent / candidate
+    del project_root
+    return resolve_contract_path_for_plan(plan)
 
 
 def _data_columns_struct_type(table_schema: Any) -> dict[str, Any]:

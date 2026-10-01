@@ -286,7 +286,6 @@ def _source_config(
         "quality": {
             "required_fields": ["event_id", "event_date"],
             "unique_fields": unique,
-            "allow_schema_evolution": True,
         },
     }
     write_minimal_contract(tmp_path)

@@ -15,10 +15,6 @@ from janus.models.source_config import SourceConfig, SourceConfigValidationError
 CONFIG_PATH = Path("conf/sources/example/policy_injection.yaml")
 
 PUBLIC_SOURCES_ALLOWED = replace(DEFAULT_VALIDATION_POLICY, require_public_access=False)
-ACTIVE_CONTRACTS_ALLOWED = replace(
-    DEFAULT_VALIDATION_POLICY, require_active_contract=False
-)
-
 SPLIT_FAMILIES_ALLOWED = replace(
     DEFAULT_VALIDATION_POLICY, require_strategy_matches_source_type=False
 )
@@ -84,7 +80,7 @@ def _base_mapping(**overrides: Any) -> dict[str, Any]:
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
         "spark": {"input_format": "json", "write_mode": "append"},
         "outputs": {
             "raw": {"path": "data/raw/example/policy_injection_source", "format": "json"},
@@ -97,7 +93,7 @@ def _base_mapping(**overrides: Any) -> dict[str, Any]:
                 "format": "json",
             },
         },
-        "quality": {"allow_schema_evolution": True},
+        "quality": {},
     }
     mapping.update(overrides)
     return mapping
@@ -147,36 +143,6 @@ def test_broadened_federation_policy_accepts_a_state_source():
     assert config.federation_level == "state"
 
 
-@pytest.mark.parametrize(
-    ("mapping", "expected_path"),
-    [
-        (_base_mapping(source_type="graphql"), "source_type"),
-        (_base_mapping(strategy="catalog"), "strategy"),
-        (_base_mapping(federation_level="state"), "federation_level"),
-        (_base_mapping(public_access=False), "public_access"),
-    ],
-    ids=["source_type_set", "strategy_pairing", "federation_level_set", "public_access"],
-)
-def test_relaxing_contract_requirement_leaves_config_scope_rules_strict(
-    mapping: dict[str, Any], expected_path: str
-):
-    with pytest.raises(SourceConfigValidationError) as exc_info:
-        SourceConfig.from_mapping(mapping, CONFIG_PATH, policy=ACTIVE_CONTRACTS_ALLOWED)
-
-    assert expected_path in [issue.path for issue in exc_info.value.issues]
-
-
-def test_relaxing_public_access_leaves_active_contract_requirement_strict():
-    issues: list[ValidationIssue] = []
-
-    PUBLIC_SOURCES_ALLOWED.validate_schema_declaration(
-        enabled=True, contract_status="draft", issues=issues
-    )
-
-    assert [issue.path for issue in issues] == ["schema.contract"]
-    assert issues[0].message.endswith("(found 'draft')")
-
-
 def test_a_hand_written_policy_object_works():
     """The seam is a protocol, not a base class — proven by not inheriting from one.
 
@@ -200,12 +166,6 @@ def test_a_hand_written_policy_object_works():
 
         def validate_public_access(
             self, public_access: bool, issues: list[ValidationIssue]
-        ) -> None:
-            return None
-
-        def validate_schema_declaration(
-            self, *, enabled: bool, contract_status: str | None,
-            issues: list[ValidationIssue],
         ) -> None:
             return None
 
@@ -264,7 +224,7 @@ def test_relaxing_one_rule_leaves_the_others_strict():
                         "backoff_seconds": 1,
                     },
                 },
-                "quality": {"allow_schema_evolution": True},
+                "quality": {},
             },
             "quality.unique_fields",
         ),

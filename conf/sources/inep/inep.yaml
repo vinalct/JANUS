@@ -73,4 +73,3 @@ quality:
     - NU_ANO_CENSO
     - CO_ENTIDADE
     - TP_DEPENDENCIA
-  allow_schema_evolution: true

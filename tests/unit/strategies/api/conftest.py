@@ -267,7 +267,7 @@ def build_concurrent_source_config(
             "backoff_seconds": retry_backoff_seconds,
         },
     }
-    quality: dict[str, Any] = {"allow_schema_evolution": True}
+    quality: dict[str, Any] = {}
     if checkpoint_field is not None:
         extraction["mode"] = "incremental"
         extraction["checkpoint_field"] = checkpoint_field
@@ -308,7 +308,7 @@ def build_concurrent_source_config(
                 },
             },
             "extraction": extraction,
-            "schema": {"mode": "infer"},
+            "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
             "spark": {
                 "input_format": "json",
                 "write_mode": "append",

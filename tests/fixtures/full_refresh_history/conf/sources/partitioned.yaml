@@ -59,4 +59,3 @@ outputs:
 quality:
   required_fields:
     - id
-  allow_schema_evolution: true

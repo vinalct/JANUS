@@ -179,7 +179,7 @@ def _execute_case(
         schema_version=contract.schema_version if contract is not None else None,
         contract_id=contract.id if contract is not None else None,
         contract_version=(
-            None if contract is None or contract.id.startswith("legacy:") else contract.version
+            None if contract is None else contract.version
         ),
     )
 

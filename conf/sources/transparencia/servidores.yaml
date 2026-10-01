@@ -75,7 +75,6 @@ sources:
         - qntPessoas
         - qntVinculos
         - codOrgaoExercicioSiape
-      allow_schema_evolution: true
 
   - source_id: transparencia__poder_executivo_federal__servidores__full_refresh
     name: Portal da Transparencia - Servidores do Poder Executivo Federal
@@ -151,4 +150,3 @@ sources:
         - qntPessoas
         - qntVinculos
         - codOrgaoExercicioSiape
-      allow_schema_evolution: true

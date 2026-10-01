@@ -75,7 +75,6 @@ sources:
         - qntPessoas
         - qntVinculos
         - codOrgaoExercicioSiape
-      allow_schema_evolution: true
 
   - source_id: transparencia__orgaos__siafi__full_refresh
     name: Portal da Transparencia - Órgãos do SIAFI
@@ -156,4 +155,3 @@ sources:
         - qntPessoas
         - qntVinculos
         - codOrgaoExercicioSiape
-      allow_schema_evolution: true

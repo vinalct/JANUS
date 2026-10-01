@@ -150,7 +150,7 @@ def _build_source_config(
                 "dead_letter_max_items": dead_letter_max_items,
                 "retry": {"max_attempts": 1, "backoff_strategy": "fixed", "backoff_seconds": 1},
             },
-            "schema": {"mode": "infer"},
+            "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
             "spark": {"input_format": "csv", "write_mode": "append"},
             "outputs": {
                 "raw": {"path": f"data/raw/example/{source_id}", "format": "binary"},
@@ -158,7 +158,6 @@ def _build_source_config(
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
             "quality": {
-                "allow_schema_evolution": True,
                 **({"unique_fields": ["id"]} if extraction_mode == "incremental" else {}),
             },
         },

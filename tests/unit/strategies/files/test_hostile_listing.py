@@ -132,14 +132,14 @@ def _file_source_config(
                 "checkpoint_strategy": "none",
                 "retry": {"max_attempts": 1, "backoff_strategy": "fixed", "backoff_seconds": 1},
             },
-            "schema": {"mode": "infer"},
+            "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
             "spark": {"input_format": "csv", "write_mode": "append"},
             "outputs": {
                 "raw": {"path": f"data/raw/example/{source_id}", "format": "binary"},
                 "bronze": {"path": f"data/bronze/example/{source_id}", "format": "iceberg"},
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
-            "quality": {"allow_schema_evolution": True},
+            "quality": {},
         },
         tmp_path / "conf" / "sources" / f"{source_id}.yaml",
     )

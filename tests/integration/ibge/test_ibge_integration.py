@@ -434,9 +434,7 @@ def _assert_generic_sidra_source_contract(
     assert source_config.extraction.checkpoint_strategy == "max_value"
     table_name = expected_bronze_path.rsplit("/", 1)[-1]
     expected_contract_path = f"conf/contracts/estatisticas/{table_name}.yaml"
-    assert source_config.schema.mode == "contract"
     assert source_config.schema.contract == expected_contract_path
-    assert source_config.schema.path is None
 
     planned_run = _planned_run_for(expected_source_id)
     contract = planned_run.plan.data_contract
@@ -686,8 +684,10 @@ def _cloned_source_config(tmp_path: Path, source_id: str, config_file_name: str)
             for entry in config_payload["sources"]
             if entry.get("source_id") == source_id
         )
-    # These direct strategy tests retain coverage for the deprecated inference declaration.
-    config_payload["schema"] = {"mode": "infer"}
+    declared = Path(config_payload["schema"]["contract"])
+    copied_contract = tmp_path / declared
+    copied_contract.parent.mkdir(parents=True, exist_ok=True)
+    copied_contract.write_bytes((PROJECT_ROOT / declared).read_bytes())
     copied_config_path.write_text(
         yaml.safe_dump(config_payload, sort_keys=False),
         encoding="utf-8",
@@ -697,11 +697,8 @@ def _cloned_source_config(tmp_path: Path, source_id: str, config_file_name: str)
         encoding="utf-8",
     )
 
-    with pytest.warns(DeprecationWarning, match="schema.contract") as warnings:
-        source_config = load_registry(tmp_path).get_source(source_id, include_disabled=True)
-    assert len(warnings) == 1
-    assert source_config.schema.mode == "infer"
-    assert source_config.deprecations[0].path == "schema"
+    source_config = load_registry(tmp_path).get_source(source_id, include_disabled=True)
+    assert source_config.schema.contract == declared.as_posix()
 
     return replace(
         source_config,

@@ -9,7 +9,7 @@
   "checkpoint_field": "updated_at",
   "checkpoint_strategy": "max_value",
   "checkpoint_value": "2026-07-02",
-  "config_version": "e46fb279ec123912cdc831f95a98aee24cb7a65bb8c69e6073bb590ddbd26a9f",
+  "config_version": "7735fa536e71cc3213051b5253109187f17ed7218b5156a4147679e408bb0205",
   "configured_outputs": [
     {
       "format": "json",
@@ -105,6 +105,7 @@
   ],
   "records_extracted": 2,
   "run_attributes": {
+    "contract_preflight_outcome": "catalog_unavailable",
     "source_id": "baseline_api",
     "source_type": "api",
     "strategy": "api",

@@ -55,10 +55,8 @@ from janus.models.config.constants import (
     CONCURRENT_PAGINATION_TYPES,
     DEFAULT_PAST_END_STATUS_CODES,
     DEFAULT_RETRYABLE_STATUS_CODES,
-    DEPRECATED_SCHEMA_MODES,
     REQUEST_INPUT_BINDING_PREFIX,
     RETRYABLE_CLIENT_STATUS_CODES,
-    SCHEMA_DECLARATION_DEPRECATION_MESSAGE,
     SUPPORTED_AUTH_TYPES,
     SUPPORTED_BACKOFF_STRATEGIES,
     SUPPORTED_CHECKPOINT_STRATEGIES,
@@ -71,7 +69,6 @@ from janus.models.config.constants import (
     SUPPORTED_PARAMETER_BINDING_WINDOW_SOURCES,
     SUPPORTED_REQUEST_INPUT_STEPS,
     SUPPORTED_REQUEST_INPUT_TYPES,
-    SUPPORTED_SCHEMA_MODES,
     SUPPORTED_SOURCE_TYPES,
     SUPPORTED_STRATEGIES,
     SUPPORTED_STRATEGY_VARIANTS,
@@ -133,10 +130,8 @@ __all__ = [
     "DEFAULT_PAST_END_STATUS_CODES",
     "DEFAULT_RETRYABLE_STATUS_CODES",
     "DEFAULT_VALIDATION_POLICY",
-    "DEPRECATED_SCHEMA_MODES",
     "REQUEST_INPUT_BINDING_PREFIX",
     "RETRYABLE_CLIENT_STATUS_CODES",
-    "SCHEMA_DECLARATION_DEPRECATION_MESSAGE",
     "STRATEGY_REGISTRY",
     "SUPPORTED_AUTH_TYPES",
     "SUPPORTED_BACKOFF_STRATEGIES",
@@ -150,7 +145,6 @@ __all__ = [
     "SUPPORTED_PARAMETER_BINDING_WINDOW_SOURCES",
     "SUPPORTED_REQUEST_INPUT_STEPS",
     "SUPPORTED_REQUEST_INPUT_TYPES",
-    "SUPPORTED_SCHEMA_MODES",
     "SUPPORTED_SOURCE_TYPES",
     "SUPPORTED_STRATEGIES",
     "SUPPORTED_STRATEGY_VARIANTS",
@@ -242,7 +236,6 @@ class SourceConfig:
     description: str | None = None
     source_hook: str | None = None
     tags: tuple[str, ...] = ()
-    deprecations: tuple[ValidationIssue, ...] = ()
 
     @classmethod
     def from_mapping(
@@ -264,13 +257,8 @@ class SourceConfig:
 
         Policy methods append to ``issues`` and never raise: the single raise site below
         is what makes a config with five problems report five.
-
-        ``deprecations`` is the second collector. A deprecated declaration still loads,
-        so it can never reach the raise site; it travels on the returned config and the
-        loader turns it into a warning.
         """
         issues: list[ValidationIssue] = []
-        deprecations: list[ValidationIssue] = []
 
         source_id = _require_string(data, "source_id", issues)
         name = _require_string(data, "name", issues)
@@ -302,9 +290,7 @@ class SourceConfig:
 
         access = _build_access_config(data.get("access"), source_type, issues)
         extraction = _build_extraction_config(data.get("extraction"), issues)
-        schema = _build_schema_config(
-            data.get("schema"), issues, deprecations=deprecations
-        )
+        schema = _build_schema_config(data.get("schema"), issues)
         spark = _build_spark_config(data.get("spark"), issues)
         outputs = _build_outputs_config(data.get("outputs"), issues)
         quality = _build_quality_config(data.get("quality"), issues)
@@ -337,5 +323,4 @@ class SourceConfig:
             spark=spark,
             outputs=outputs,
             quality=quality,
-            deprecations=tuple(deprecations),
         )

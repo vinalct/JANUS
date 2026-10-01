@@ -56,7 +56,7 @@ def _base_payload() -> dict[str, Any]:
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
         "spark": {
             "input_format": "json",
             "write_mode": "append",
@@ -70,7 +70,6 @@ def _base_payload() -> dict[str, Any]:
         },
         "quality": {
             "required_fields": ["event_id", "event_date"],
-            "allow_schema_evolution": True,
         },
     }
 

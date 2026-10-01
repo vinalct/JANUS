@@ -34,6 +34,7 @@
     "dispatch:api.page_number_api"
   ],
   "run_attributes": {
+    "contract_preflight_outcome": "catalog_unavailable",
     "source_id": "baseline_api",
     "source_type": "api",
     "strategy": "api",

@@ -546,13 +546,13 @@ def observations(out_dir: Path) -> dict[str, Any]:
     factory = iceberg_session_factory(root / "warehouse", "janus-m0-observations")
     page = [[{"id": "o1", "amount": 1}]]
     results: dict[str, Any] = {}
-    for flag in (False, True):
+    for compatibility in ("additive", "frozen"):
         case = EnforcementCase.for_source(
-            f"m0_o1_evolution_{str(flag).lower()}", ID_AMOUNT, allow_schema_evolution=flag
+            f"m0_o1_evolution_{compatibility}", ID_AMOUNT, compatibility=compatibility
         )
         executed = _run(case, root / case.source_id, factory, page, run_id=f"{case.source_id}-1")
         check = validation_checks(executed).get("data.schema_expectations")
-        results[f"allow_schema_evolution_{str(flag).lower()}"] = {
+        results[f"compatibility_{compatibility}"] = {
             "run": _summary(executed),
             "schema_expectations": _check_summary(check),
         }

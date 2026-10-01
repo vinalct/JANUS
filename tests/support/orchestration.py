@@ -116,7 +116,7 @@ def source_payload(spec: SourceSpec) -> dict[str, Any]:
             }
             for zone in ("raw", "bronze", "metadata")
         },
-        "quality": {"allow_schema_evolution": True},
+        "quality": {},
     }
 
 

@@ -79,7 +79,6 @@ sources:
         - entity_key
         - catalog_request_url
         - catalog_raw_artifact_path
-      allow_schema_evolution: true
 
   - source_id: dados_abertos_catalog__conjunto_dados_details__full_refresh
     name: Portal Brasileiro de Dados Abertos - Catalogo de conjuntos de dados
@@ -173,4 +172,3 @@ sources:
         - entity_key
         - catalog_request_url
         - catalog_raw_artifact_path
-      allow_schema_evolution: true

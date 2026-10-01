@@ -369,7 +369,7 @@ def _source_config(tmp_path: Path, *, unique_fields: list[str] | None = None) ->
 
 
 def _source_config_payload(*, unique_fields: list[str] | None = None) -> dict[str, Any]:
-    quality: dict[str, Any] = {"allow_schema_evolution": True}
+    quality: dict[str, Any] = {}
     if unique_fields:
         quality["unique_fields"] = unique_fields
 

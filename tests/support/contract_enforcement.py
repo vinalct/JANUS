@@ -89,7 +89,6 @@ class EnforcementCase:
     namespace: str = DEFAULT_NAMESPACE
     table_name: str | None = None
     checkpoint_field: str | None = None
-    allow_schema_evolution: bool = True
     read_options: tuple[tuple[str, str], ...] = ()
     custom_properties: tuple[tuple[str, str], ...] = ()
 
@@ -199,7 +198,7 @@ def render_source_config(case: EnforcementCase) -> dict[str, Any]:
         extraction["checkpoint_field"] = case.checkpoint_field
         extraction["checkpoint_strategy"] = "max_value"
 
-    quality: dict[str, Any] = {"allow_schema_evolution": case.allow_schema_evolution}
+    quality: dict[str, Any] = {}
     if case.required_fields:
         quality["required_fields"] = list(case.required_fields)
     if case.unique_fields:

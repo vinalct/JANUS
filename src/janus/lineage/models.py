@@ -539,7 +539,7 @@ def _contract_identity(plan: ExecutionPlan) -> dict[str, Any]:
     return {
         "schema_version": contract.schema_version,
         "contract_id": contract.id,
-        "contract_version": None if contract.id.startswith("legacy:") else contract.version,
+        "contract_version": contract.version,
     }
 
 

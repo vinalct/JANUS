@@ -97,7 +97,6 @@ def _planned_run_double() -> SimpleNamespace:
             source_config=SimpleNamespace(
                 source_id="stub_source",
                 config_path=Path("conf/sources/stub.yaml"),
-                deprecations=(),
             )
         ),
     )

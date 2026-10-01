@@ -371,7 +371,6 @@ def test_all_failure_forms_block_descendants_while_independent_source_commits(
         producer["quality"] = {
             "required_fields": ["janus_source_id"],
             "unique_fields": ["janus_source_id"],
-            "allow_schema_evolution": True,
         }
 
     def session_factory():

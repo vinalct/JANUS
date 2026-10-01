@@ -226,7 +226,6 @@ def source_payload(case: str) -> dict[str, Any]:
         "quality": {
             "required_fields": ["id"],
             "unique_fields": ["id"],
-            "allow_schema_evolution": True,
         },
     }
 

@@ -545,6 +545,8 @@ and business metadata. Co-writers of one bronze table reference the same file. T
 it once with the source snapshot, and JANUS generates the Spark read schema from it when the
 normalization handoff format matches `spark.input_format`. See [Data contracts](data-contracts.md)
 for the format, type vocabulary, drafting workflow and bronze naming rule.
+`schema.contract` is required for every source, including disabled sources. The retired
+`schema.mode` and `schema.path` keys fail validation with a drafting-CLI hint.
 
 
 ### `spark`
@@ -578,7 +580,8 @@ storage a full-refresh source occupies grows with each run.
 
 - `quality.required_fields` is an optional list of fields that must be present.
 - `quality.unique_fields` is an optional list of uniqueness hints.
-- `quality.allow_schema_evolution` is a boolean flag.
+- `quality.allow_schema_evolution` is retired. Declare evolution through
+  `janus.compatibility` in the contract's `customProperties` (`additive`, `backward`, or `frozen`).
 
 If you are unsure whether a field belongs in config, check the example source and the typed contract before inventing a new key.
 
@@ -588,7 +591,7 @@ Before touching Python, ask:
 
 - Can this source fit an existing family and variant?
 - Can the odd behavior be expressed through config already?
-- Are output paths, schema mode, and checkpoint rules declarative?
+- Are output paths, the contract path, and checkpoint rules declarative?
 - Is the only missing piece a runtime secret value that should come from the environment?
 
 If the answer is yes, stay in YAML.

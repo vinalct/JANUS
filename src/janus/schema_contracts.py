@@ -45,13 +45,6 @@ def _resolve_declared_path_for_plan(plan: ExecutionPlan, configured: str | None)
     )
 
 
-def resolve_schema_path_for_plan(plan: ExecutionPlan) -> Path | None:
-    """Return the legacy schema file configured for one plan, if any."""
-    if not plan.source_config.schema.declares_legacy_file:
-        return None
-    return _resolve_declared_path_for_plan(plan, plan.source_config.schema.path)
-
-
 def resolve_contract_path_for_plan(plan: ExecutionPlan) -> Path | None:
     """Return the data contract configured for one plan, if any."""
     return _resolve_declared_path_for_plan(plan, plan.source_config.schema.contract)
@@ -124,7 +117,6 @@ __all__ = [
     "frame_columns_from_spark_schema",
     "resolve_contract_path_for_plan",
     "resolve_declared_path",
-    "resolve_schema_path_for_plan",
     "resolve_spark_schema_for_plan",
     "spark_schema_from_contract",
 ]

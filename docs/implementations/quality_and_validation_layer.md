@@ -68,10 +68,10 @@ That last rule is deliberate. If JANUS is going to enforce uniqueness on a key, 
 
 This check validates whether the schema settings are coherent.
 
-It checks whether a declared contract loaded into the plan supplies expected fields. When
-`quality.allow_schema_evolution` is false, a declared schema is required. Contract loading
-errors are collected by the registry before the quality gate runs; legacy schema files still
-convert with a deprecation warning for this order.
+It reports the fields from the contract loaded into the plan. Every source must declare
+`schema.contract`; contract loading and active-status errors are collected by the registry
+before the quality gate runs. Schema evolution follows the contract's
+`janus.compatibility` declaration.
 
 ## Data checks
 

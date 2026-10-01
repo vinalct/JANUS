@@ -44,14 +44,8 @@ RETRYABLE_CLIENT_STATUS_CODES: frozenset[int] = frozenset(
     if CLIENT_ERROR_STATUS_MIN <= code < CLIENT_ERROR_STATUS_MAX_EXCLUSIVE
 )
 CONCURRENT_PAGINATION_TYPES: frozenset[str] = frozenset({"page_number", "offset"})
-SUPPORTED_SCHEMA_MODES = frozenset({"contract", "explicit", "infer"})
-
-DEPRECATED_SCHEMA_MODES = frozenset({"explicit", "infer"})
-SCHEMA_DECLARATION_DEPRECATION_MESSAGE = (
-    "`schema.mode`/`schema.path` are deprecated and will be removed; "
-    "declare `schema.contract: conf/contracts/<domain>/<table>.yaml` instead "
-    "(see docs/data-contracts.md)."
-)
+RETIRED_SCHEMA_KEYS = frozenset({"mode", "path"})
+RETIRED_QUALITY_KEYS = frozenset({"allow_schema_evolution"})
 SUPPORTED_DATA_FORMATS = frozenset(
     {"binary", "csv", "iceberg", "json", "jsonl", "parquet", "text"}
 )

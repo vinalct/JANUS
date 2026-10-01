@@ -274,5 +274,5 @@ def _source_config_payload() -> dict[str, Any]:
             "bronze": {"path": f"data/bronze/example/{SOURCE_ID}", "format": "iceberg"},
             "metadata": {"path": f"data/metadata/example/{SOURCE_ID}", "format": "json"},
         },
-        "quality": {"allow_schema_evolution": True},
+        "quality": {},
     }

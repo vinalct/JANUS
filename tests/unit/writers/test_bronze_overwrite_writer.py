@@ -485,7 +485,7 @@ def _source_config(
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
         "spark": {
             "input_format": "json",
             "write_mode": "overwrite",
@@ -508,7 +508,6 @@ def _source_config(
         "quality": {
             "required_fields": ["event_id"],
             "unique_fields": [],
-            "allow_schema_evolution": True,
         },
     }
     config_path = tmp_path / "conf" / "sources" / f"{source_id}.yaml"
