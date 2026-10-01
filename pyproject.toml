@@ -133,5 +133,5 @@ warn_redundant_casts = true
 no_implicit_optional = true
 
 [[tool.mypy.overrides]]
-module = ["dagster.*", "pyarrow.*", "pyiceberg.*", "pyspark.*", "yaml.*", "certifi.*"]
+module = ["dagster.*", "pyarrow.*", "pyiceberg.*", "pyspark.*", "sqlalchemy.*", "yaml.*", "certifi.*"]
 ignore_missing_imports = true
