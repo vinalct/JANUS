@@ -72,6 +72,14 @@ RUNS_TABLE_SCHEMA_V1 = (
     RunsTableColumn(41, "validation_report_path", IcebergType.STRING, True),
     RunsTableColumn(42, "record_schema_version", IcebergType.INTEGER, False),
 )
+RUNS_TABLE_SCHEMA_V2 = (
+    *RUNS_TABLE_SCHEMA_V1,
+    RunsTableColumn(44, "schema_version", IcebergType.STRING, True),
+    RunsTableColumn(45, "contract_id", IcebergType.STRING, True),
+    RunsTableColumn(46, "contract_version", IcebergType.STRING, True),
+)
+V2_COLUMNS = ("schema_version", "contract_id", "contract_version")
+V3_COLUMNS = ("contract_preflight_outcome", "schema_evolution", "malformed_rows")
 
 RUNS_TABLE_SKIP_REASON = (
     "AC1_REAL_CATALOG_SUITE_UNAVAILABLE: catalog engines or seeded jars are missing"
@@ -176,11 +184,34 @@ def test_two_calls_bootstrap_once_append_twice_and_spark_reads_both(
     assert [row["run_id"] for row in rows] == ["same-process-001", "same-process-002"]
 
 
-def test_v1_table_evolves_additively_and_appends_a_v2_row(
+def _v3_record(run_id: str) -> RunRecord:
+    """A v3 row whose contract identity and enforcement columns all carry a value."""
+    return replace(
+        _record(run_id),
+        schema_version="c" * 64,
+        contract_id="runs.sink_source",
+        contract_version="1.1.0",
+        contract_preflight_outcome="will_evolve",
+        schema_evolution="added:note",
+        malformed_rows=3,
+        quality_outcome="passed",
+        quality_checks_passed=2,
+        quality_checks_failed=0,
+        quality_checks_skipped=0,
+        quality_failed_checks=(),
+    )
+
+
+def _older_row(record: RunRecord, version: int, columns) -> dict[str, Any]:
+    """Project a record onto an older declaration, the way that writer would have."""
+    payload = replace(record, record_schema_version=version).to_dict()
+    return {column.name: payload[column.name] for column in columns}
+
+
+def test_v1_table_evolves_additively_and_appends_a_v3_row(
     catalog_target: CatalogTarget,
     shared_catalog_session,
 ):
-    """A v1 table retains its rows while the sink adds the nullable v2 contract columns."""
     if catalog_target.id != "sqlite":
         pytest.skip("the v1 evolution acceptance case uses the isolated SQLite catalog")
 
@@ -201,46 +232,119 @@ def test_v1_table_evolves_additively_and_appends_a_v2_row(
         partition_spec=iceberg_sink._declared_partition_spec(dependencies),
     )
 
-    old_record = replace(_record("v1-before-evolution"), record_schema_version=1)
-    old_payload = old_record.to_dict()
-    old_row = {column.name: old_payload[column.name] for column in RUNS_TABLE_SCHEMA_V1}
+    old_row = _older_row(_record("v1-before-evolution"), 1, RUNS_TABLE_SCHEMA_V1)
     table.append(pa.Table.from_pylist([old_row], schema=table.schema().as_arrow()))
 
-    result = append_run_record(_record("v2-after-evolution"), config, catalog_target.resolved_paths)
+    result = append_run_record(
+        _v3_record("v3-after-evolution"), config, catalog_target.resolved_paths
+    )
 
     assert result.outcome is IcebergAppendOutcome.EMITTED
     table = catalog.load_table(identifier)
     fields = table.schema().fields
-    assert len(fields) == 45
-    assert [field.field_id for field in fields[-3:]] == [44, 45, 46]
-    assert [field.name for field in fields[-3:]] == [
-        "schema_version",
-        "contract_id",
-        "contract_version",
-    ]
+    assert len(fields) == 48
+    assert [field.field_id for field in fields[-6:]] == [*range(44, 50)]
+    assert [field.name for field in fields[-6:]] == [*V2_COLUMNS, *V3_COLUMNS]
+    assert len(table.metadata.schemas) == 2, "all six columns land in one schema change"
 
     spark_identifier = f"janus.{identifier}"
     spark = shared_catalog_session.newSession()
     rows = spark.table(spark_identifier).orderBy("run_id").collect()
     assert [row["run_id"] for row in rows] == [
         "v1-before-evolution",
-        "v2-after-evolution",
+        "v3-after-evolution",
     ]
     old_row, new_row = rows
-    assert old_row["schema_version"] is None
-    assert old_row["contract_id"] is None
-    assert old_row["contract_version"] is None
+    assert {name: old_row[name] for name in (*V2_COLUMNS, *V3_COLUMNS)} == dict.fromkeys(
+        (*V2_COLUMNS, *V3_COLUMNS)
+    )
     assert old_row["record_schema_version"] == 1
-    assert new_row["schema_version"] is None
-    assert new_row["contract_id"] is None
-    assert new_row["contract_version"] is None
-    assert new_row["record_schema_version"] == 2
+    assert new_row["contract_version"] == "1.1.0"
+    assert new_row["contract_preflight_outcome"] == "will_evolve"
+    assert new_row["schema_evolution"] == "added:note"
+    assert new_row["malformed_rows"] == 3
+    assert new_row["record_schema_version"] == 3
 
     query_directory = PROJECT_ROOT / "docs" / "queries" / "observability"
     queries = sorted(query_directory.glob("*.sql"))
-    assert len(queries) == 6
+    assert len(queries) == 7
     for query in queries:
         spark.sql(query.read_text(encoding="utf-8")).collect()
+
+
+def test_v2_table_evolves_additively_and_appends_a_v3_row(
+    catalog_target: CatalogTarget,
+    shared_catalog_session,
+):
+    import pyarrow as pa
+
+    config, identifier = _isolated_config(catalog_target)
+    dependencies = iceberg_sink._load_engine_dependencies()
+    catalog = dependencies.load_catalog(
+        derive_pyiceberg_catalog_name(config),
+        **derive_pyiceberg_catalog_properties(config, catalog_target.resolved_paths),
+    )
+    catalog.create_namespace_if_not_exists("metadata")
+    creation = iceberg_sink._creation_columns(RUNS_TABLE_SCHEMA_V2)
+    table = catalog.create_table(
+        identifier,
+        schema=iceberg_sink._declared_schema(dependencies, creation),
+        partition_spec=iceberg_sink._declared_partition_spec(dependencies),
+    )
+    with table.update_schema() as update:
+        for column in RUNS_TABLE_SCHEMA_V2[len(creation) :]:
+            update.add_column(
+                column.name,
+                iceberg_sink._iceberg_column_type(column, dependencies),
+                required=column.required,
+            )
+    table = catalog.load_table(identifier)
+    assert [field.field_id for field in table.schema().fields] == [
+        column.field_id for column in RUNS_TABLE_SCHEMA_V2
+    ]
+
+    v2_row = _older_row(
+        replace(
+            _record("v2-before-evolution"),
+            schema_version="b" * 64,
+            contract_id="runs.sink_source",
+            contract_version="1.0.0",
+        ),
+        2,
+        RUNS_TABLE_SCHEMA_V2,
+    )
+    table.append(pa.Table.from_pylist([v2_row], schema=table.schema().as_arrow()))
+    schemas_before = len(catalog.load_table(identifier).metadata.schemas)
+
+    result = append_run_record(
+        _v3_record("v3-after-evolution"), config, catalog_target.resolved_paths
+    )
+
+    assert result.outcome is IcebergAppendOutcome.EMITTED
+    table = catalog.load_table(identifier)
+    fields = table.schema().fields
+    assert len(fields) == 48
+    assert [(field.field_id, field.name) for field in fields[-3:]] == [
+        (47, "contract_preflight_outcome"),
+        (48, "schema_evolution"),
+        (49, "malformed_rows"),
+    ]
+    assert [str(field.field_type) for field in fields[-3:]] == ["string", "string", "long"]
+    assert not any(field.required for field in fields[-3:])
+    assert len(table.metadata.schemas) == schemas_before + 1
+
+    rows = shared_catalog_session.newSession().table(identifier).orderBy("run_id").collect()
+    assert [row["run_id"] for row in rows] == ["v2-before-evolution", "v3-after-evolution"]
+    old_row, new_row = rows
+    assert {name: old_row[name] for name in V3_COLUMNS} == dict.fromkeys(V3_COLUMNS)
+    assert old_row["contract_version"] == "1.0.0"
+    assert old_row["record_schema_version"] == 2
+    assert {name: new_row[name] for name in V3_COLUMNS} == {
+        "contract_preflight_outcome": "will_evolve",
+        "schema_evolution": "added:note",
+        "malformed_rows": 3,
+    }
+    assert new_row["record_schema_version"] == 3
 
 
 def test_bootstrap_and_append_are_idempotent_across_processes(

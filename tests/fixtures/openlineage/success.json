@@ -113,6 +113,7 @@
           }
         ],
         "contract_id": "example.consumer",
+        "contract_preflight_outcome": null,
         "contract_version": "1.0.0",
         "declared_inputs": [
           {
@@ -132,6 +133,7 @@
         "extraction_mode": "incremental",
         "failure_reason": null,
         "failure_stage": null,
+        "malformed_rows": null,
         "materialized_outputs": [
           {
             "format": "json",
@@ -182,6 +184,7 @@
         "records_extracted": 2,
         "run_attributes": {},
         "run_id": "order15-success",
+        "schema_evolution": null,
         "schema_version": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         "source_config_path": "conf/sources/consumer.yaml",
         "source_hook": "janus.hooks.example",

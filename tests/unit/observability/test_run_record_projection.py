@@ -15,10 +15,13 @@ import janus.observability.records
 from janus.checkpoints import CheckpointWriteResult
 from janus.lineage import LineageRecord, RunMetadata, compute_config_version
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext, WriteResult
-from janus.observability import RunEvidencePaths, RunRecord
+from janus.observability import RunEvidencePaths, RunRecord, vocabulary
 from janus.observability.vocabulary import MAX_FAILURE_REASON_LENGTH, RUN_RECORD_SCHEMA_VERSION
 from janus.quality import ValidationCheck, ValidationReport
+from janus.quality.malformed_rows import malformed_rows_check
 from janus.registry import load_registry
+from janus.runtime.contract_preflight import PREFLIGHT_ATTRIBUTE, PREFLIGHT_OUTCOMES
+from janus.writers.evolution import PLAN_METADATA_KEY, EvolutionPlan
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_ID = "federal_open_data_example"
@@ -220,6 +223,9 @@ def _expected(plan: ExecutionPlan, tmp_path: Path, **overrides: object) -> dict[
         "checkpoint_history_path": str(base / "checkpoints" / "history" / "run.json"),
         "validation_report_path": str(base / "validations" / "run.json"),
         "record_schema_version": RUN_RECORD_SCHEMA_VERSION,
+        "contract_preflight_outcome": None,
+        "schema_evolution": None,
+        "malformed_rows": None,
     }
     expected.update(overrides)
     return expected
@@ -667,6 +673,23 @@ def test_a_status_disagreement_between_the_two_records_is_rejected(tmp_path):
         ({"failure_reason": "boom"}, "a failed run must carry a failure_reason"),
         ({"checkpoint_decision": None}, "checkpoint_advanced is present exactly when"),
         ({"quality_outcome": "not_run"}, "quality detail columns are NULL exactly when"),
+        (
+            {"contract_preflight_outcome": "probably_fine"},
+            "contract_preflight_outcome must be one of",
+        ),
+        ({"schema_evolution": "  "}, "schema_evolution must not be empty"),
+        ({"malformed_rows": -1}, "malformed_rows must not be negative"),
+        (
+            {
+                "quality_outcome": "not_run",
+                "quality_checks_passed": None,
+                "quality_checks_failed": None,
+                "quality_checks_skipped": None,
+                "quality_failed_checks": None,
+                "malformed_rows": 0,
+            },
+            "malformed_rows is NULL exactly when no malformed_rows check ran",
+        ),
     ],
 )
 def test_the_record_rejects_a_shape_that_cannot_be_read_back(overrides, message, tmp_path):
@@ -752,8 +775,6 @@ def test_the_projection_imports_no_runtime_or_transport_module():
 # what the contract decided, projected into three columns (FR-8, D-11, D-14)
 # --------------------------------------------------------------------------------------
 
-RED_TASK = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
-
 
 def _bronze_with(plan: ExecutionPlan, *evolutions: str) -> tuple[WriteResult, ...]:
     """Raw plus one bronze result per batch, each carrying the writer's evolution render."""
@@ -804,76 +825,109 @@ def _record(
     )
 
 
-class TestOrder19EnforcementProjection:
+def test_the_preflight_outcome_is_lifted_from_its_run_attribute(tmp_path):
+    lifted = _record(tmp_path, attributes={"contract_preflight_outcome": "will_evolve"})
+    absent = _record(tmp_path)
 
-    @RED_TASK
-    def test_the_preflight_outcome_is_lifted_from_its_run_attribute(self, tmp_path):
-        lifted = _record(tmp_path, attributes={"contract_preflight_outcome": "will_evolve"})
-        absent = _record(tmp_path)
+    assert lifted.contract_preflight_outcome == "will_evolve"
+    assert absent.contract_preflight_outcome is None
 
-        assert lifted.contract_preflight_outcome == "will_evolve"
-        assert absent.contract_preflight_outcome is None
 
-    @RED_TASK
-    def test_an_unknown_preflight_outcome_is_rejected(self, tmp_path):
-        with pytest.raises(ValueError, match="contract_preflight_outcome"):
-            _record(tmp_path, attributes={"contract_preflight_outcome": "probably_fine"})
+def test_an_unknown_preflight_outcome_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="contract_preflight_outcome"):
+        _record(tmp_path, attributes={"contract_preflight_outcome": "probably_fine"})
 
-    @RED_TASK
-    def test_schema_evolution_is_the_first_change_any_bronze_batch_made(self, tmp_path):
-        plan = _plan(tmp_path, run_id="projection")
 
-        changed = _record(tmp_path, write_results=_bronze_with(plan, "none", "added:note"))
-        unchanged = _record(tmp_path, write_results=_bronze_with(plan, "none", "none"))
-        no_bronze = _record(tmp_path, write_results=_write_results(plan, bronze=False))
-        pre_order = _record(tmp_path)
+def test_schema_evolution_is_the_first_change_any_bronze_batch_made(tmp_path):
+    plan = _plan(tmp_path, run_id="projection")
 
-        assert changed.schema_evolution == "added:note"
-        assert unchanged.schema_evolution == "none"
-        assert no_bronze.schema_evolution is None
-        assert pre_order.schema_evolution is None
+    changed = _record(tmp_path, write_results=_bronze_with(plan, "none", "added:note"))
+    unchanged = _record(tmp_path, write_results=_bronze_with(plan, "none", "none"))
+    no_bronze = _record(tmp_path, write_results=_write_results(plan, bronze=False))
+    pre_order = _record(tmp_path)
 
-    @RED_TASK
-    def test_malformed_rows_is_null_until_counted_and_the_sum_once_counted(self, tmp_path):
-        plan = _plan(tmp_path, run_id="projection")
+    assert changed.schema_evolution == "added:note"
+    assert unchanged.schema_evolution == "none"
+    assert no_bronze.schema_evolution is None
+    assert pre_order.schema_evolution is None
 
-        def malformed(outcome: str, count: str | None) -> ValidationCheck:
-            details = {} if count is None else {"count": count}
-            factory = getattr(ValidationCheck, outcome)
-            return factory("data", "malformed_rows", f"{outcome} malformed rows", details=details)
 
-        counted = _record(tmp_path, report=_malformed_report(plan, malformed("failed", "2")))
-        summed = _record(
-            tmp_path,
-            report=_malformed_report(plan, malformed("passed", "2"), malformed("passed", "3")),
-        )
-        clean = _record(tmp_path, report=_malformed_report(plan, malformed("passed", "0")))
-        parquet = _record(tmp_path, report=_malformed_report(plan, malformed("skipped", None)))
-        absent = _record(tmp_path, report=_malformed_report(plan))
-        not_validated = _record(tmp_path)
+def test_malformed_rows_is_null_until_counted_and_the_sum_once_counted(tmp_path):
+    plan = _plan(tmp_path, run_id="projection")
 
-        assert counted.malformed_rows == 2
-        assert summed.malformed_rows == 5
-        assert clean.malformed_rows == 0, "zero means counted and clean, not absent"
-        assert parquet.malformed_rows is None
-        assert absent.malformed_rows is None
-        assert not_validated.malformed_rows is None
+    def malformed(outcome: str, count: str | None) -> ValidationCheck:
+        details = {} if count is None else {"count": count}
+        factory = getattr(ValidationCheck, outcome)
+        return factory("data", "malformed_rows", f"{outcome} malformed rows", details=details)
 
-    @RED_TASK
-    def test_the_row_always_carries_the_three_columns(self, tmp_path):
-        payload = _record(tmp_path).to_dict()
+    counted = _record(tmp_path, report=_malformed_report(plan, malformed("failed", "2")))
+    summed = _record(
+        tmp_path,
+        report=_malformed_report(plan, malformed("passed", "2"), malformed("passed", "3")),
+    )
+    clean = _record(tmp_path, report=_malformed_report(plan, malformed("passed", "0")))
+    parquet = _record(tmp_path, report=_malformed_report(plan, malformed("skipped", None)))
+    absent = _record(tmp_path, report=_malformed_report(plan))
+    not_validated = _record(tmp_path)
 
-        assert {"contract_preflight_outcome", "schema_evolution", "malformed_rows"} <= set(payload)
-        assert payload["record_schema_version"] == 3
+    assert counted.malformed_rows == 2
+    assert summed.malformed_rows == 5
+    assert clean.malformed_rows == 0, "zero means counted and clean, not absent"
+    assert parquet.malformed_rows is None
+    assert absent.malformed_rows is None
+    assert not_validated.malformed_rows is None
 
-    @RED_TASK
-    def test_the_duplicated_vocabulary_cannot_drift_from_its_owners(self):
-        """Observability may not import runtime or writers, so the strings are spelled twice
-        and held together here — the sanctioned single-definition-with-drift-test shape."""
-        from janus.observability import vocabulary
-        from janus.runtime.contract_preflight import PREFLIGHT_ATTRIBUTE, PREFLIGHT_OUTCOMES
-        from janus.writers.evolution import PLAN_METADATA_KEY
 
-        assert vocabulary.PREFLIGHT_OUTCOMES == PREFLIGHT_OUTCOMES
-        assert vocabulary.PREFLIGHT_ATTRIBUTE_NAME == PREFLIGHT_ATTRIBUTE
-        assert vocabulary.SCHEMA_EVOLUTION_METADATA_KEY == PLAN_METADATA_KEY
+def test_the_row_always_carries_the_three_columns(tmp_path):
+    payload = _record(tmp_path).to_dict()
+
+    assert {"contract_preflight_outcome", "schema_evolution", "malformed_rows"} <= set(payload)
+    assert payload["record_schema_version"] == 3
+
+
+def test_the_duplicated_vocabulary_cannot_drift_from_its_owners():
+    """Observability may not import runtime or writers, so the strings are spelled twice
+    and held together here — the sanctioned single-definition-with-drift-test shape."""
+    assert vocabulary.PREFLIGHT_OUTCOMES == PREFLIGHT_OUTCOMES
+    assert vocabulary.PREFLIGHT_ATTRIBUTE_NAME == PREFLIGHT_ATTRIBUTE
+    assert vocabulary.SCHEMA_EVOLUTION_METADATA_KEY == PLAN_METADATA_KEY
+
+
+def test_the_unchanged_table_is_spelled_the_way_the_evolution_plan_renders_it():
+    noop = EvolutionPlan(
+        outcome="noop",
+        add_columns=(),
+        promote_columns=(),
+        refusals=(),
+        reason="contract and table agree",
+        recorded_major=1,
+        contract_major=1,
+    )
+
+    assert noop.render() == vocabulary.SCHEMA_EVOLUTION_NONE
+
+
+@pytest.mark.parametrize(
+    ("enforcement", "count"),
+    [("strict", 0), ("strict", 3), ("lenient", 4)],
+    ids=["strict-clean", "strict-refused", "lenient-warning"],
+)
+def test_the_projection_sums_the_check_the_quality_layer_renders(tmp_path, enforcement, count):
+    """The check is found by the phase, name and detail key ``quality.malformed_rows`` emits."""
+    plan = _plan(tmp_path, run_id="projection")
+    rendered = malformed_rows_check(count, enforcement=enforcement, threshold=0)
+
+    assert (rendered.phase, rendered.name) == (
+        vocabulary.MALFORMED_ROWS_CHECK_PHASE,
+        vocabulary.MALFORMED_ROWS_CHECK_NAME,
+    )
+    assert vocabulary.MALFORMED_ROWS_COUNT_DETAIL in rendered.details_as_dict()
+    assert _record(tmp_path, report=_malformed_report(plan, rendered)).malformed_rows == count
+
+
+def test_a_parquet_handoff_skip_rendered_by_the_quality_layer_projects_to_null(tmp_path):
+    plan = _plan(tmp_path, run_id="projection")
+    skipped = malformed_rows_check(None, enforcement="strict", threshold=0)
+
+    assert skipped.outcome == "skipped"
+    assert _record(tmp_path, report=_malformed_report(plan, skipped)).malformed_rows is None

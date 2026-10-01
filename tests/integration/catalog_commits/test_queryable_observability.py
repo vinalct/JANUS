@@ -224,7 +224,7 @@ def test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources(
         assert row["schema_version"] == item.schema_version
         assert row["contract_id"] == item.contract_id
         assert row["contract_version"] == item.contract_version
-        assert row["record_schema_version"] == 2
+        assert row["record_schema_version"] == 3
         assert row["source_config_path"] == str(item.config_path)
 
     by_case = {item.case: rows[item.run_id] for item in evidence}
@@ -252,6 +252,26 @@ def test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources(
         "empty_handoff": "passed",
         "replay": "passed",
     }
+
+    assert {case: row["contract_preflight_outcome"] for case, row in by_case.items()} == (
+        dict.fromkeys(cases, "catalog_unavailable")
+    )
+    assert {case: row["schema_evolution"] for case, row in by_case.items()} == {
+        "api_success": "none",
+        "catalog_success": "none",
+        "extraction_failure": None,
+        "quality_failure": "none",
+        "empty_handoff": None,
+        "replay": "none",
+    }
+    assert {case: row["malformed_rows"] for case, row in by_case.items()} == {
+        "api_success": 0,
+        "catalog_success": 0,
+        "extraction_failure": None,
+        "quality_failure": 0,
+        "empty_handoff": None,
+        "replay": 0,
+    }
     assert by_case["quality_failure"]["quality_checks_failed"] > 0
     assert by_case["quality_failure"]["quality_failed_checks"]
     assert by_case["extraction_failure"]["records_extracted"] is None
@@ -267,6 +287,8 @@ def _seed_record(
     emitted_at: datetime,
     quality_outcome: str = "not_run",
     failed_checks: tuple[str, ...] | None = None,
+    error_type: str = "RuntimeError",
+    **enforcement: Any,
 ) -> RunRecord:
     validation_ran = quality_outcome != "not_run"
     return RunRecord(
@@ -297,9 +319,81 @@ def _seed_record(
         failure_reason="scripted failure" if status == "failed" else None,
         failure_reason_truncated=False if status == "failed" else None,
         failure_reason_length=len("scripted failure") if status == "failed" else None,
-        error_type="RuntimeError" if status == "failed" else None,
+        error_type=error_type if status == "failed" else None,
         validation_report_path=(
             f"data/metadata/{source_id}/validations/{run_id}.json" if validation_ran else None
+        ),
+        **enforcement,
+    )
+
+
+def _schema_drift_records(token: str, source_id: str) -> tuple[RunRecord, ...]:
+    """One source's contract history: a clean baseline, one drifted run per signal, and a
+    retried run whose latest row is clean — the query must read that row, not the first."""
+
+    def day(value: int) -> datetime:
+        return datetime(2026, 9, value, 12, tzinfo=UTC)
+
+    def run(suffix: str, started: int, **fields: Any) -> RunRecord:
+        defaults: dict[str, Any] = {
+            "run_id": f"{token}_{suffix}",
+            "source_id": source_id,
+            "status": "succeeded",
+            "started_at": day(started),
+            "emitted_at": day(started),
+            "quality_outcome": "passed",
+            "failed_checks": (),
+            "schema_version": "a" * 64,
+            "contract_id": "drift.source",
+            "contract_version": "1.0.0",
+            "contract_preflight_outcome": "ok",
+            "schema_evolution": "none",
+            "malformed_rows": 0,
+        }
+        return _seed_record(**{**defaults, **fields})
+
+    return (
+        run("baseline", 1, contract_preflight_outcome="table_missing"),
+        run(
+            "evolved",
+            2,
+            schema_version="b" * 64,
+            contract_version="1.1.0",
+            contract_preflight_outcome="will_evolve",
+            schema_evolution="added:note",
+        ),
+        run("steady", 3, schema_version="b" * 64, contract_version="1.1.0"),
+        run(
+            "retried",
+            4,
+            status="failed",
+            quality_outcome="not_run",
+            failed_checks=None,
+            error_type="ContractPreflightError",
+            schema_version="b" * 64,
+            contract_version="1.1.0",
+            contract_preflight_outcome="catalog_unavailable",
+            schema_evolution=None,
+            malformed_rows=None,
+        ),
+        run(
+            "retried",
+            4,
+            emitted_at=day(5),
+            schema_version="b" * 64,
+            contract_version="1.1.0",
+        ),
+        run(
+            "malformed",
+            6,
+            status="failed",
+            quality_outcome="failed",
+            failed_checks=("data.malformed_rows",),
+            error_type="MalformedRowsError",
+            schema_version="b" * 64,
+            contract_version="1.1.0",
+            schema_evolution=None,
+            malformed_rows=5,
         ),
     )
 
@@ -436,3 +530,57 @@ def test_published_ac2_queries_execute_verbatim_with_retry_and_window_boundaries
             ],
         }
     ]
+
+    # A token of its own, so the drifted source's failures stay out of the AC-2 answers above.
+    drift_token = f"task16_{uuid4().hex}"
+    drift_source = f"{drift_token}_source"
+    for record in _schema_drift_records(drift_token, drift_source):
+        result = append_run_record(record, config, catalog_target.resolved_paths)
+        assert result.outcome is IcebergAppendOutcome.EMITTED, result
+
+    drift_sql = (QUERY_DIRECTORY / "schema-drift-by-source.sql").read_text(encoding="utf-8")
+    drift_rows = [
+        row.asDict(recursive=True)
+        for row in shared_catalog_session.sql(drift_sql).collect()
+        if row["source_id"] == drift_source
+    ]
+    assert [
+        {
+            key: row[key]
+            for key in (
+                "run_id",
+                "previous_contract_version",
+                "contract_version",
+                "contract_preflight_outcome",
+                "schema_evolution",
+                "malformed_rows",
+                "status",
+                "error_type",
+            )
+        }
+        for row in drift_rows
+    ] == [
+        {
+            "run_id": f"{drift_token}_evolved",
+            "previous_contract_version": "1.0.0",
+            "contract_version": "1.1.0",
+            "contract_preflight_outcome": "will_evolve",
+            "schema_evolution": "added:note",
+            "malformed_rows": 0,
+            "status": "succeeded",
+            "error_type": None,
+        },
+        {
+            "run_id": f"{drift_token}_malformed",
+            "previous_contract_version": "1.1.0",
+            "contract_version": "1.1.0",
+            "contract_preflight_outcome": "ok",
+            "schema_evolution": None,
+            "malformed_rows": 5,
+            "status": "failed",
+            "error_type": "MalformedRowsError",
+        },
+    ]
+    assert drift_rows[1]["validation_report_path"] == (
+        f"data/metadata/{drift_source}/validations/{drift_token}_malformed.json"
+    )

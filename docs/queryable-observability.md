@@ -111,14 +111,20 @@ check counts are counts of rows or checks, not bytes.
 | `lineage_path` | string, nullable | Link to the authoritative lineage JSON. |
 | `checkpoint_history_path` | string, nullable | Link to the checkpoint-history JSON when a checkpoint write was attempted. |
 | `validation_report_path` | string, nullable | Link to the validation report when validation ran. |
-| `record_schema_version` | int | Row-contract version for schema evolution and mixed-version investigations; v2 adds the three nullable contract-identity columns below. |
+| `record_schema_version` | int | Row-contract version for schema evolution and mixed-version investigations; v2 adds the three nullable contract-identity columns below, v3 the three contract enforcement columns after them. |
 | `schema_version` | string, nullable | SHA-256 of the data contract used for the run; `NULL` when no contract was declared. The drift query detects contract changes. |
 | `contract_id` | string, nullable | Contract identity such as `<domain>.<table>` or `legacy:<path>`; join with `schema_version` and `contract_version` to identify the declaration. |
 | `contract_version` | string, nullable | Declared semver; `NULL` for legacy or inferred runs. |
+| `contract_preflight_outcome` | string, nullable | What the session-free preflight found before extraction: `ok`, `will_evolve`, `refused`, `table_missing`, `catalog_unavailable`. |
+| `schema_evolution` | string, nullable | What the writer changed on the bronze table for this run: `none`, `added:<cols>`, `promoted:<col>(<from>-><to>)`, `added:…;promoted:…`, `breaking_replace`; `NULL` when no bronze output was written. |
+| `malformed_rows` | long, nullable | Rows Spark could not parse into the contract's types across the run's batches (JSON/CSV handoffs); `0` when counted and clean; `NULL` when not counted (Parquet, or no validation). |
 
 Adding a nullable column is the only routine schema evolution and requires a
 `record_schema_version` bump. Version 2 appends `schema_version`, `contract_id`, and
-`contract_version` with stable field IDs 44–46. Existing v1 rows read `NULL` for those fields. The
+`contract_version` with stable field IDs 44–46. Existing v1 rows read `NULL` for those fields.
+Version 3 appends the contract enforcement columns `contract_preflight_outcome`,
+`schema_evolution`, and `malformed_rows` with stable field IDs 47–49; v1 and v2 rows read `NULL`
+for them, and a v1 table gains all six in one transaction. The
 sink applies all missing declared nullable columns in one Iceberg schema transaction, reloads the
 table, and verifies the declared schema before appending. A type change, rename, dropped or extra
 field, required addition, or field-ID mismatch is still refused. Removing a column or changing its
@@ -134,7 +140,9 @@ all de-duplicate on `run_id` before answering the question:
 - [runs by source over time with volume](queries/observability/runs-by-source-over-time.sql);
 - [checkpoint decisions by source](queries/observability/checkpoint-decisions-by-source.sql);
 - [config and contract version drift](queries/observability/config-version-drift.sql);
-- [failed sources in one pipeline run](queries/observability/pipeline-failures.sql).
+- [failed sources in one pipeline run](queries/observability/pipeline-failures.sql);
+- [schema drift by source](queries/observability/schema-drift-by-source.sql) — what each run's
+  contract decided: preflight outcome, schema evolution, malformed rows, and enforcement errors.
 
 The drift query emits the first observed run for each source and every later change in either
 `config_version` or `schema_version`. Compare `contract_id` and `contract_version` to tell a

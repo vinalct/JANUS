@@ -268,6 +268,13 @@ def _janus_run_facet(
             "checkpoint_advanced": (
                 run_record.checkpoint_advanced if run_record is not None else None
             ),
+            "contract_preflight_outcome": (
+                run_record.contract_preflight_outcome if run_record is not None else None
+            ),
+            "schema_evolution": (
+                run_record.schema_evolution if run_record is not None else None
+            ),
+            "malformed_rows": run_record.malformed_rows if run_record is not None else None,
             "quality": _quality_payload(run_record),
             "metadata_zone_paths": _metadata_zone_paths(run_record),
             "declared_inputs": [

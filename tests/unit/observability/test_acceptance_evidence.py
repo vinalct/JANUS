@@ -222,7 +222,14 @@ def test_every_captured_terminal_shape_carries_the_ac1_fields(tmp_path, monkeypa
         "empty_handoff": "passed",
         "replay": "passed",
     }
+
+    assert {case: record.contract_preflight_outcome for case, record in records.items()} == (
+        dict.fromkeys(baseline.BASELINE_CASES, "catalog_unavailable")
+    )
+    assert {record.schema_evolution for record in records.values()} == {None}
+    assert {record.malformed_rows for record in records.values()} == {None}
     for record in records.values():
         assert record.started_at == baseline.STARTED_AT
         assert record.ended_at == baseline.FINISHED_AT
         assert record.config_version == compute_config_version(Path(record.source_config_path))
+        assert record.record_schema_version == 3

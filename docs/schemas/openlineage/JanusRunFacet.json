@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/vinalct/janus/v0.1.0/docs/schemas/openlineage/JanusRunFacet.json",
-  "description": "Optional contract identity properties are additive; they are not required so existing facet payloads remain valid.",
+  "description": "Optional contract identity and contract enforcement properties are additive. they are not required so existing facet payloads remain valid, which is why the $id tag is unchanged.",
   "$defs": {
     "NullableString": {
       "type": ["string", "null"]
@@ -135,6 +135,9 @@
           "enum": ["advanced", "retained", "reused", "skipped", null]
         },
         "checkpoint_advanced": {"type": ["boolean", "null"]},
+        "contract_preflight_outcome": {"$ref": "#/$defs/NullableString"},
+        "schema_evolution": {"$ref": "#/$defs/NullableString"},
+        "malformed_rows": {"type": ["integer", "null"]},
         "quality": {"$ref": "#/$defs/Quality"},
         "metadata_zone_paths": {
           "type": "object",

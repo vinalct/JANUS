@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
 from janus.models import ExecutionPlan, RunContext, resolve_bronze_write_intent
+from janus.observability import IcebergAppendOutcome, RunRecord, append_run_record
 from janus.registry import load_registry
 from janus.utils.catalog_properties import (
     derive_pyiceberg_catalog_name,
@@ -178,6 +180,65 @@ def test_spark_sees_pyiceberg_in_the_tables_history(
     ).collect()
 
     assert pyiceberg_commit in {row["snapshot_id"] for row in snapshots}
+
+
+ENFORCEMENT_COLUMNS = ("contract_preflight_outcome", "schema_evolution", "malformed_rows")
+
+
+def test_both_engines_read_back_the_enforcement_columns_the_runs_sink_wrote(
+    catalog_target: CatalogTarget, shared_catalog_session
+):
+
+    catalog_module = require_pyiceberg()
+    identifier = f"metadata.runs_round_trip_{uuid4().hex}"
+    config = catalog_target.environment_config()
+    config["observability"] = {"runs_table": identifier}
+    instant = datetime(2026, 9, 29, 12, 0, tzinfo=UTC)
+    record = RunRecord(
+        run_id="run-order19-round-trip-001",
+        source_id=SOURCE_ID,
+        source_name="Catalog commits round trip",
+        environment="local",
+        strategy_family="api",
+        strategy_variant="page_number_api",
+        extraction_mode="full_refresh",
+        status="succeeded",
+        started_at=instant,
+        emitted_at=instant,
+        config_version="d" * 64,
+        source_config_path="conf/sources/catalog_commits.yaml",
+        artifact_count=1,
+        quality_outcome="passed",
+        quality_checks_passed=2,
+        quality_checks_failed=0,
+        quality_checks_skipped=0,
+        quality_failed_checks=(),
+        contract_preflight_outcome="will_evolve",
+        schema_evolution="promoted:amount(integer->long)",
+        malformed_rows=2,
+    )
+
+    result = append_run_record(record, config, catalog_target.resolved_paths)
+
+    assert result.outcome is IcebergAppendOutcome.EMITTED, result
+    expected = {
+        "contract_preflight_outcome": "will_evolve",
+        "schema_evolution": "promoted:amount(integer->long)",
+        "malformed_rows": 2,
+    }
+    table = catalog_module.load_catalog(
+        derive_pyiceberg_catalog_name(config),
+        **derive_pyiceberg_catalog_properties(config, catalog_target.resolved_paths),
+    ).load_table(identifier)
+    assert table.scan(selected_fields=ENFORCEMENT_COLUMNS).to_arrow().to_pylist() == [expected]
+
+    frame = shared_catalog_session.newSession().table(identifier).select(*ENFORCEMENT_COLUMNS)
+    assert dict(frame.dtypes) == {
+        "contract_preflight_outcome": "string",
+        "schema_evolution": "string",
+        "malformed_rows": "bigint",
+    }
+    assert [row.asDict() for row in frame.collect()] == [expected]
 
 
 def _rows(table) -> list[dict[str, object]]:

@@ -1,4 +1,6 @@
 -- Spark SQL. One row for the first observed config or contract and each subsequent change.
+-- What the contract then decided per run (preflight, schema evolution, malformed rows) is
+-- answered by schema-drift-by-source.sql.
 WITH ranked_runs AS (
     SELECT
         run_id,

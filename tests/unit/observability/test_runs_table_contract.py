@@ -30,7 +30,8 @@ from janus.utils.environment import load_environment_config
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REST_ENV_PATH = PROJECT_ROOT / "conf" / "environments" / "cluster-rest.env.example"
 FORBIDDEN_IMPORT_ROOTS = ("pyspark", "pyiceberg", "pyarrow")
-EXPECTED_COLUMN_COUNT = 45
+EXPECTED_COLUMN_COUNT = 48
+V2_COLUMN_COUNT = 45
 
 EXPECTED_SCHEMA = (
     ("run_id", "string", False),
@@ -78,6 +79,9 @@ EXPECTED_SCHEMA = (
     ("schema_version", "string", True),
     ("contract_id", "string", True),
     ("contract_version", "string", True),
+    ("contract_preflight_outcome", "string", True),
+    ("schema_evolution", "string", True),
+    ("malformed_rows", "long", True),
 )
 
 
@@ -155,15 +159,11 @@ def test_field_ids_are_stable_unique_and_include_the_list_element():
     )
     all_ids = [*field_ids, failed_checks.element_id]
 
-    assert field_ids == [*range(1, 43), 44, 45, 46]
+    assert field_ids == [*range(1, 43), *range(44, 50)]
     assert failed_checks.iceberg_type is IcebergType.STRING_LIST
     assert failed_checks.element_id == 43
     assert None not in all_ids
     assert len(all_ids) == len(set(all_ids))
-
-
-def test_new_run_records_use_schema_version_two():
-    assert RUN_RECORD_SCHEMA_VERSION == 2
 
 
 def test_required_is_exactly_the_inverse_of_nullable():
@@ -348,36 +348,31 @@ def test_declaration_stays_well_under_the_module_size_ceiling():
 # the contract-enforcement columns (FR-8, D-14)
 # --------------------------------------------------------------------------------------
 
-RED_TASK = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
+
+def test_the_three_columns_are_appended_after_the_contract_identity():
+    appended = tuple(
+        (column.field_id, column.name, column.iceberg_type, column.nullable)
+        for column in RUNS_TABLE_SCHEMA[-3:]
+    )
+
+    assert appended == (
+        (47, "contract_preflight_outcome", IcebergType.STRING, True),
+        (48, "schema_evolution", IcebergType.STRING, True),
+        (49, "malformed_rows", IcebergType.LONG, True),
+    )
 
 
-class TestOrder19EnforcementColumns:
+def test_the_declaration_has_48_columns_and_nothing_was_renumbered():
+    assert len(RUNS_TABLE_SCHEMA) == 48
+    assert [column.field_id for column in RUNS_TABLE_SCHEMA] == [
+        *range(1, 43),
+        *range(44, 50),
+    ]
+    assert tuple(
+        (column.name, column.iceberg_type, column.nullable)
+        for column in RUNS_TABLE_SCHEMA[:V2_COLUMN_COUNT]
+    ) == EXPECTED_SCHEMA[:V2_COLUMN_COUNT]
 
-    @RED_TASK
-    def test_the_three_columns_are_appended_after_the_contract_identity(self):
-        appended = tuple(
-            (column.field_id, column.name, column.iceberg_type, column.nullable)
-            for column in RUNS_TABLE_SCHEMA[-3:]
-        )
 
-        assert appended == (
-            (47, "contract_preflight_outcome", IcebergType.STRING, True),
-            (48, "schema_evolution", IcebergType.STRING, True),
-            (49, "malformed_rows", IcebergType.LONG, True),
-        )
-
-    @RED_TASK
-    def test_the_declaration_has_48_columns_and_nothing_was_renumbered(self):
-        assert len(RUNS_TABLE_SCHEMA) == 48
-        assert [column.field_id for column in RUNS_TABLE_SCHEMA] == [
-            *range(1, 43),
-            *range(44, 50),
-        ]
-        assert tuple(
-            (column.name, column.iceberg_type, column.nullable)
-            for column in RUNS_TABLE_SCHEMA[:EXPECTED_COLUMN_COUNT]
-        ) == EXPECTED_SCHEMA
-
-    @RED_TASK
-    def test_new_run_records_use_schema_version_three(self):
-        assert RUN_RECORD_SCHEMA_VERSION == 3
+def test_new_run_records_use_schema_version_three():
+    assert RUN_RECORD_SCHEMA_VERSION == 3

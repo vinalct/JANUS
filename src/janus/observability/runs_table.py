@@ -126,6 +126,9 @@ RUNS_TABLE_SCHEMA = (
     RunsTableColumn(44, "schema_version", IcebergType.STRING, True),
     RunsTableColumn(45, "contract_id", IcebergType.STRING, True),
     RunsTableColumn(46, "contract_version", IcebergType.STRING, True),
+    RunsTableColumn(47, "contract_preflight_outcome", IcebergType.STRING, True),
+    RunsTableColumn(48, "schema_evolution", IcebergType.STRING, True),
+    RunsTableColumn(49, "malformed_rows", IcebergType.LONG, True),
 )
 
 RUNS_TABLE_PARTITION_SPEC = (

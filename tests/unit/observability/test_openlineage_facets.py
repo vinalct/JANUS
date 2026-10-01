@@ -697,7 +697,6 @@ def test_terminal_records_must_describe_one_run():
 # the janusRun facet carries what the contract decided (FR-8, D-12)
 # --------------------------------------------------------------------------------------
 
-RED_TASK = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
 ENFORCEMENT_FACET_FIELDS = frozenset(
     {"contract_preflight_outcome", "schema_evolution", "malformed_rows", "failure_stage"}
 )
@@ -748,45 +747,63 @@ def test_an_enforcement_failure_names_its_stage():
     _validator(JANUS_FACET_SCHEMA).validate(facet)
 
 
-class TestOrder19JanusRunFacet:
-
-    @RED_TASK
-    def test_a_run_carries_its_preflight_evolution_and_malformed_count(self):
-        raw, bronze = _materialized_outputs()
-        bronze = replace(bronze, metadata=(("schema_evolution", "added:note"),))
-        metadata = _run_metadata(
-            run_id="enforcement",
-            status="succeeded",
-            outputs=(raw, bronze),
-            records_extracted=2,
-            attributes=(("contract_preflight_outcome", "will_evolve"),),
-        )
-        lineage = _lineage(metadata)
-        report = replace(
-            _validation_report(metadata, failed=False),
-            checks=(
-                ValidationCheck.passed("data", "required_fields", "all present"),
-                ValidationCheck.passed(
-                    "data", "malformed_rows", "no malformed rows", details={"count": 0}
-                ),
+def test_a_run_carries_its_preflight_evolution_and_malformed_count():
+    raw, bronze = _materialized_outputs()
+    bronze = replace(bronze, metadata=(("schema_evolution", "added:note"),))
+    metadata = _run_metadata(
+        run_id="enforcement",
+        status="succeeded",
+        outputs=(raw, bronze),
+        records_extracted=2,
+        attributes=(("contract_preflight_outcome", "will_evolve"),),
+    )
+    lineage = _lineage(metadata)
+    report = replace(
+        _validation_report(metadata, failed=False),
+        checks=(
+            ValidationCheck.passed("data", "required_fields", "all present"),
+            ValidationCheck.passed(
+                "data", "malformed_rows", "no malformed rows", details={"count": 0}
             ),
-        )
+        ),
+    )
 
-        event = _enforcement_event(metadata, lineage, report)
+    event = _enforcement_event(metadata, lineage, report)
+    facet = event["run"]["facets"]["janusRun"]
+
+    assert facet["contract_preflight_outcome"] == "will_evolve"
+    assert facet["schema_evolution"] == "added:note"
+    assert facet["malformed_rows"] == 0
+    assert facet["failure_stage"] is None
+    _validator(OPENLINEAGE_SCHEMA).validate(event)
+    _validator(JANUS_FACET_SCHEMA).validate(facet)
+
+
+def test_the_facet_schema_declares_the_four_fields_as_optional():
+    facet_schema = json.loads(JANUS_FACET_SCHEMA.read_text(encoding="utf-8"))
+    declared = facet_schema["$defs"]["JanusRunFacet"]
+
+    assert set(declared["properties"]) >= ENFORCEMENT_FACET_FIELDS
+    assert not ENFORCEMENT_FACET_FIELDS & set(declared["required"])
+    assert declared["properties"]["malformed_rows"] == {"type": ["integer", "null"]}
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ["success", "extraction_failure", "quality_failure", "empty_handoff", "replay"],
+)
+def test_every_lifecycle_event_carries_the_enforcement_fields_even_when_nothing_decided(shape):
+    start = build_openlineage_run_event(
+        _run_metadata(run_id=f"order15-{shape}", status="running"),
+        DATASETS,
+        graph=GRAPH,
+        data_contract=EXAMPLE_CONTRACT,
+    )
+    terminal = _terminal_event(shape)
+
+    for event in (start, terminal):
         facet = event["run"]["facets"]["janusRun"]
-
-        assert facet["contract_preflight_outcome"] == "will_evolve"
-        assert facet["schema_evolution"] == "added:note"
-        assert facet["malformed_rows"] == 0
-        assert facet["failure_stage"] is None
-        _validator(OPENLINEAGE_SCHEMA).validate(event)
+        assert {name: facet[name] for name in ENFORCEMENT_FACET_FIELDS} == dict.fromkeys(
+            ENFORCEMENT_FACET_FIELDS
+        )
         _validator(JANUS_FACET_SCHEMA).validate(facet)
-
-    @RED_TASK
-    def test_the_facet_schema_declares_the_four_fields_as_optional(self):
-        facet_schema = json.loads(JANUS_FACET_SCHEMA.read_text(encoding="utf-8"))
-        declared = facet_schema["$defs"]["JanusRunFacet"]
-
-        assert set(declared["properties"]) >= ENFORCEMENT_FACET_FIELDS
-        assert not ENFORCEMENT_FACET_FIELDS & set(declared["required"])
-        assert declared["properties"]["malformed_rows"] == {"type": ["integer", "null"]}

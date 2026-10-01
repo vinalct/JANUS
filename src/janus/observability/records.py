@@ -12,12 +12,19 @@ from janus.checkpoints.store import SUPPORTED_CHECKPOINT_DECISIONS, CheckpointWr
 from janus.lineage.models import LineageRecord, MaterializedOutput, RunMetadata
 from janus.observability.vocabulary import (
     BRONZE_ZONE,
+    MALFORMED_ROWS_CHECK_NAME,
+    MALFORMED_ROWS_CHECK_PHASE,
+    MALFORMED_ROWS_COUNT_DETAIL,
     MAX_FAILURE_REASON_LENGTH,
     PIPELINE_ATTEMPT_ATTRIBUTE,
     PIPELINE_RUN_ID_ATTRIBUTE,
+    PREFLIGHT_ATTRIBUTE_NAME,
+    PREFLIGHT_OUTCOMES,
     QUALITY_NOT_RUN,
     RUN_RECORD_SCHEMA_VERSION,
     RUN_RECORD_STATUSES,
+    SCHEMA_EVOLUTION_METADATA_KEY,
+    SCHEMA_EVOLUTION_NONE,
     SUPPORTED_QUALITY_OUTCOMES,
     TRIGGER_ATTRIBUTE,
 )
@@ -84,6 +91,10 @@ class RunRecord:
     schema_version: str | None = None
     contract_id: str | None = None
     contract_version: str | None = None
+    # Contract enforcement
+    contract_preflight_outcome: str | None = None
+    schema_evolution: str | None = None
+    malformed_rows: int | None = None
 
     def __post_init__(self) -> None:
         if self.status not in RUN_RECORD_STATUSES:
@@ -98,6 +109,14 @@ class RunRecord:
         ):
             allowed = ", ".join(sorted(SUPPORTED_CHECKPOINT_DECISIONS))
             raise ValueError(f"checkpoint_decision must be one of: {allowed}")
+        if (
+            self.contract_preflight_outcome is not None
+            and self.contract_preflight_outcome not in PREFLIGHT_OUTCOMES
+        ):
+            allowed = ", ".join(sorted(PREFLIGHT_OUTCOMES))
+            raise ValueError(f"contract_preflight_outcome must be one of: {allowed}")
+        if self.schema_evolution is not None and not self.schema_evolution.strip():
+            raise ValueError("schema_evolution must not be empty")
         for name in (
             "run_id",
             "source_id",
@@ -152,6 +171,14 @@ class RunRecord:
             raise ValueError("a failed quality outcome must name at least one failed check")
         if self.quality_outcome == "passed" and self.quality_failed_checks:
             raise ValueError("a passed quality outcome must name no failed checks")
+        if self.malformed_rows is not None:
+            if self.malformed_rows < 0:
+                raise ValueError("malformed_rows must not be negative")
+            if not validation_ran:
+                raise ValueError(
+                    "malformed_rows is NULL exactly when no malformed_rows check ran; a count "
+                    f"needs the validation report that took it, not {QUALITY_NOT_RUN!r}"
+                )
 
     @classmethod
     def from_run(
@@ -205,6 +232,9 @@ class RunRecord:
             schema_version=lineage_record.schema_version,
             contract_id=lineage_record.contract_id,
             contract_version=lineage_record.contract_version,
+            contract_preflight_outcome=_lift(attributes, PREFLIGHT_ATTRIBUTE_NAME),
+            schema_evolution=_fold_schema_evolution(bronze_outputs),
+            malformed_rows=_sum_malformed_rows(validation_report),
             source_config_path=run_metadata.source_config_path,
             records_extracted=run_metadata.records_extracted,
             artifact_count=len(lineage_record.artifacts),
@@ -287,6 +317,9 @@ class RunRecord:
             "schema_version": self.schema_version,
             "contract_id": self.contract_id,
             "contract_version": self.contract_version,
+            "contract_preflight_outcome": self.contract_preflight_outcome,
+            "schema_evolution": self.schema_evolution,
+            "malformed_rows": self.malformed_rows,
         }
 
 
@@ -314,6 +347,44 @@ def _sum_records_written(outputs: tuple[MaterializedOutput, ...]) -> int | None:
     """
     counts = [output.records_written for output in outputs if output.records_written is not None]
     return sum(counts) if counts else None
+
+
+def _fold_schema_evolution(outputs: tuple[MaterializedOutput, ...]) -> str | None:
+    """The first change any bronze batch made, ``"none"`` if none did, else ``NULL``.
+
+    ``NULL`` covers both a run with no bronze output and a record written before the
+    writer reported evolution; neither is "the table did not change".
+    """
+    rendered = [
+        metadata[SCHEMA_EVOLUTION_METADATA_KEY]
+        for metadata in (output.metadata_as_dict() for output in outputs)
+        if SCHEMA_EVOLUTION_METADATA_KEY in metadata
+    ]
+    if not rendered:
+        return None
+    return next(
+        (value for value in rendered if value != SCHEMA_EVOLUTION_NONE),
+        SCHEMA_EVOLUTION_NONE,
+    )
+
+
+def _sum_malformed_rows(report: ValidationReport | None) -> int | None:
+    """Rows Spark could not parse, summed over every counted ``malformed_rows`` check.
+
+    ``NULL`` when no such check counted anything (a Parquet handoff skips it, and a run
+    without validation has none); ``0`` means counted and clean.
+    """
+    if report is None:
+        return None
+    counts = [
+        _optional_int(check.details_as_dict().get(MALFORMED_ROWS_COUNT_DETAIL))
+        for check in report.checks
+        if check.phase == MALFORMED_ROWS_CHECK_PHASE
+        and check.name == MALFORMED_ROWS_CHECK_NAME
+        and check.outcome != "skipped"
+    ]
+    counted = [count for count in counts if count is not None]
+    return sum(counted) if counted else None
 
 
 def _project_quality(
