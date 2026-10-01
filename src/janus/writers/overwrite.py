@@ -101,8 +101,8 @@ def plan_full_refresh_overwrite(
             reason=f"columns removed from the source schema: {', '.join(dropped)}",
         )
 
-    # Conservative on purpose: Iceberg permits some widening promotions, but encoding a
-    # promotion matrix belongs to the schema-evolution work, and the fallback is always safe.
+    # Promotions the evolution plan allows were applied to the target before this comparison,
+    # so a retype reaching here was not settled by a plan; replacement is the safe fallback.
     retyped = [
         f"{name} {target_type} -> {source_types[name]}"
         for name, target_type in target_columns
@@ -182,9 +182,10 @@ def build_replace_table_as_select_sql(
 ) -> str:
     """Render the history-resetting fallback overwrite.
 
-    Only for drift :func:`plan_full_refresh_overwrite` refuses to reconcile. The table is
-    dropped and recreated, so its snapshot log starts empty — the caller must say so in the
-    write metadata rather than let an operator assume time travel still reaches the prior run.
+    Only for drift :func:`plan_full_refresh_overwrite` refuses to reconcile. On the pinned
+    Iceberg pair this is a replace transaction: older snapshots stay readable by ID, but the
+    new snapshot has no parent, so rollback to them is refused — the caller must say so in the
+    write metadata rather than let an operator assume the prior run is still an ancestor.
     """
     return (
         f"REPLACE TABLE {quote_identifier(table_identifier)} USING iceberg "

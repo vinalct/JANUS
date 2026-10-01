@@ -8,7 +8,7 @@ not replace it, and it never reimplements planning, extraction, materialization,
 validation, or metadata persistence.
 
 - Runnable end-to-end example, including Dagster: [examples/orchestration/](../examples/orchestration/README.md)
-- Architecture of the batch layer: [architecture guide](architecture.md#8-batch-orchestration)
+- Architecture of the batch layer: [architecture guide](architecture.md#9-batch-orchestration)
 - Declaring a dependency on another source: [source onboarding](source-onboarding.md#step-5b-declare-the-producer-of-every-iceberg-input)
 
 ## The dependency graph
@@ -185,7 +185,11 @@ them:
 
 All of these are failures, and none lets stale upstream data pass as fresh success: a source
 planning error, an `ExecutedRun` returned with `status: "failed"`, a raised exception, and a
-compute-session cleanup error after an otherwise successful run.
+compute-session cleanup error after an otherwise successful run. A data-contract refusal is a
+returned failure like any other: a refused preflight, a batch refused by its pre-write check or
+malformed-row count, and a refused schema evolution each carry a `failure_stage`
+(`contract_preflight`, `contract_check`, `malformed_rows`, `schema_evolution`) and skip their
+dependents.
 
 The runner cannot roll back a successful upstream write when a downstream source later
 fails. A partial pipeline is a real outcome: A's new bronze is committed, B never ran, and
@@ -337,6 +341,31 @@ A source whose quality validation fails returns a failed `ExecutedRun` rather th
 The batch records it as `status: "failed"` with the validation report path in its evidence,
 and its descendants are skipped with `reason_code: "upstream_failed"`. Read
 `validation_report_path` from that source's `evidence.metadata_outputs`.
+
+### A refused contract preflight
+
+Before extracting, every source compares its live bronze table with its data contract. When a
+`strict` source's table differs outside the contract's compatibility mode, or its catalog cannot
+be read, the source fails before it starts:
+
+- The summary shows the source `failed` with `failure.error_type: "ContractPreflightError"`; each
+  dependent is `skipped` with `reason_code: "upstream_failed"` and the source in
+  `direct_blocking_upstream_ids`.
+- Nothing was extracted: the attempt sent no request, wrote no raw artifact, and started no Spark
+  session. Its bronze table is untouched.
+- The attempt's `evidence.metadata_outputs.run_metadata_path` links the run-metadata JSON. Its
+  `run_attributes.contract_preflight_outcome` is `refused` (a schema difference) or
+  `catalog_unavailable` (the catalog raised or exceeded the five-second budget), `failure_stage`
+  is `contract_preflight`, and `failure_reason` lists each refused column and why, for example
+  `amount: retyped`.
+
+There are two fixes, both in the contract. For a difference the table can absorb — a new nullable
+column, or a promotion under `janus.compatibility: backward` — declare it in the contract and
+rerun; the preflight reports `will_evolve`. For a breaking change, bump the contract's MAJOR version
+and run the source as a full refresh, which replaces the table; see
+[the breaking-change workflow](data-contracts.md#the-breaking-change-workflow). A `lenient` source
+logs `contract_preflight_warning` instead and proceeds; a refused difference then fails at the
+write with `failure_stage: "schema_evolution"`, after extraction has run.
 
 ### A malformed-row refusal
 

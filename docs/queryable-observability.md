@@ -113,9 +113,9 @@ check counts are counts of rows or checks, not bytes.
 | `validation_report_path` | string, nullable | Link to the validation report when validation ran. |
 | `record_schema_version` | int | Row-contract version for schema evolution and mixed-version investigations; v2 adds the three nullable contract-identity columns below, v3 the three contract enforcement columns after them. |
 | `schema_version` | string, nullable | SHA-256 of the data contract used for the run; `NULL` when no contract was declared. The drift query detects contract changes. |
-| `contract_id` | string, nullable | Contract identity such as `<domain>.<table>` or `legacy:<path>`; join with `schema_version` and `contract_version` to identify the declaration. |
-| `contract_version` | string, nullable | Declared semver; `NULL` for legacy or inferred runs. |
-| `contract_preflight_outcome` | string, nullable | What the session-free preflight found before extraction: `ok`, `will_evolve`, `refused`, `table_missing`, `catalog_unavailable`. |
+| `contract_id` | string, nullable | Contract identity, `<domain>.<table>`; join with `schema_version` and `contract_version` to identify the declaration. `legacy:<path>` appears only in rows written before retired schema files. |
+| `contract_version` | string, nullable | Declared semver; `NULL` only in rows from legacy or inferred runs before. |
+| `contract_preflight_outcome` | string, nullable | What the session-free preflight found before extraction: `ok`, `will_evolve`, `refused`, `table_missing`, `catalog_unavailable`; `NULL` for runs before. |
 | `schema_evolution` | string, nullable | What the writer changed on the bronze table for this run: `none`, `added:<cols>`, `promoted:<col>(<from>-><to>)`, `added:…;promoted:…`, `breaking_replace`; `NULL` when no bronze output was written. |
 | `malformed_rows` | long, nullable | Rows Spark could not parse into the contract's types across the run's batches (JSON/CSV handoffs); `0` when counted and clean; `NULL` when not counted (Parquet, or no validation). |
 
@@ -149,6 +149,19 @@ The drift query emits the first observed run for each source and every later cha
 new declaration from an in-place byte edit; a version bump alone does not enforce compatibility.
 Old v1 rows have `NULL` contract fields. See [Data contracts](data-contracts.md) for the identity
 and versioning rules.
+
+The schema drift query answers "what did the contract decide, and where did it bite?". Per source
+and in start order, it returns every latest run row where the preflight reported `will_evolve`,
+`refused` or `catalog_unavailable`; the writer changed the table (`schema_evolution` other than
+`none`); malformed rows were counted; the contract bytes changed since the previous run
+(`previous_contract_version` beside `contract_version`); or the run stopped on
+`ContractViolationError`, `MalformedRowsError`, `ContractPreflightError` or
+`SchemaEvolutionRefusedError`. A retried run appears only when its latest row still matches. The
+query applies no window; add one with the half-open `started_at` shape and `emitted_at` pruning
+described above. Follow `validation_report_path` for the samples behind `malformed_rows`, and see
+[Reading a failed preflight or `malformed_rows` check](data-contracts.md#reading-a-failed-preflight-or-malformed_rows-check)
+for what each value means. The failure stage is not a column; `error_type` names the enforcement
+error, and `failure_stage` is in the run-metadata JSON and the `janusRun` facet.
 
 ## OpenLineage operator surface
 
@@ -187,6 +200,7 @@ the readable id remains in `run.facets.janusRun.run_id`.
 
 The versioned `janusRun` custom run facet carries the complete lineage projection plus
 `started_at`, checkpoint decision and advancement, quality outcome/counts/failed names,
+the contract preflight outcome, schema evolution, malformed-row count and failure stage,
 metadata-zone evidence paths, and declared input provenance. Standard facets carry documentation,
 source-code/config version, job type, error message, and output row counts. A consumer should use
 the custom facet for JANUS-specific operational detail and the standard datasets/facets for
@@ -217,6 +231,7 @@ terminal `outcome=failed` or `skipped` does not change the ingestion outcome.
 | Live schema differs from the declaration | `reason=live_schema_does_not_match_declaration` or `live_schema_does_not_match_declaration_after_evolution`, `step=schema_validation`, `exception_type=RunsTableSchemaMismatch`. Compare the live schema with `RUNS_TABLE_SCHEMA`; type changes, renames, dropped fields, extra fields, required additions, and ID mismatches need an explicit migration. |
 | Runs table evolution conflicts with a live schema | Check `step=schema_validation` for a non-additive mismatch or `step=schema_evolution` for a failed nullable-column update. Stop retries of a persistent mismatch and plan an explicit migration. |
 | Two runs try to add the contract columns at once | Iceberg commits one schema update; the other reports `reason=schema_evolution_failed`, `step=schema_evolution`, and its commit-conflict exception type. The next run reloads the table, sees the columns, and appends without another evolution. |
+| Runs table evolution to v3 | The first run against a v2 table adds `contract_preflight_outcome`, `schema_evolution` and `malformed_rows` (field IDs 47–49) in one schema update, then appends a row with `record_schema_version = 3`; a v1 table gains IDs 44–49 in the same single update. Older rows read `NULL` in the new columns. No action is needed; if the update fails, the rows above for `step=schema_evolution` apply. |
 | Emission exceeded its budget | `run_event_emission_finished` reports `reason=budget_failed`, `stage=budget`, normally with `exception_type=EmissionTimeoutError`. The total START or terminal fan-out budget is five seconds; investigate a slow catalog or endpoint. |
 | Table exists but a query returns no rows | Confirm the catalog name and `observability.runs_table` override, then confirm the half-open `started_at` window. `emitted_at` is the partition-pruning timestamp, not a substitute for the operator's run-start window. |
 | One `run_id` has several rows | This is the append-only retry/re-emission consequence. Use the published `ROW_NUMBER() ... PARTITION BY run_id ORDER BY emitted_at DESC` pattern; do not de-duplicate in the writer. |

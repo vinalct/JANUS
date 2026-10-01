@@ -58,12 +58,24 @@ GUARDRAIL_CLASSES := \
 	tests.unit.models.test_access_limits_and_allowed_hosts \
 	tests.unit.toolchain.test_container_hardening \
 	tests.unit.toolchain.test_ci_supply_chain
+CONTRACT_ENFORCEMENT_CLASSES := \
+	tests.unit.quality.test_contract_checks \
+	tests.unit.runtime.test_pre_write_gate_wiring \
+	tests.unit.writers.test_evolution_plan \
+	tests.unit.writers.test_schema_ddl \
+	tests.unit.runtime.test_contract_preflight \
+	tests.unit.toolchain.test_no_write_without_contract_check \
+	tests.unit.models.test_schema_config_contract_only
 SPARK_ORCHESTRATION_CLASS := tests.integration.orchestration.test_dependency_execution
 QUERYABLE_CLASS := tests.integration.catalog_commits.test_queryable_observability
 RUNS_SINK_CLASS := tests.integration.catalog_commits.test_runs_table_append_sink
+RUNS_DECLARATION_CLASS := tests.unit.observability.test_pyiceberg_declared_schema
 PREFLIGHT_REAL_CATALOG_CLASS := tests.integration.catalog_commits.test_contract_preflight_real_catalog
 CROSS_ENGINE_CLASS := tests.integration.catalog_commits.test_pyiceberg_round_trip
 CONTRACTS_GOLDEN_CLASS := tests.integration.contracts.test_bronze_unchanged_after_migration
+PRE_WRITE_GATE_CLASS := tests.integration.contracts.test_pre_write_gate
+MALFORMED_ROWS_CLASS := tests.integration.contracts.test_malformed_rows
+EVOLUTION_MATRIX_CLASS := tests.integration.contracts.test_evolution_matrix
 AC1_TEST := test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources
 AC2_TEST := test_published_ac2_queries_execute_verbatim_with_retry_and_window_boundaries
 CROSS_ENGINE_TEST := test_spark_reads_the_row_pyiceberg_committed
@@ -222,6 +234,10 @@ test-fast:
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
+	@for class_name in $(CONTRACT_ENFORCEMENT_CLASSES); do \
+		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
+			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
+	done
 
 test-contract-schema:
 	$(PYTHON) -m pytest -q $(CONTRACT_SCHEMA_TESTS)
@@ -240,7 +256,11 @@ ci: ensure-up
 	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage $(SERVICE) python -m pytest -ra -m 'not cluster' --cov=janus --cov-report=term-missing --cov-report=xml:data/coverage.xml --junitxml=$(CI_TEST_REPORT))
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_SINK_CLASS) --minimum-passed 4)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(PREFLIGHT_REAL_CATALOG_CLASS) --minimum-passed 8)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_DECLARATION_CLASS) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(PREFLIGHT_REAL_CATALOG_CLASS) --minimum-passed 10)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(PRE_WRITE_GATE_CLASS) --minimum-passed 13)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(MALFORMED_ROWS_CLASS) --minimum-passed 9)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(EVOLUTION_MATRIX_CLASS) --minimum-passed 59)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)

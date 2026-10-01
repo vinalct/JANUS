@@ -54,32 +54,37 @@ That gives the metadata layer a stable artifact shape instead of treating valida
 
 #### `quality_contract`
 
-This check validates the quality rules themselves before looking at any data.
-
-It currently catches:
-
-- duplicate entries in `required_fields`;
-- duplicate entries in `unique_fields`;
-- `unique_fields` that are not also listed in `required_fields`.
-
-That last rule is deliberate. If JANUS is going to enforce uniqueness on a key, that key should also be treated as mandatory.
+This check validates the key rules of the data contract loaded into the plan before looking at any
+data. Every `primaryKey` column must also be `required`: a null merge key is a failure. The details
+keep their `required_fields` / `unique_fields` names but carry the contract's `required` columns and
+`primaryKey`. Duplicate property names never reach this check; the contract loader refuses them.
 
 #### `schema_contract_mode`
 
-This check validates whether the schema settings are coherent.
+This check reports the contract loaded into the plan, including its `compatibility` and
+`enforcement`. Every source must declare `schema.contract`; contract loading and active-status
+errors are collected by the registry before the quality gate runs. A plan without a contract is
+reported as `skipped` here; the materializer is what refuses to write it.
 
-It reports the fields from the contract loaded into the plan. Every source must declare
-`schema.contract`; contract loading and active-status errors are collected by the registry
-before the quality gate runs. Schema evolution follows the contract's
-`janus.compatibility` declaration.
+## The pre-write pass (before implementation)
+
+The structural decision no longer happens in the gate. `BronzeMaterializer` runs
+`run_pre_write_pass` on every batch **before** the bronze write: the pure structural check from
+`quality/contract_checks.py`, and for `strict` contracts one aggregation that counts null or blank
+required values and malformed JSON/CSV rows. A refused batch raises a `ContractEnforcementError`
+subclass carrying `failure_stage`, and nothing is written for it. The gate then *reports* the same
+evidence in the validation JSON rather than deciding a second time. See
+[Data contracts](../data-contracts.md#enforcement-modes) for the modes and failure stages.
 
 ## Data checks
 
-These checks run against a Spark DataFrame.
+These checks run against a Spark DataFrame, or are rendered from the pre-write evidence.
 
 #### `required_fields`
 
-This check verifies that all configured required fields exist and are populated.
+This check verifies that the contract's `required` columns exist and are populated. Under
+`strict` it is rendered from the pre-write count, so a failure means the batch was refused before
+the write. Under `lenient` it runs after the write on the normalized DataFrame, as before.
 
 It fails when:
 
@@ -89,30 +94,34 @@ It fails when:
 
 #### `unique_fields`
 
-This check verifies that the configured uniqueness key is actually unique in the provided DataFrame.
+This check verifies that the contract's `primaryKey` is actually unique in the provided DataFrame.
 
 It fails when:
 
-- one or more unique key columns are missing;
+- one or more key columns are missing;
 - duplicate key groups are found.
 
 When duplicates exist, the report includes the duplicate-group count and a small sample of the repeated keys.
 
 #### `schema_expectations`
 
-This check compares the observed DataFrame columns with an expected schema contract.
+This check reports the structural comparison of the batch with its data contract: names and types
+in the contract's type vocabulary. With pre-write evidence it is rendered from what the
+materializer already decided, merged across batches (`details.batches`; a failed batch's message
+is prefixed `batch i/n:`). Without evidence, for a caller that hands the gate a DataFrame directly,
+it runs the same structural check on that frame and ignores the undeclared normalization columns.
 
-That expected schema can come from either:
+It fails when a declared column is missing, an undeclared column is present, or a type differs.
+A nullable column the contract marks `required` is listed under `nullability_relaxed` and is not a
+failure; the required-value count enforces it. There is no tolerance flag: an undeclared column is
+admitted by adding it to the contract.
 
-- an explicit list of fields passed by the caller; or
-- a JSON schema file declared in the source config.
+#### `malformed_rows`
 
-It fails when:
-
-- expected fields are missing from the observed DataFrame;
-- unexpected fields appear while schema evolution is disabled.
-
-If schema evolution is allowed, extra fields are tolerated and the check still passes.
+For JSON, JSONL and CSV handoffs this check reports the rows Spark could not parse into the
+contract's types, with `count`, `threshold`, `batch_index` and up to five scrubbed samples of at
+most 500 characters. It is `failed` when a `strict` batch exceeds `janus.maxMalformedRows`,
+`passed` with `severity: warning` under `lenient`, and `skipped` for Parquet handoffs.
 
 ## Output checks
 
@@ -182,10 +191,12 @@ They cover:
 
 - building and persisting a successful validation report;
 - surfacing clear failure messages for missing, blank, and duplicate values;
-- rejecting inconsistent quality-rule configuration;
-- rejecting unexpected columns when schema evolution is disabled;
-- rejecting outputs that land outside the configured zone root;
-- loading expected field names from a JSON schema document.
+- rejecting a `primaryKey` column that the contract does not mark `required`;
+- reporting structural mismatches against the data contract;
+- rejecting outputs that land outside the configured zone root.
+
+The pre-write pass has its own suites: `tests/unit/quality/test_contract_checks.py`,
+`tests/unit/quality/test_pre_write_pass.py` and `tests/unit/quality/test_malformed_rows_check.py`.
 
 The focused verification for this step passed with:
 

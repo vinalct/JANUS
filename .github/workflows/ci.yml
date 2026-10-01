@@ -199,6 +199,7 @@ jobs:
           fi
           docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_queryable_observability --test-name test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources --minimum-passed 1
           docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_runs_table_append_sink --minimum-passed 4
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.unit.observability.test_pyiceberg_declared_schema --minimum-passed 1
       - name: Assert the real-catalog contract preflight suite executed
         run: |
           if grep -Fq "PREFLIGHT_REAL_CATALOG_UNAVAILABLE" data/pytest-output.txt; then
@@ -206,7 +207,12 @@ jobs:
             grep -Fn "PREFLIGHT_REAL_CATALOG_UNAVAILABLE" data/pytest-output.txt || true
             exit 1
           fi
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_contract_preflight_real_catalog --minimum-passed 8
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_contract_preflight_real_catalog --minimum-passed 10
+      - name: Assert the contract enforcement suites executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.contracts.test_pre_write_gate --minimum-passed 13
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.contracts.test_malformed_rows --minimum-passed 9
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.contracts.test_evolution_matrix --minimum-passed 59
       - name: Assert the contracts bronze differential executed
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.contracts.test_bronze_unchanged_after_migration --minimum-passed 23
