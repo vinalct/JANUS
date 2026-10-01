@@ -1,0 +1,109 @@
+{
+  "environment": "local",
+  "paths": {
+    "bronze_dir": "<project-root>/data/bronze",
+    "iceberg_catalog_db": "<project-root>/data/metadata/iceberg-catalog/catalog.sqlite",
+    "iceberg_warehouse_dir": "<project-root>/data/bronze/iceberg",
+    "ivy_dir": "<project-root>/data/metadata/ivy",
+    "metadata_dir": "<project-root>/data/metadata",
+    "raw_dir": "<project-root>/data/raw",
+    "root_dir": "<project-root>/data",
+    "warehouse_dir": "<project-root>/data/metadata/spark-warehouse"
+  },
+  "planned_run": {
+    "contract": {
+      "id": "example.federal_open_data_example",
+      "path": "conf/contracts/example/federal_open_data_example.yaml",
+      "schema_version": "f096fef2b7e44dc938947ed54d5db03bde350612ed94052c0eab3175716e409d",
+      "status": "active",
+      "version": "1.0.1"
+    },
+    "execution": {
+      "checkpoint_field": "updated_at",
+      "checkpoint_strategy": "max_value",
+      "mode": "incremental"
+    },
+    "outputs": {
+      "bronze": {
+        "format": "iceberg",
+        "path": "data/bronze/example/federal_open_data_example"
+      },
+      "metadata": {
+        "format": "json",
+        "path": "data/metadata/example/federal_open_data_example"
+      },
+      "raw": {
+        "format": "json",
+        "path": "data/raw/example/federal_open_data_example"
+      }
+    },
+    "plan_notes": [
+      "strategy_family:api",
+      "strategy_variant:page_number_api",
+      "dispatch:api.page_number_api"
+    ],
+    "pre_run_metadata": {
+      "bronze_output_path": "data/bronze/example/federal_open_data_example",
+      "checkpoint_field": "updated_at",
+      "checkpoint_strategy": "max_value",
+      "dispatch_path": "api.page_number_api",
+      "environment": "local",
+      "extraction_mode": "incremental",
+      "metadata_output_path": "data/metadata/example/federal_open_data_example",
+      "project_root": "<project-root>",
+      "raw_output_path": "data/raw/example/federal_open_data_example",
+      "run_id": "run-20260409-demo",
+      "source_config_path": "<project-root>/conf/sources/example/example_source.yaml",
+      "source_id": "federal_open_data_example",
+      "source_name": "Federal Open Data Example Source",
+      "started_at": "2026-04-09T12:00:00+00:00",
+      "strategy_family": "api",
+      "strategy_variant": "page_number_api"
+    },
+    "run": {
+      "attributes": {
+        "source_id": "federal_open_data_example",
+        "source_type": "api",
+        "strategy": "api",
+        "strategy_variant": "page_number_api",
+        "trigger": "cli"
+      },
+      "environment": "local",
+      "run_id": "run-20260409-demo",
+      "started_at": "2026-04-09T12:00:00+00:00"
+    },
+    "source": {
+      "config_path": "<project-root>/conf/sources/example/example_source.yaml",
+      "hook_id": null,
+      "name": "Federal Open Data Example Source",
+      "source_id": "federal_open_data_example",
+      "tags": [
+        "example",
+        "contract"
+      ]
+    },
+    "strategy": {
+      "dispatch_path": "api.page_number_api",
+      "family": "api",
+      "hook_implementation": null,
+      "implementation": "ApiStrategy",
+      "variant": "page_number_api"
+    }
+  },
+  "project_root": "<project-root>",
+  "spark": {
+    "app_name": "janus-local",
+    "config": {
+      "spark.driver.bindAddress": "127.0.0.1",
+      "spark.driver.host": "127.0.0.1",
+      "spark.driver.maxResultSize": "2g",
+      "spark.driver.memory": "8g",
+      "spark.sql.adaptive.enabled": "true",
+      "spark.sql.files.maxPartitionBytes": "134217728",
+      "spark.sql.session.timeZone": "UTC",
+      "spark.sql.shuffle.partitions": "256",
+      "spark.ui.enabled": "false"
+    },
+    "master": "local[*]"
+  }
+}

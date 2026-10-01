@@ -1,0 +1,124 @@
+{
+  "config_versions": {
+    "federal_open_data_example": "79a9c6d67f52eee2f5cad61b573b1a83349f5a3d91dc7a1ee18dd9813b3ccf02"
+  },
+  "graph": {
+    "edges": []
+  },
+  "pipeline": {
+    "attempt": 1,
+    "ended_at": "<timestamp>",
+    "environment": "local",
+    "pipeline_run_id": "pipeline-local-<stamp>",
+    "planned_at": "<timestamp>",
+    "started_at": "<timestamp>",
+    "trigger": "run-all"
+  },
+  "schema_version": 1,
+  "selection": {
+    "included_upstream_ids": [],
+    "requested": {
+      "domains": [],
+      "tags": []
+    },
+    "root_ids": [
+      "federal_open_data_example"
+    ],
+    "source_ids": [
+      "federal_open_data_example"
+    ]
+  },
+  "sources": [
+    {
+      "attempt": 1,
+      "attempted": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "attempted": true,
+          "evidence": {
+            "error_type": "ContractPreflightError",
+            "failure_reason": "example.federal_open_data_example v1.0.1: preflight catalog_unavailable \u2014 ModuleNotFoundError",
+            "failure_stage": "contract_preflight",
+            "materialized_outputs": [],
+            "metadata_outputs": {
+              "checkpoint_history_path": null,
+              "checkpoint_state_path": null,
+              "lineage_path": "<project-root>/data/metadata/example/federal_open_data_example/lineage/pipeline-local-<stamp>-federal-open-data-example-a1-<digest>.json",
+              "run_metadata_path": "<project-root>/data/metadata/example/federal_open_data_example/runs/pipeline-local-<stamp>-federal-open-data-example-a1-<digest>.json",
+              "validation_report_path": "<project-root>/data/metadata/example/federal_open_data_example/validations/pipeline-local-<stamp>-federal-open-data-example-a1-<digest>.json"
+            },
+            "run_event_emission": {
+              "duration_seconds": <duration>,
+              "exception_type": "ModuleNotFoundError",
+              "lifecycle": "failed",
+              "openlineage": {
+                "outcome": "emitted",
+                "target": "<project-root>/data/metadata/lineage/openlineage/events-<date>.ndjson",
+                "transport": "file"
+              },
+              "outcome": "skipped",
+              "reason": "pyiceberg_or_pyarrow_unavailable",
+              "stage": "dependency_import",
+              "table_identifier": "metadata.runs"
+            },
+            "status": "failed",
+            "strategy_metadata": {},
+            "validation": {
+              "failed_checks": [],
+              "is_successful": true,
+              "summary": {
+                "failed": 0,
+                "passed": 2,
+                "skipped": 6
+              }
+            }
+          },
+          "failure": {
+            "error_type": "ContractPreflightError",
+            "phase": "execution",
+            "reason": "example.federal_open_data_example v1.0.1: preflight catalog_unavailable \u2014 ModuleNotFoundError"
+          },
+          "run_id": "pipeline-local-<stamp>-federal-open-data-example-a1-<digest>",
+          "source_id": "federal_open_data_example",
+          "status": "failed",
+          "timing": {
+            "duration_seconds": <duration>,
+            "ended_at": "<timestamp>",
+            "started_at": "<timestamp>"
+          }
+        }
+      ],
+      "config_version": "79a9c6d67f52eee2f5cad61b573b1a83349f5a3d91dc7a1ee18dd9813b3ccf02",
+      "failure": {
+        "error_type": "ContractPreflightError",
+        "phase": "execution",
+        "reason": "example.federal_open_data_example v1.0.1: preflight catalog_unavailable \u2014 ModuleNotFoundError"
+      },
+      "run_id": "pipeline-local-<stamp>-federal-open-data-example-a1-<digest>",
+      "selected_directly": true,
+      "source_id": "federal_open_data_example",
+      "status": "failed",
+      "timing": {
+        "duration_seconds": <duration>,
+        "ended_at": "<timestamp>",
+        "started_at": "<timestamp>"
+      },
+      "upstream_ids": []
+    }
+  ],
+  "summary_persistence": {
+    "path": "<project-root>/data/metadata/pipelines/pipeline-local-<stamp>/summary.json",
+    "status": "succeeded"
+  },
+  "totals": {
+    "attempted": 1,
+    "duration_seconds": <duration>,
+    "expanded": 1,
+    "failed": 1,
+    "selected": 1,
+    "skipped": 0,
+    "status": "failed",
+    "succeeded": 0
+  }
+}

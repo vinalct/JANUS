@@ -1,0 +1,116 @@
+{
+  "environment": "local",
+  "paths": {
+    "bronze_dir": "<project-root>/data/bronze",
+    "iceberg_catalog_db": "<project-root>/data/metadata/iceberg-catalog/catalog.sqlite",
+    "iceberg_warehouse_dir": "<project-root>/data/bronze/iceberg",
+    "ivy_dir": "<project-root>/data/metadata/ivy",
+    "metadata_dir": "<project-root>/data/metadata",
+    "raw_dir": "<project-root>/data/raw",
+    "root_dir": "<project-root>/data",
+    "warehouse_dir": "<project-root>/data/metadata/spark-warehouse"
+  },
+  "planned_run": {
+    "contract": {
+      "id": "estatisticas.pib_brasil",
+      "path": "conf/contracts/estatisticas/pib_brasil.yaml",
+      "schema_version": "7fbe6447a84752f883f9461be06fc390bf81395dee0c29995c4e3f3cbef634b8",
+      "status": "active",
+      "version": "1.0.1"
+    },
+    "execution": {
+      "checkpoint_field": "sidra_period_code",
+      "checkpoint_strategy": "max_value",
+      "mode": "incremental"
+    },
+    "outputs": {
+      "bronze": {
+        "format": "iceberg",
+        "path": "data/bronze/ibge/pib_brasil"
+      },
+      "metadata": {
+        "format": "json",
+        "path": "data/metadata/ibge/pib_brasil"
+      },
+      "raw": {
+        "format": "json",
+        "path": "data/raw/ibge/pib_brasil"
+      }
+    },
+    "plan_notes": [
+      "strategy_family:api",
+      "strategy_variant:date_window_api",
+      "hook:ibge.sidra_flat",
+      "dispatch:api.date_window_api"
+    ],
+    "pre_run_metadata": {
+      "bronze_output_path": "data/bronze/ibge/pib_brasil",
+      "checkpoint_field": "sidra_period_code",
+      "checkpoint_strategy": "max_value",
+      "dispatch_path": "api.date_window_api",
+      "environment": "local",
+      "extraction_mode": "incremental",
+      "hook_id": "ibge.sidra_flat",
+      "hook_implementation": "IbgeSidraFlatHook",
+      "metadata_output_path": "data/metadata/ibge/pib_brasil",
+      "project_root": "<project-root>",
+      "raw_output_path": "data/raw/ibge/pib_brasil",
+      "run_id": "run-local-ibge-pib-brasil-<stamp>",
+      "source_config_path": "<project-root>/conf/sources/ibge/sidra.yaml",
+      "source_id": "ibge_pib_brasil",
+      "source_name": "IBGE - PIB nacional a precos correntes",
+      "started_at": "<timestamp>",
+      "strategy_family": "api",
+      "strategy_variant": "date_window_api"
+    },
+    "run": {
+      "attributes": {
+        "source_hook": "ibge.sidra_flat",
+        "source_id": "ibge_pib_brasil",
+        "source_type": "api",
+        "strategy": "api",
+        "strategy_variant": "date_window_api",
+        "trigger": "cli"
+      },
+      "environment": "local",
+      "run_id": "run-local-ibge-pib-brasil-<stamp>",
+      "started_at": "<timestamp>"
+    },
+    "source": {
+      "config_path": "<project-root>/conf/sources/ibge/sidra.yaml",
+      "hook_id": "ibge.sidra_flat",
+      "name": "IBGE - PIB nacional a precos correntes",
+      "source_id": "ibge_pib_brasil",
+      "tags": [
+        "ibge",
+        "sidra",
+        "pib",
+        "api",
+        "federal"
+      ]
+    },
+    "strategy": {
+      "dispatch_path": "api.date_window_api",
+      "family": "api",
+      "hook_implementation": "IbgeSidraFlatHook",
+      "implementation": "ApiStrategy",
+      "variant": "date_window_api"
+    }
+  },
+  "project_root": "<project-root>",
+  "spark": {
+    "app_name": "janus-local",
+    "config": {
+      "spark.driver.bindAddress": "127.0.0.1",
+      "spark.driver.host": "127.0.0.1",
+      "spark.driver.maxResultSize": "2g",
+      "spark.driver.memory": "8g",
+      "spark.sql.adaptive.enabled": "true",
+      "spark.sql.files.maxPartitionBytes": "134217728",
+      "spark.sql.session.timeZone": "UTC",
+      "spark.sql.shuffle.partitions": "256",
+      "spark.ui.enabled": "false"
+    },
+    "master": "local[*]"
+  }
+}

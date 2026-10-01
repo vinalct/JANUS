@@ -1,0 +1,25 @@
+{
+  "environment": "cluster",
+  "paths": {
+    "bronze_dir": "<project-root>/data/bronze",
+    "iceberg_warehouse_dir": "s3://janus-bronze/warehouse",
+    "ivy_dir": "<project-root>/data/metadata/ivy",
+    "metadata_dir": "<project-root>/data/metadata",
+    "raw_dir": "<project-root>/data/raw",
+    "root_dir": "<project-root>/data",
+    "warehouse_dir": "<project-root>/data/metadata/spark-warehouse"
+  },
+  "project_root": "<project-root>",
+  "spark": {
+    "app_name": "janus-cluster",
+    "config": {
+      "spark.driver.bindAddress": "127.0.0.1",
+      "spark.driver.host": "127.0.0.1",
+      "spark.dynamicAllocation.enabled": "false",
+      "spark.sql.session.timeZone": "UTC",
+      "spark.sql.shuffle.partitions": "200",
+      "spark.ui.enabled": "false"
+    },
+    "master": "local[*]"
+  }
+}

@@ -1,0 +1,35 @@
+usage: janus run-all [-h] [--environment ENVIRONMENT]
+                     [--project-root PROJECT_ROOT] [--tag TAG |
+                     --domain DOMAIN] [--pipeline-run-id PIPELINE_RUN_ID]
+                     [--started-at STARTED_AT] [--resume]
+
+Run enabled sources once in deterministic dependency order. Filters select
+roots; required upstreams are included automatically and identified in the
+aggregate summary. A failed source skips only its dependents, while
+independent sources continue. This command does not schedule future runs.
+
+options:
+  -h, --help            show this help message and exit
+  --environment ENVIRONMENT
+                        Environment profile name under conf/environments
+                        without the .yaml suffix.
+  --project-root PROJECT_ROOT
+                        Project root used to resolve conf/ and data/ paths.
+                        Defaults to JANUS_PROJECT_ROOT, the current JANUS
+                        project, or the installed project.
+  --tag TAG             Select enabled roots carrying this tag; repeat for an
+                        any-match filter. Required upstreams need not carry
+                        the tag.
+  --domain DOMAIN       Select enabled roots in this domain; repeat for an
+                        any-match filter. Required upstreams may belong to
+                        another domain.
+  --pipeline-run-id PIPELINE_RUN_ID
+                        Optional identity for this batch. This is distinct
+                        from the single-source --run-id and must be new for
+                        each standalone run.
+  --started-at STARTED_AT
+                        Optional timezone-aware ISO-8601 timestamp used to
+                        make planning deterministic.
+  --resume              Resume each source's extraction progress when
+                        available. This does not mark an earlier pipeline
+                        successful or suppress required upstream execution.

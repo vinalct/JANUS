@@ -1,0 +1,27 @@
+usage: janus contract draft [-h] --source-id SOURCE_ID (--from-raw RUN_ID |
+                            --from-fixture PATH) [--out OUT]
+                            [--environment ENVIRONMENT]
+                            [--project-root PROJECT_ROOT] [--include-disabled]
+
+Infer one schema from saved raw artifacts or local fixtures and write a draft
+contract. This command does not extract data or write to raw or bronze.
+
+options:
+  -h, --help            show this help message and exit
+  --source-id SOURCE_ID
+                        Configured source to plan.
+  --from-raw RUN_ID     Read artifacts from this exact previous raw run.
+  --from-fixture PATH   Read a local fixture; repeat to combine pages or
+                        files.
+  --out OUT             Write the draft to a project-local path; an explicit
+                        path may be replaced.
+  --environment ENVIRONMENT
+                        Environment profile name under conf/environments
+                        without the .yaml suffix.
+  --project-root PROJECT_ROOT
+                        Project root used to resolve conf/ and data/ paths.
+  --include-disabled    Allow planning a configured source that is disabled.
+
+Inference reflects only the supplied artifacts. All-null fields and text
+sentinels such as 'N/A' can change inferred types; review a draft before
+activating it.
