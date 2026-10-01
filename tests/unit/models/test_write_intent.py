@@ -9,29 +9,52 @@ import pytest
 from janus.models import (
     BRONZE_WRITE_STRATEGIES,
     BronzeWriteIntent,
+    ContractProperty,
+    DataContract,
     ExecutionPlan,
     RunContext,
+    load_data_contract,
     resolve_bronze_write_intent,
 )
 from janus.models.write_intent import (
     NORMALIZATION_METADATA_COLUMNS as WRITE_INTENT_METADATA_COLUMNS,
 )
 from janus.normalizers.base import NORMALIZATION_METADATA_COLUMNS
+from janus.quality import MissingContractError
 from janus.registry import load_registry
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+HOSTILE_BASE = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "hostile" / "base.yaml"
+
+
+def _contract_keyed_on(primary_key: tuple[str, ...]) -> DataContract:
+    """The hostile ``base`` contract with exactly ``primary_key`` as its key columns."""
+    base = load_data_contract(HOSTILE_BASE)
+    properties = tuple(
+        replace(
+            prop,
+            required=prop.required or prop.name in primary_key,
+            primary_key=prop.name in primary_key,
+        )
+        for prop in base.schema.properties
+    ) + tuple(
+        ContractProperty(name, "string", "string", required=True, primary_key=True)
+        for name in primary_key
+        if name not in base.column_names
+    )
+    return replace(base, schema=replace(base.schema, properties=properties))
 
 
 def _plan_with(
     *,
     mode: str,
     write_mode: str,
-    unique_fields: tuple[str, ...] = (),
+    primary_key: tuple[str, ...] = (),
     partition_by: tuple[str, ...] = (),
     checkpoint_field: str | None = None,
     checkpoint_strategy: str = "none",
 ) -> ExecutionPlan:
-    """Build an execution plan whose contract facts drive the resolver, no Spark or YAML."""
+    """Build an execution plan whose config and contract facts drive the resolver."""
     source_config = load_registry(PROJECT_ROOT).get_source("federal_open_data_example")
     source_config = replace(
         source_config,
@@ -46,7 +69,6 @@ def _plan_with(
             write_mode=write_mode,
             partition_by=partition_by,
         ),
-        quality=replace(source_config.quality, unique_fields=unique_fields),
     )
     run_context = RunContext.create(
         run_id="run-write-intent-001",
@@ -54,14 +76,16 @@ def _plan_with(
         project_root=PROJECT_ROOT,
         started_at=datetime(2026, 7, 24, 12, 0, tzinfo=UTC),
     )
-    return ExecutionPlan.from_source_config(source_config, run_context)
+    return ExecutionPlan.from_source_config(
+        source_config, run_context, data_contract=_contract_keyed_on(primary_key)
+    )
 
 
 # --- 1. Resolution matrix -----------------------------------
 
 
 @pytest.mark.parametrize(
-    ("mode", "write_mode", "unique_fields", "partition_by", "checkpoint_field", "expected"),
+    ("mode", "write_mode", "primary_key", "partition_by", "checkpoint_field", "expected"),
     [
         ("full_refresh", "ignore", (), (), None, ("skip_if_exists", (), "ignore")),
         ("snapshot", "ignore", (), (), None, ("skip_if_exists", (), "ignore")),
@@ -99,7 +123,7 @@ def _plan_with(
 def test_resolution_matrix(
     mode: str,
     write_mode: str,
-    unique_fields: tuple[str, ...],
+    primary_key: tuple[str, ...],
     partition_by: tuple[str, ...],
     checkpoint_field: str | None,
     expected: tuple[str, tuple[str, ...], str],
@@ -108,7 +132,7 @@ def test_resolution_matrix(
     plan = _plan_with(
         mode=mode,
         write_mode=write_mode,
-        unique_fields=unique_fields,
+        primary_key=primary_key,
         partition_by=partition_by,
         checkpoint_field=checkpoint_field,
         checkpoint_strategy="max_value" if mode == "incremental" else "none",
@@ -122,24 +146,78 @@ def test_resolution_matrix(
     assert intent.configured_mode == write_mode
 
 
-def test_incremental_append_without_unique_fields_is_rejected() -> None:
+def test_incremental_append_without_a_primary_key_is_rejected() -> None:
     plan = _plan_with(
         mode="incremental",
         write_mode="append",
-        unique_fields=(),
+        primary_key=(),
         checkpoint_field="updated_at",
         checkpoint_strategy="max_value",
     )
 
-    with pytest.raises(ValueError, match=r"require quality\.unique_fields"):
+    with pytest.raises(ValueError, match=r"require a primaryKey in their data contract"):
         resolve_bronze_write_intent(plan)
+
+
+def test_incremental_append_without_a_contract_is_a_missing_contract() -> None:
+    plan = _plan_with(
+        mode="incremental",
+        write_mode="append",
+        primary_key=("id",),
+        checkpoint_field="updated_at",
+        checkpoint_strategy="max_value",
+    ).with_data_contract(None)
+
+    with pytest.raises(MissingContractError, match="federal_open_data_example"):
+        resolve_bronze_write_intent(plan)
+
+
+def test_the_merge_keys_are_the_primary_key_whatever_quality_unique_fields_says() -> None:
+    plan = _plan_with(
+        mode="incremental",
+        write_mode="append",
+        primary_key=("event_id",),
+        checkpoint_field="updated_at",
+        checkpoint_strategy="max_value",
+    )
+    assert plan.source_config.quality.unique_fields == ("id",)
+
+    assert resolve_bronze_write_intent(plan).merge_keys == ("event_id",)
+
+
+@pytest.mark.parametrize(
+    ("mode", "write_mode"),
+    [
+        ("full_refresh", "overwrite"),
+        ("full_refresh", "append"),
+        ("full_refresh", "ignore"),
+        ("snapshot", "overwrite"),
+        ("snapshot", "append"),
+        ("incremental", "overwrite"),
+        ("incremental", "ignore"),
+    ],
+)
+def test_a_write_that_needs_no_key_resolves_the_same_without_a_contract(
+    mode: str, write_mode: str
+) -> None:
+    keyed = _plan_with(
+        mode=mode,
+        write_mode=write_mode,
+        primary_key=("id",),
+        checkpoint_field="updated_at" if mode == "incremental" else None,
+        checkpoint_strategy="max_value" if mode == "incremental" else "none",
+    )
+
+    assert resolve_bronze_write_intent(keyed.with_data_contract(None)) == (
+        resolve_bronze_write_intent(keyed)
+    )
 
 
 def test_incremental_overwrite_reason_names_the_contradiction() -> None:
     plan = _plan_with(
         mode="incremental",
         write_mode="overwrite",
-        unique_fields=("id",),
+        primary_key=("id",),
         checkpoint_field="updated_at",
         checkpoint_strategy="max_value",
     )
@@ -184,7 +262,8 @@ def test_no_current_source_resolves_to_partition_overwrite() -> None:
 
     Every source partitions bronze on `ingestion_date` (a normalization run stamp), so the
     alignment predicate returns `False` everywhere and `merge_on_keys` is the effective
-    default for incremental sources.
+    default for incremental sources. Each plan carries its registry contract, as a planned
+    run does, because the merge keys are the contract's ``primaryKey``.
     """
     registry = load_registry(PROJECT_ROOT)
     incremental_checked = 0
@@ -195,7 +274,10 @@ def test_no_current_source_resolves_to_partition_overwrite() -> None:
             project_root=PROJECT_ROOT,
             started_at=datetime(2026, 7, 24, 12, 0, tzinfo=UTC),
         )
-        plan = ExecutionPlan.from_source_config(source_config, run_context)
+        contract = registry.contract_for(source_config.source_id)
+        plan = ExecutionPlan.from_source_config(
+            source_config, run_context, data_contract=contract
+        )
 
         intent = resolve_bronze_write_intent(plan)
 
@@ -203,6 +285,8 @@ def test_no_current_source_resolves_to_partition_overwrite() -> None:
         if source_config.extraction.mode == "incremental":
             assert intent.strategy in {"merge_on_keys", "replace_table"}, source_config.source_id
             if intent.is_upsert:
+                assert contract is not None
+                assert intent.merge_keys == contract.primary_key, source_config.source_id
                 incremental_checked += 1
 
     assert incremental_checked > 0, "expected at least one incremental upsert source"
@@ -212,7 +296,7 @@ def test_no_current_source_resolves_to_partition_overwrite() -> None:
 
 
 @pytest.mark.parametrize(
-    ("partition_by", "unique_fields", "checkpoint_field", "expected_strategy"),
+    ("partition_by", "primary_key", "checkpoint_field", "expected_strategy"),
     [
         (("ingestion_date",), ("id",), "updated_at", "merge_on_keys"),
         ((), ("id",), "updated_at", "merge_on_keys"),
@@ -222,14 +306,14 @@ def test_no_current_source_resolves_to_partition_overwrite() -> None:
 )
 def test_alignment_predicate_selects_the_fast_path_only_when_bounded(
     partition_by: tuple[str, ...],
-    unique_fields: tuple[str, ...],
+    primary_key: tuple[str, ...],
     checkpoint_field: str | None,
     expected_strategy: str,
 ) -> None:
     plan = _plan_with(
         mode="incremental",
         write_mode="append",
-        unique_fields=unique_fields,
+        primary_key=primary_key,
         partition_by=partition_by,
         checkpoint_field=checkpoint_field,
         checkpoint_strategy="max_value",

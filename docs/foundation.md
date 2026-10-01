@@ -682,7 +682,6 @@ quality:
     - qntPessoas
     - qntVinculos
     - codOrgaoExercicioSiape
-  allow_schema_evolution: true
 ```
 
 ### Why YAML matters

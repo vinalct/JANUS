@@ -202,3 +202,32 @@ def test_every_contract_is_referenced() -> None:
     )
     referenced = {path for _, path in _declared_contracts()}
     assert files == referenced, f"orphan contracts: {sorted(files - referenced)}"
+
+
+def test_legacy_schema_runtime_is_absent() -> None:
+    """AC-6: the order-18 sweep asserts absence in code as well as in config."""
+    package = PROJECT_ROOT / "src" / "janus"
+    assert not (package / "models" / "data_contracts" / "legacy.py").exists()
+    modules = sorted(package.rglob("*.py"))
+    swept = {path.relative_to(package).as_posix() for path in modules}
+    former_homes = {"models/config/constants.py", "schema_contracts.py", "registry/contracts.py"}
+    assert former_homes <= swept, (
+        f"the retired-runtime sweep did not reach {sorted(former_homes - swept)}"
+    )
+    forbidden = (
+        "SUPPORTED_SCHEMA_MODES",
+        "DEPRECATED_SCHEMA_MODES",
+        "SCHEMA_DECLARATION_DEPRECATION_MESSAGE",
+        "resolve_schema_path_for_plan",
+        "declares_legacy_file",
+        "contract_from_legacy_schema_file",
+        "contract_from_legacy_schema_bytes",
+        "legacy_contract_id",
+    )
+    offenders = [
+        f"{path.relative_to(PROJECT_ROOT)}: {name}"
+        for path in modules
+        for name in forbidden
+        if name in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, "retired runtime path remains:\n" + "\n".join(offenders)

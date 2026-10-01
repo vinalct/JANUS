@@ -23,7 +23,7 @@
         }
       ],
       "checkpoint_strategy": "none",
-      "config_version": "09d606867709e5bbd0d100cbdb59e1ea694dabfaa26817c2cae68de4936b85f4",
+      "config_version": "5d88b9f180ae00a4e8c04be6cd0d2414ea9161b635278fcf74c56320e7ff2c28",
       "configured_outputs": [
         {
           "format": "json",
@@ -116,6 +116,7 @@
       ],
       "records_extracted": 1,
       "run_attributes": {
+        "contract_preflight_outcome": "catalog_unavailable",
         "source_id": "C",
         "source_type": "api",
         "strategy": "api",
@@ -211,6 +212,7 @@
       ],
       "records_extracted": 1,
       "run_attributes": {
+        "contract_preflight_outcome": "catalog_unavailable",
         "source_id": "C",
         "source_type": "api",
         "strategy": "api",
@@ -241,6 +243,8 @@
         },
         {
           "details": {
+            "compatibility": "additive",
+            "enforcement": "lenient",
             "expected_field_count": "1",
             "schema_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
           },
@@ -297,7 +301,8 @@
       "emitted_at": "2026-09-13T12:00:05+00:00",
       "environment": "local",
       "metadata": {
-        "allow_schema_evolution": "True",
+        "compatibility": "additive",
+        "enforcement": "lenient",
         "schema_expectation_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
       },
       "run_id": "order14-independent",

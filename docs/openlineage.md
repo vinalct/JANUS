@@ -61,6 +61,21 @@ the checkpoint decision, quality summary, metadata-zone evidence paths, start ti
 declared input provenance. The mapper's module-level field table is intentionally exhaustive;
 a new `LineageRecord` field fails the test suite until its mapping decision is recorded.
 
+Four nullable `janusRun` fields carry what the data contract decided. None is in the
+schema's `required` list, so the facet schema's `$id` is unchanged: adding optional properties
+is compatible for existing consumers.
+
+| Field | Type | Value |
+|---|---|---|
+| `failure_stage` | string or `null` | `contract_check`, `malformed_rows`, `schema_evolution` or `contract_preflight` when a contract enforcement error failed the run; `null` otherwise. Mapped from the lineage record. Not a `metadata.runs` column; query `error_type` there. |
+| `contract_preflight_outcome` | string or `null` | The execution preflight's outcome: `ok`, `will_evolve`, `refused`, `table_missing` or `catalog_unavailable`. |
+| `schema_evolution` | string or `null` | What the writer did to the bronze table: `none`, `added:…`, `promoted:…`, both joined by `;`, or `breaking_replace`; `null` when no bronze output was written. |
+| `malformed_rows` | integer or `null` | Rows Spark could not parse into the contract's types, summed across batches; `null` when not counted. |
+
+The last three come from the run's `metadata.runs` projection, so START events carry `null`
+for them, like `checkpoint_decision`. See [Data contracts](data-contracts.md#reading-a-failed-preflight-or-malformed_rows-check)
+for how to read them.
+
 The OpenLineage parent facet is not emitted. `pipeline_run_id` is available, but JANUS does
 not persist the parent job namespace and name; inventing them would produce a false parent.
 Pipeline correlation instead remains explicit in `janusRun.run_attributes`.

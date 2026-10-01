@@ -24,7 +24,6 @@ PUBLIC_NAMES: tuple[str, ...] = (
     "DEFAULT_PAST_END_STATUS_CODES",
     "DEFAULT_RETRYABLE_STATUS_CODES",
     "DEFAULT_VALIDATION_POLICY",
-    "DEPRECATED_SCHEMA_MODES",
     "DateWindowRequestInputsConfig",
     "ExtractionConfig",
     "Final",
@@ -43,7 +42,6 @@ PUBLIC_NAMES: tuple[str, ...] = (
     "RateLimitConfig",
     "RequestInputsConfig",
     "RetryConfig",
-    "SCHEMA_DECLARATION_DEPRECATION_MESSAGE",
     "STRATEGY_REGISTRY",
     "SUPPORTED_AUTH_TYPES",
     "SUPPORTED_BACKOFF_STRATEGIES",
@@ -57,7 +55,6 @@ PUBLIC_NAMES: tuple[str, ...] = (
     "SUPPORTED_PARAMETER_BINDING_WINDOW_SOURCES",
     "SUPPORTED_REQUEST_INPUT_STEPS",
     "SUPPORTED_REQUEST_INPUT_TYPES",
-    "SUPPORTED_SCHEMA_MODES",
     "SUPPORTED_SOURCE_TYPES",
     "SUPPORTED_STRATEGIES",
     "SUPPORTED_STRATEGY_VARIANTS",
@@ -114,7 +111,6 @@ PRIVATE_NAMES: tuple[str, ...] = (
     "_resolve_past_end_status_codes",
     "_validate_concurrency_contract",
     "_validate_dotted_path",
-    "_validate_incremental_contract",
     "_validate_parameter_binding_source",
 )
 
@@ -402,7 +398,7 @@ def test_from_mapping_is_still_the_entry_point():
     assert config.access.pagination.past_end_status_codes == (404, 416)
     assert config.extraction.retry.max_attempts == 3
     assert config.outputs.bronze.format == "iceberg"
-    assert config.quality.allow_schema_evolution is True
+    assert config.quality.required_fields == ()
 
 
 def test_a_config_with_problems_in_four_blocks_still_reports_all_four():
@@ -423,7 +419,7 @@ def test_a_config_with_problems_in_four_blocks_still_reports_all_four():
         "extraction.checkpoint_field: is required when extraction.mode is 'incremental'"
         in message
     )
-    assert "schema.path: is required when schema.mode is 'explicit'" in message
+    assert "schema.mode: is no longer supported: declare schema.contract:" in message
 
 
 def test_importing_a_builder_by_its_new_path_works():
@@ -474,7 +470,7 @@ def _valid_source_mapping() -> dict[str, Any]:
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
         "spark": {"input_format": "json", "write_mode": "append"},
         "outputs": {
             "raw": {"path": "data/raw/example/config_package_source", "format": "json"},
@@ -487,5 +483,5 @@ def _valid_source_mapping() -> dict[str, Any]:
                 "format": "json",
             },
         },
-        "quality": {"allow_schema_evolution": True},
+        "quality": {},
     }

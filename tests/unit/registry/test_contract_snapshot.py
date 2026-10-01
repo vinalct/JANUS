@@ -1,9 +1,7 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,23 +14,10 @@ from test_source_registry import (
     _valid_source_yaml,
 )
 
-from janus.models.config.policy import DEFAULT_VALIDATION_POLICY
-from janus.models.data_contracts import DataContract
 from janus.models.source_config import SourceConfigValidationError
 from janus.planner import Planner, PlanningRequest
 from janus.registry import load_registry
 from tests.support.contracts import DECLARED_CONTRACT_PATH, minimal_contract_yaml
-
-LEGACY_POLICY = replace(DEFAULT_VALIDATION_POLICY, require_active_contract=False)
-
-LEGACY_SCHEMA_PATH = "conf/schemas/example/legacy_schema.json"
-LEGACY_SCHEMA = {
-    "type": "struct",
-    "fields": [
-        {"name": "id", "type": "string", "nullable": False, "metadata": {}},
-        {"name": "amount", "type": "long", "nullable": True, "metadata": {}},
-    ],
-}
 
 
 def _declaring(source_id: str, schema_block: str, **kwargs: object) -> str:
@@ -49,13 +34,6 @@ def _contract_yaml(contract_id: str, *, status: str = "active") -> str:
         .replace("id: example.minimal", f"id: {contract_id}")
         .replace("status: active", f"status: {status}")
     )
-
-
-def _write_legacy_schema(project_root: Path) -> Path:
-    path = project_root / LEGACY_SCHEMA_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(LEGACY_SCHEMA), encoding="utf-8")
-    return path
 
 
 # ── the snapshot ──────────────────────────────────────────────────────────────
@@ -79,84 +57,6 @@ def test_two_entries_sharing_one_contract_file_share_one_object(tmp_path: Path) 
     assert registry.contract_for("first").schema_version == (
         registry.contract_for("second").schema_version
     )
-
-
-def test_a_legacy_entry_yields_a_synthetic_draft_contract(tmp_path: Path) -> None:
-    project_root = _create_project(
-        tmp_path,
-        {
-            "legacy.yaml": _declaring(
-                "legacy_source",
-                f"schema:\n  mode: explicit\n  path: {LEGACY_SCHEMA_PATH}\n",
-            )
-        },
-    )
-    _write_legacy_schema(project_root)
-
-    with pytest.warns(DeprecationWarning):
-        registry = load_registry(project_root, policy=LEGACY_POLICY)
-
-    contract = registry.contract_for("legacy_source")
-    assert contract.id == f"legacy:{LEGACY_SCHEMA_PATH}"
-    assert contract.status == "draft"
-    assert contract.version == "0.0.0"
-    assert contract.schema.name == "bronze.example__legacy_source"
-    assert [
-        (prop.name, prop.physical_type, prop.required)
-        for prop in contract.schema.properties
-    ] == [("id", "string", True), ("amount", "long", False)]
-
-
-def test_two_legacy_entries_sharing_one_file_get_their_own_bronze_table(
-    tmp_path: Path,
-) -> None:
-    """The synthetic schema is named after the entry; the digest still names the file."""
-    project_root = _create_project(
-        tmp_path,
-        {
-            "legacy.yaml": _grouped_sources_yaml(
-                _declaring(
-                    "legacy_first",
-                    f"schema:\n  mode: explicit\n  path: {LEGACY_SCHEMA_PATH}\n",
-                ),
-                _declaring(
-                    "legacy_second",
-                    f"schema:\n  mode: explicit\n  path: {LEGACY_SCHEMA_PATH}\n",
-                ),
-            )
-        },
-    )
-    _write_legacy_schema(project_root)
-
-    with pytest.warns(DeprecationWarning):
-        registry = load_registry(project_root, policy=LEGACY_POLICY)
-
-    first = registry.contract_for("legacy_first")
-    second = registry.contract_for("legacy_second")
-    assert first is not second
-    assert first.schema_version == second.schema_version
-    assert first.schema.name == "bronze.example__legacy_first"
-    assert second.schema.name == "bronze.example__legacy_second"
-
-
-def test_an_inferred_entry_contributes_no_contract(tmp_path: Path) -> None:
-    """``infer`` is still a declaration this order; a stand-in would be indistinguishable."""
-    project_root = _create_project(
-        tmp_path,
-        {
-            "sources.yaml": _grouped_sources_yaml(
-                _declaring("inferred", "schema:\n  mode: infer\n"),
-                _valid_source_yaml("declared", enabled=True),
-            )
-        },
-    )
-
-    with pytest.warns(DeprecationWarning):
-        registry = load_registry(project_root, policy=LEGACY_POLICY)
-
-    assert registry.contract_for("inferred") is None
-    assert "inferred" not in registry.contracts
-    assert isinstance(registry.contract_for("declared"), DataContract)
 
 
 def test_the_snapshot_is_immutable_in_practice(tmp_path: Path) -> None:
@@ -203,52 +103,6 @@ def test_a_shared_contract_file_is_read_exactly_once_per_load(
     load_registry(project_root)
 
     assert counted_reads.count("minimal_contract.yaml") == 1
-
-
-def test_a_shared_legacy_file_is_read_exactly_once_per_load(
-    tmp_path: Path, counted_reads: list[str]
-) -> None:
-    """Both entries need their own synthetic contract; neither needs a second read."""
-    project_root = _create_project(
-        tmp_path,
-        {
-            "legacy.yaml": _grouped_sources_yaml(
-                _declaring(
-                    "legacy_first",
-                    f"schema:\n  mode: explicit\n  path: {LEGACY_SCHEMA_PATH}\n",
-                ),
-                _declaring(
-                    "legacy_second",
-                    f"schema:\n  mode: explicit\n  path: {LEGACY_SCHEMA_PATH}\n",
-                ),
-            )
-        },
-    )
-    _write_legacy_schema(project_root)
-    counted_reads.clear()
-
-    with pytest.warns(DeprecationWarning):
-        load_registry(project_root, policy=LEGACY_POLICY)
-
-    assert counted_reads.count("legacy_schema.json") == 1
-
-
-def test_deprecations_are_warned_once_per_config_path(tmp_path: Path) -> None:
-    project_root = _create_project(
-        tmp_path,
-        {
-            "legacy.yaml": _grouped_sources_yaml(
-                _declaring("legacy_first", "schema:\n  mode: infer\n"),
-                _declaring("legacy_second", "schema:\n  mode: infer\n"),
-            ),
-            "other.yaml": _declaring("legacy_other", "schema:\n  mode: infer\n"),
-        },
-    )
-
-    with pytest.warns(DeprecationWarning) as records:
-        load_registry(project_root, policy=LEGACY_POLICY)
-
-    assert len(records) == 2
 
 
 # ── the four-step search ──────────────────────────────────────────────────────
@@ -322,7 +176,7 @@ def test_nothing_found_is_reported_against_the_runtime_path(tmp_path: Path) -> N
     assert "conf/contracts/example/absent.yaml" in issue.message
     assert "the file does not exist" in issue.message
     assert str(project_root / "conf" / "contracts" / "example" / "absent.yaml") in issue.message
-    assert exc_info.value.issues[1].message.endswith("(no contract declared)")
+    assert "reviewed contract (order-19)" in exc_info.value.issues[1].message
 
 
 # ── failures ──────────────────────────────────────────────────────────────────
@@ -349,7 +203,7 @@ def test_a_malformed_contract_carries_the_loaders_issues(tmp_path: Path) -> None
     assert "could not load" in message
     assert "id: is required" in message
     assert "schema: is required" in message
-    assert exc_info.value.issues[1].message.endswith("(no contract declared)")
+    assert "reviewed contract (order-19)" in exc_info.value.issues[1].message
 
 
 def test_two_sources_with_two_broken_contracts_raise_once_listing_both(
@@ -380,33 +234,6 @@ def test_two_sources_with_two_broken_contracts_raise_once_listing_both(
     ]
     assert "absent_a.yaml" in str(exc_info.value)
     assert "absent_b.yaml" in str(exc_info.value)
-
-
-def test_a_broken_legacy_file_is_reported_under_the_field_it_declared(
-    tmp_path: Path,
-) -> None:
-    project_root = _create_project(
-        tmp_path,
-        {
-            "legacy.yaml": _declaring(
-                "legacy_source",
-                f"schema:\n  mode: explicit\n  path: {LEGACY_SCHEMA_PATH}\n",
-            )
-        },
-    )
-    path = project_root / LEGACY_SCHEMA_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{not json", encoding="utf-8")
-
-    with pytest.raises(SourceConfigValidationError) as exc_info:
-        load_registry(project_root)
-
-    assert [issue.path for issue in exc_info.value.issues] == [
-        "legacy_source.schema.path",
-        "schema.contract",
-    ]
-    assert "must be valid JSON" in exc_info.value.issues[0].message
-    assert exc_info.value.issues[1].message.endswith("(no contract declared)")
 
 
 # ── plan carriage ─────────────────────────────────────────────────────────────
@@ -449,25 +276,3 @@ def test_the_planning_summary_describes_the_contract(tmp_path: Path) -> None:
         "schema_version": registry.contract_for("summarized").schema_version,
         "path": DECLARED_CONTRACT_PATH,
     }
-
-
-def test_the_planning_summary_carries_a_null_contract_for_an_inferred_source(
-    tmp_path: Path,
-) -> None:
-    """The key is always present: a key whose presence depends on config is harder to query."""
-    project_root = _create_project(
-        tmp_path, {"example/source.yaml": _declaring("inferred", "schema:\n  mode: infer\n")}
-    )
-    with pytest.warns(DeprecationWarning):
-        registry = load_registry(project_root, policy=LEGACY_POLICY)
-
-    planned = Planner().plan(
-        PlanningRequest.create(
-            source_id="inferred", environment="local", project_root=project_root
-        ),
-        registry=registry,
-    )
-
-    summary = planned.to_summary()
-    assert "contract" in summary
-    assert summary["contract"] is None

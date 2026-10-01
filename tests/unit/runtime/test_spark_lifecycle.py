@@ -123,6 +123,22 @@ def test_wrapping_returns_the_external_session_without_building_one():
     assert provider.get() is session
 
 
+def test_wrapping_preserves_catalog_paths_without_acquiring_the_session(tmp_path):
+    session = StubSession()
+    paths = {"iceberg_warehouse_dir": tmp_path / "warehouse"}
+    provider = SparkSessionProvider.wrapping(session, resolved_paths=paths)
+
+    paths.clear()
+    assert provider.resolved_paths == {"iceberg_warehouse_dir": tmp_path / "warehouse"}
+    provider.resolved_paths.clear()
+    assert provider.resolved_paths == {"iceberg_warehouse_dir": tmp_path / "warehouse"}
+    assert provider.was_started is False
+    assert provider.session_info is None
+    provider.stop()
+    assert session.stop_calls == 0
+    assert provider.get() is session
+
+
 def test_wrapping_never_stops_the_session_it_does_not_own():
     session = StubSession()
     provider = SparkSessionProvider.wrapping(session)

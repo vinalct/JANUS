@@ -75,4 +75,3 @@ quality:
     - cnpj_basico
   unique_fields:
     - cnpj_basico
-  allow_schema_evolution: false

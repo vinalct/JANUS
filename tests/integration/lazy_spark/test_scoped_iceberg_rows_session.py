@@ -20,6 +20,7 @@ import pytest
 import yaml
 
 from janus.models import RunContext, SourceConfig
+from janus.models.data_contracts import load_data_contract
 from janus.planner import PlannedRun
 from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.strategies.api import ApiResponse, ApiStrategy
@@ -27,6 +28,9 @@ from janus.utils.storage import StorageLayout
 from tests.support.spark_sessions import build_iceberg_session, require_iceberg_runtime
 
 SOURCE_ID = "lazy_spark_iceberg_rows_source"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# The contract the materializer checks every batch against; the pages' own shape.
+CONTRACT_PATH = "tests/fixtures/contracts/lifecycle/scoped_iceberg_rows_session.yaml"
 UPSTREAM_NAMESPACE = "bronze_test"
 UPSTREAM_TABLE = "upstream_ids"
 # The lookup table is seeded straight into the catalog below: this single-source fixture
@@ -138,7 +142,9 @@ def test_iceberg_rows_run_uses_a_scoped_lookup_session_then_a_later_materialize_
         project_root=tmp_path,
         started_at=datetime(2026, 7, 6, 11, 0, tzinfo=UTC),
     )
-    plan = strategy.plan(_source_config(tmp_path), run_context)
+    plan = strategy.plan(_source_config(tmp_path), run_context).with_data_contract(
+        load_data_contract(PROJECT_ROOT / CONTRACT_PATH)
+    )
     planned_run = PlannedRun(plan=plan, strategy=strategy)
 
     executed = SourceExecutor().execute(planned_run, provider, ENVIRONMENT_CONFIG)
@@ -258,7 +264,7 @@ def _source_config_payload() -> dict[str, Any]:
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": CONTRACT_PATH},
         "spark": {
             "input_format": "json",
             "write_mode": "append",
@@ -268,5 +274,5 @@ def _source_config_payload() -> dict[str, Any]:
             "bronze": {"path": f"data/bronze/example/{SOURCE_ID}", "format": "iceberg"},
             "metadata": {"path": f"data/metadata/example/{SOURCE_ID}", "format": "json"},
         },
-        "quality": {"allow_schema_evolution": True},
+        "quality": {},
     }

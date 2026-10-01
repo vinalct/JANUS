@@ -15,8 +15,19 @@ from janus.observability import (
     wire_run_event_emitter,
 )
 from janus.planner import PlannedRun
-from janus.quality import PersistedValidationReport, QualityGate, ValidationReportStore
+from janus.quality import (
+    ContractEnforcementError,
+    PersistedValidationReport,
+    QualityGate,
+    ValidationReportStore,
+)
 from janus.readers import SparkDatasetReader
+from janus.runtime.contract_preflight import (
+    LiveTable,
+    enforce_preflight,
+    load_live_table,
+    start_observed_preflight,
+)
 from janus.runtime.materialize import (
     BronzeMaterializer,
     _bind_execution_logger,
@@ -26,11 +37,10 @@ from janus.runtime.materialize import (
     _log_info,
     _quality_failure_message,
     _raw_write_results,
-    read_committed_bronze,
 )
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.utils.logging import StructuredLogger
-from janus.utils.storage import StorageLayout
+from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SparkDatasetWriter
 
 
@@ -49,6 +59,7 @@ class ExecutedRun:
     failure_reason: str | None = None
     error_type: str | None = None
     run_event_emission: RunEmissionResult | None = None
+    failure_stage: str | None = None
 
     @property
     def is_successful(self) -> bool:
@@ -119,6 +130,8 @@ class ExecutedRun:
             summary["failure_reason"] = self.failure_reason
         if self.error_type is not None:
             summary["error_type"] = self.error_type
+        if self.failure_stage is not None:
+            summary["failure_stage"] = self.failure_stage
         if self.run_event_emission is not None:
             summary["run_event_emission"] = self.run_event_emission.to_summary()
 
@@ -137,7 +150,9 @@ class SourceExecutor:
         default_factory=lambda: _default_storage_layout
     )
 
-    def execute(
+    preflight_loader: Callable[..., LiveTable | None] = load_live_table
+
+    def execute( 
         self,
         planned_run: PlannedRun,
         spark_provider: SparkSessionProvider,
@@ -172,8 +187,28 @@ class SourceExecutor:
                     metadata_output_path=plan.metadata_output.path,
                 )
 
-                observer.start_run(plan)
-                _log_info(logger, "run_observation_started")
+                runtime_planned_run, preflight = start_observed_preflight(
+                    runtime_planned_run,
+                    observer,
+                    environment_config,
+                    spark_provider.resolved_paths,
+                    identifier=bronze_table_identifier(
+                        plan.bronze_output.path,
+                        fallback_name=plan.source.source_id,
+                        namespace=plan.bronze_output.namespace,
+                        table_name=plan.bronze_output.table_name,
+                    ),
+                    logger=logger,
+                    loader=self.preflight_loader,
+                )
+                plan = runtime_planned_run.plan
+                enforce_preflight(
+                    preflight,
+                    enforcement=(
+                        plan.data_contract.janus.enforcement if plan.data_contract else "strict"
+                    ),
+                    logger=logger,
+                )
 
                 _log_info(
                     logger,
@@ -217,29 +252,19 @@ class SourceExecutor:
                     is_empty=handoff.is_empty,
                 )
 
-                normalized_dataframe = None
-                bronze_dataframe = None
-                run_keys = None
-                if not handoff.is_empty:
-                    materializer = BronzeMaterializer(
-                        reader=self.reader,
-                        normalizer=self.normalizer,
-                        writer_factory=self.writer_factory,
-                    )
-                    bronze_results, normalized_dataframe, run_keys = materializer.materialize(
-                        runtime_planned_run,
-                        plan,
-                        spark_provider.get(),
-                        handoff,
-                        storage_layout,
-                        logger,
-                    )
-                    write_results = raw_write_results + bronze_results
-                    # Read the committed table for the bronze uniqueness oracle while the
-                    # session is still live — this is not a new lifetime.
-                    bronze_dataframe = read_committed_bronze(spark_provider.get(), bronze_results)
-                else:
-                    _log_info(logger, "spark_session_skipped")
+                materialized = BronzeMaterializer(
+                    reader=self.reader,
+                    normalizer=self.normalizer,
+                    writer_factory=self.writer_factory,
+                ).materialize_handoff(
+                    runtime_planned_run,
+                    plan,
+                    spark_provider,
+                    handoff,
+                    storage_layout,
+                    logger,
+                )
+                write_results = raw_write_results + materialized.bronze_results
 
                 strategy_metadata = dict(
                     planned_run.strategy.emit_metadata(
@@ -258,10 +283,11 @@ class SourceExecutor:
                 _log_info(logger, "quality_validation_started")
                 validation_report = self.quality_gate.validate_and_store(
                     plan,
-                    dataframe=normalized_dataframe,
+                    dataframe=materialized.normalized_dataframe,
                     write_results=write_results,
-                    bronze_dataframe=bronze_dataframe,
-                    run_keys=run_keys,
+                    bronze_dataframe=materialized.bronze_dataframe,
+                    run_keys=materialized.run_keys,
+                    pre_write_evidence=materialized.pre_write_evidence,
                     raise_on_failure=False,
                 )
                 _log_info(
@@ -331,6 +357,45 @@ class SourceExecutor:
                     strategy_metadata=strategy_metadata,
                     run_event_emission=latest_run_emission(observer),
                 )
+            except ContractEnforcementError as exc:
+                # The refused batch committed nothing; the gate reports the same result, over the
+                # raw outputs and any batch committed before it, then the session is released.
+                write_results = write_results + exc.committed_results
+                validation_report = self.quality_gate.validate_and_store(
+                    plan,
+                    write_results=write_results,
+                    pre_write_evidence=exc.evidence,
+                    raise_on_failure=False,
+                )
+                spark_provider.stop()
+                persisted = observer.record_failure(
+                    plan,
+                    exc,
+                    extraction_result,
+                    write_results,
+                    strategy_metadata=strategy_metadata,
+                    validation_report=validation_report,
+                )
+                _log_error(
+                    logger,
+                    "source_execution_failed",
+                    failure_reason=str(exc),
+                    error_type=type(exc).__name__,
+                    failure_stage=exc.failure_stage,
+                )
+                return _build_executed_run(
+                    runtime_planned_run,
+                    status="failed",
+                    persisted=persisted,
+                    extraction_result=extraction_result,
+                    write_results=write_results,
+                    validation_report=validation_report,
+                    strategy_metadata=strategy_metadata,
+                    run_event_emission=latest_run_emission(observer),
+                    failure_reason=str(exc),
+                    error_type=type(exc).__name__,
+                    failure_stage=exc.failure_stage,
+                )
             finally:
                 # Idempotent, so the release above is not repeated; this guarantees one
                 # on the paths that bypassed it — extraction, materialization
@@ -361,6 +426,7 @@ class SourceExecutor:
                 run_event_emission=latest_run_emission(observer),
                 failure_reason=str(exc),
                 error_type=type(exc).__name__,
+                failure_stage=getattr(exc, "failure_stage", None),
             )
 
 
@@ -429,6 +495,7 @@ def _build_executed_run(
     run_event_emission: RunEmissionResult | None,
     failure_reason: str | None = None,
     error_type: str | None = None,
+    failure_stage: str | None = None,
 ) -> ExecutedRun:
     checkpoint_result = getattr(persisted, "checkpoint_result", None)
     checkpoint_state_path = None
@@ -451,4 +518,5 @@ def _build_executed_run(
         checkpoint_history_path=checkpoint_history_path,
         failure_reason=failure_reason,
         error_type=error_type,
+        failure_stage=failure_stage,
     )

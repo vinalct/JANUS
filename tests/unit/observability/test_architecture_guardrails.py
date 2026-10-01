@@ -543,6 +543,16 @@ def test_observability_uses_only_the_shared_catalog_derivations() -> None:
     )
 
 
+
+def test_execution_preflight_uses_the_shared_catalog_derivations() -> None:
+    path = PACKAGE_ROOT / "runtime" / "contract_preflight.py"
+    assert path.is_file(), "catalog sweep missed the execution preflight"
+    source = path.read_text(encoding="utf-8")
+    assert _catalog_boundary_findings(source) == ()
+    calls = {name.rsplit(".", 1)[-1] for _, name in _call_names(source)}
+    assert {"derive_pyiceberg_catalog_name", "derive_pyiceberg_catalog_properties"} <= calls
+
+
 def test_catalog_detector_rejects_a_second_derivation_and_accepts_shared_helpers() -> None:
     violation = (
         "def connect(config):\n"

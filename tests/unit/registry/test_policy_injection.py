@@ -17,7 +17,7 @@ from test_source_registry import (
     _valid_source_yaml,
 )
 
-from janus.models.config.policy import PhaseValidationPolicy
+import janus.registry.loader as loader_module
 from janus.models.source_config import (
     DEFAULT_VALIDATION_POLICY,
     STRATEGY_REGISTRY,
@@ -37,10 +37,6 @@ PUBLIC_SOURCES_ALLOWED = replace(DEFAULT_VALIDATION_POLICY, require_public_acces
 STATE_SOURCES_ALLOWED = replace(
     DEFAULT_VALIDATION_POLICY,
     federation_levels=frozenset({"federal", "state"}),
-)
-
-DRAFT_CONTRACTS_ALLOWED = replace(
-    DEFAULT_VALIDATION_POLICY, require_active_contract=False
 )
 
 
@@ -141,28 +137,23 @@ def test_grouped_file_reports_prefixed_issues_under_a_custom_policy(tmp_path):
     assert [issue.path for issue in exc_info.value.issues] == ["sources[1].strategy_variant"]
 
 
-def test_enabled_draft_contract_is_a_loader_policy_issue(tmp_path):
+def test_enabled_draft_contract_is_a_structural_loader_issue(tmp_path):
     project_root = _project_with_one_source(tmp_path)
     _set_contract_status(project_root, "draft")
     source_path = project_root / "conf/sources/example/source.yaml"
     source_mapping = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    assert SourceConfig.from_mapping(source_mapping, source_path).enabled is True
 
-    # The mapping layer deliberately does not read the contract or own its status rule.
-    config = SourceConfig.from_mapping(source_mapping, source_path)
-    assert config.enabled is True
-
-    with pytest.raises(SourceConfigValidationError) as exc_info:
-        load_registry(project_root)
-
-    assert [(issue.path, issue.message) for issue in exc_info.value.issues] == [
-        (
-            "schema.contract",
-            "must reference a contract with status 'active' for an enabled source "
-            "in phase 1 (found 'draft')",
-        )
-    ]
-    registry = load_registry(project_root, policy=DRAFT_CONTRACTS_ALLOWED)
-    assert registry.contract_for("policy_seam_source").status == "draft"
+    for policy in (DEFAULT_VALIDATION_POLICY, PUBLIC_SOURCES_ALLOWED):
+        with pytest.raises(SourceConfigValidationError) as raised:
+            load_registry(project_root, policy=policy)
+        assert [(issue.path, issue.message) for issue in raised.value.issues] == [
+            (
+                "schema.contract",
+                "must reference a contract with status 'active' for an enabled source: "
+                "the materializer writes only under a reviewed contract (order-19) (found 'draft')",
+            )
+        ]
 
 
 def test_disabled_source_may_reference_a_draft_contract(tmp_path):
@@ -174,32 +165,22 @@ def test_disabled_source_may_reference_a_draft_contract(tmp_path):
     assert registry.contract_for("policy_seam_source").status == "draft"
 
 
-def test_loader_consults_contract_policy_once_per_source(tmp_path, monkeypatch):
+def test_loader_checks_active_contract_once_per_source(tmp_path, monkeypatch):
     project_root = _create_project(
         tmp_path,
-        {
-            "example/group.yaml": _grouped_sources_yaml(
-                _valid_source_yaml("first", enabled=True),
-                _valid_source_yaml("second", enabled=True),
-            )
-        },
+        {"example/group.yaml": _grouped_sources_yaml(
+            _valid_source_yaml("first", enabled=True),
+            _valid_source_yaml("second", enabled=True),
+        )},
     )
     calls: list[tuple[bool, str | None]] = []
-    original = PhaseValidationPolicy.validate_schema_declaration
+    original = loader_module._require_active_contract
 
-    def record_call(
-        self, *, enabled: bool, contract_status: str | None, issues
-    ) -> None:
-        calls.append((enabled, contract_status))
-        original(
-            self,
-            enabled=enabled,
-            contract_status=contract_status,
-            issues=issues,
-        )
+    def record_call(config, contract, issues):
+        calls.append((config.enabled, contract.status if contract is not None else None))
+        return original(config, contract, issues)
 
-    monkeypatch.setattr(PhaseValidationPolicy, "validate_schema_declaration", record_call)
-
+    monkeypatch.setattr(loader_module, "_require_active_contract", record_call)
     load_registry(project_root)
 
     assert calls == [(True, "active"), (True, "active")]

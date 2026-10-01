@@ -19,6 +19,18 @@ from janus.models import compute_schema_version as _compute_schema_version
 SUPPORTED_RUN_STATUSES = frozenset({"failed", "running", "succeeded"})
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _SEMVER_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+#: Text fields every run record requires, checked in this order.
+_RECORD_TEXT_FIELDS = (
+    "run_id",
+    "source_id",
+    "source_name",
+    "environment",
+    "strategy_family",
+    "strategy_variant",
+    "extraction_mode",
+    "checkpoint_strategy",
+    "source_config_path",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +170,7 @@ class RunMetadata:
     schema_version: str | None = None
     contract_id: str | None = None
     contract_version: str | None = None
+    failure_stage: str | None = None
 
     def __post_init__(self) -> None:
         if self.status not in SUPPORTED_RUN_STATUSES:
@@ -166,27 +179,12 @@ class RunMetadata:
         _validate_timezone_aware("started_at", self.started_at)
         if self.ended_at is not None:
             _validate_timezone_aware("ended_at", self.ended_at)
-        if not self.run_id.strip():
-            raise ValueError("run_id must not be empty")
-        if not self.source_id.strip():
-            raise ValueError("source_id must not be empty")
-        if not self.source_name.strip():
-            raise ValueError("source_name must not be empty")
-        if not self.environment.strip():
-            raise ValueError("environment must not be empty")
-        if not self.strategy_family.strip():
-            raise ValueError("strategy_family must not be empty")
-        if not self.strategy_variant.strip():
-            raise ValueError("strategy_variant must not be empty")
-        if not self.extraction_mode.strip():
-            raise ValueError("extraction_mode must not be empty")
-        if not self.checkpoint_strategy.strip():
-            raise ValueError("checkpoint_strategy must not be empty")
-        if not self.source_config_path.strip():
-            raise ValueError("source_config_path must not be empty")
+        _require_text(self, *_RECORD_TEXT_FIELDS)
         _validate_contract_identity(
             self.schema_version, self.contract_id, self.contract_version
         )
+        if self.failure_stage is not None and not self.failure_stage.strip():
+            raise ValueError("failure_stage must not be empty")
 
     @classmethod
     def started(
@@ -302,6 +300,7 @@ class RunMetadata:
             run_attributes=plan.run_context.attributes,
             plan_notes=plan.notes,
             metadata=_freeze_string_mapping(metadata),
+            failure_stage=_failure_stage(error),
             **_contract_identity(plan),
         )
 
@@ -346,6 +345,8 @@ class RunMetadata:
             payload["failure_reason"] = self.failure_reason
         if self.error_type is not None:
             payload["error_type"] = self.error_type
+        if self.failure_stage is not None:
+            payload["failure_stage"] = self.failure_stage
         _append_contract_identity(payload, self)
         return payload
 
@@ -382,35 +383,19 @@ class LineageRecord:
     schema_version: str | None = None
     contract_id: str | None = None
     contract_version: str | None = None
+    failure_stage: str | None = None
 
     def __post_init__(self) -> None:
         if self.status not in SUPPORTED_RUN_STATUSES:
             allowed_statuses = ", ".join(sorted(SUPPORTED_RUN_STATUSES))
             raise ValueError(f"status must be one of: {allowed_statuses}")
         _validate_timezone_aware("emitted_at", self.emitted_at)
-        if not self.run_id.strip():
-            raise ValueError("run_id must not be empty")
-        if not self.source_id.strip():
-            raise ValueError("source_id must not be empty")
-        if not self.source_name.strip():
-            raise ValueError("source_name must not be empty")
-        if not self.environment.strip():
-            raise ValueError("environment must not be empty")
-        if not self.strategy_family.strip():
-            raise ValueError("strategy_family must not be empty")
-        if not self.strategy_variant.strip():
-            raise ValueError("strategy_variant must not be empty")
-        if not self.extraction_mode.strip():
-            raise ValueError("extraction_mode must not be empty")
-        if not self.checkpoint_strategy.strip():
-            raise ValueError("checkpoint_strategy must not be empty")
-        if not self.source_config_path.strip():
-            raise ValueError("source_config_path must not be empty")
-        if not self.config_version.strip():
-            raise ValueError("config_version must not be empty")
+        _require_text(self, *_RECORD_TEXT_FIELDS, "config_version")
         _validate_contract_identity(
             self.schema_version, self.contract_id, self.contract_version
         )
+        if self.failure_stage is not None and not self.failure_stage.strip():
+            raise ValueError("failure_stage must not be empty")
 
     @classmethod
     def from_runtime(
@@ -514,6 +499,8 @@ class LineageRecord:
             payload["failure_reason"] = self.failure_reason
         if self.error_type is not None:
             payload["error_type"] = self.error_type
+        if self.failure_stage is not None:
+            payload["failure_stage"] = self.failure_stage
         _append_contract_identity(payload, self)
         return payload
 
@@ -552,7 +539,7 @@ def _contract_identity(plan: ExecutionPlan) -> dict[str, Any]:
     return {
         "schema_version": contract.schema_version,
         "contract_id": contract.id,
-        "contract_version": None if contract.id.startswith("legacy:") else contract.version,
+        "contract_version": contract.version,
     }
 
 
@@ -572,6 +559,18 @@ def _validate_contract_identity(
         raise ValueError("contract_id must not be empty")
     if contract_version is not None and _SEMVER_PATTERN.fullmatch(contract_version) is None:
         raise ValueError("contract_version must be MAJOR.MINOR.PATCH using digits only")
+
+
+def _require_text(record: Any, *names: str) -> None:
+    for name in names:
+        if not getattr(record, name).strip():
+            raise ValueError(f"{name} must not be empty")
+
+
+def _failure_stage(error: Exception | str) -> str | None:
+    """The stage an enforcement exception names (``contract_check`` …); ``None`` for any other."""
+    stage = getattr(error, "failure_stage", None)
+    return stage if isinstance(stage, str) and stage.strip() else None
 
 
 def _duration_seconds(started_at: datetime, ended_at: datetime) -> float:

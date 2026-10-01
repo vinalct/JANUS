@@ -79,4 +79,3 @@ quality:
     - cnpj_basico
     - cnpj_ordem
     - cnpj_dv
-  allow_schema_evolution: false

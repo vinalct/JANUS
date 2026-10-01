@@ -454,7 +454,6 @@ def build_source_config(
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
             "quality": {
-                "allow_schema_evolution": True,
                 **({"unique_fields": list(unique_fields)} if unique_fields else {}),
             },
         },

@@ -16,6 +16,7 @@ from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter, SparkDatasetWriter
 from janus.writers.spark import _rebalance_for_write
 from tests.support.spark_sessions import build_iceberg_session
+from tests.support.writer_contracts import contract_for_frame
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -85,12 +86,7 @@ def test_raw_artifact_writer_persists_json_payload_with_checksum(tmp_path):
 
     persisted_path = Path(persisted.write_result.path)
     assert persisted_path == (
-        tmp_path
-        / "runtime"
-        / "raw"
-        / "example"
-        / "federal_open_data_example"
-        / "page-0001.json"
+        tmp_path / "runtime" / "raw" / "example" / "federal_open_data_example" / "page-0001.json"
     )
     assert json.loads(persisted_path.read_text(encoding="utf-8")) == {
         "page": 1,
@@ -226,6 +222,9 @@ def test_spark_dataset_writer_persists_bronze_output_with_normalization_columns(
     )
     normalized = normalizer.normalize(dataframe, plan)
 
+    plan = plan.with_data_contract(
+        contract_for_frame(normalized, source_id=plan.source.source_id, primary_key=("id",))
+    )
     result = writer.write(normalized, plan, "bronze", count_records=True)
 
     assert result.zone == "bronze"
@@ -274,16 +273,20 @@ def test_spark_dataset_writer_preserves_path_based_parquet_bronze_when_configure
     normalizer = BaseNormalizer()
     writer = SparkDatasetWriter(storage_layout)
 
-    dataframe = spark.createDataFrame([
-        {"id": "1", "name": "alpha"},
-        {"id": "2", "name": "beta"},
-    ])
+    dataframe = spark.createDataFrame(
+        [
+            {"id": "1", "name": "alpha"},
+            {"id": "2", "name": "beta"},
+        ]
+    )
     normalized = normalizer.normalize(dataframe, plan)
 
+    plan = plan.with_data_contract(contract_for_frame(normalized, source_id=plan.source.source_id))
     result = writer.write(normalized, plan, "bronze", count_records=True)
 
     assert result.zone == "bronze"
     assert result.format == "parquet"
+    assert result.metadata_as_dict()["schema_evolution"] == "none"
     assert result.records_written == 2
     assert result.partition_by == ("ingestion_date",)
     assert Path(result.path) == (
@@ -324,12 +327,17 @@ def test_spark_dataset_writer_uses_configured_bronze_iceberg_namespace_and_table
     normalizer = BaseNormalizer()
     writer = SparkDatasetWriter(storage_layout)
 
-    dataframe = spark.createDataFrame([
-        {"id": "1", "name": "alpha"},
-        {"id": "2", "name": "beta"},
-    ])
+    dataframe = spark.createDataFrame(
+        [
+            {"id": "1", "name": "alpha"},
+            {"id": "2", "name": "beta"},
+        ]
+    )
     normalized = normalizer.normalize(dataframe, plan)
 
+    plan = plan.with_data_contract(
+        contract_for_frame(normalized, source_id=plan.source.source_id, primary_key=("id",))
+    )
     result = writer.write(normalized, plan, "bronze", count_records=True)
 
     assert result.zone == "bronze"

@@ -6,6 +6,10 @@ import re
 from pathlib import Path
 
 from janus.observability.runs_table import RUNS_TABLE_SCHEMA
+from janus.quality import ContractViolationError
+from janus.quality.malformed_rows import MalformedRowsError
+from janus.runtime.contract_preflight import ContractPreflightError
+from janus.writers.errors import SchemaEvolutionRefusedError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 OPERATOR_GUIDE = PROJECT_ROOT / "docs" / "queryable-observability.md"
@@ -19,6 +23,7 @@ PUBLISHED_QUERIES = frozenset(
         "pipeline-failures.sql",
         "quality-breaches-by-source.sql",
         "runs-by-source-over-time.sql",
+        "schema-drift-by-source.sql",
     }
 )
 AC2_QUERIES = frozenset({"failed-runs-in-window.sql", "quality-breaches-by-source.sql"})
@@ -114,3 +119,60 @@ def test_every_local_link_in_the_operator_guide_resolves():
             if not path_text or "://" in path_text:
                 continue
             assert (guide_path.parent / path_text).resolve().exists(), (guide_path, target)
+
+
+# --------------------------------------------------------------------------------------
+# the schema-drift query and the three enforcement columns (FR-8)
+# --------------------------------------------------------------------------------------
+
+SCHEMA_DRIFT_QUERY = "schema-drift-by-source.sql"
+ENFORCEMENT_COLUMNS = ("contract_preflight_outcome", "schema_evolution", "malformed_rows")
+ENFORCEMENT_ERRORS = (
+    "ContractViolationError",
+    "MalformedRowsError",
+    "ContractPreflightError",
+    "SchemaEvolutionRefusedError",
+)
+
+
+def test_the_drift_query_is_published_on_the_latest_row_of_each_run():
+    sql = (QUERY_DIRECTORY / SCHEMA_DRIFT_QUERY).read_text(encoding="utf-8")
+
+    assert sql.count(";") == 1 and sql.rstrip().endswith(";")
+    assert "FROM janus.metadata.runs" in sql
+    assert "ROW_NUMBER() OVER (" in sql
+    assert "PARTITION BY run_id" in sql
+    assert "ORDER BY emitted_at DESC" in sql
+
+
+def test_the_drift_query_uses_every_enforcement_signal():
+    sql = (QUERY_DIRECTORY / SCHEMA_DRIFT_QUERY).read_text(encoding="utf-8")
+    identifiers = set(re.findall(r"\b[a-z][a-z0-9_]*\b", sql))
+
+    assert set(ENFORCEMENT_COLUMNS) <= identifiers
+    assert "LAG(schema_version)" in sql
+    for outcome in ("will_evolve", "refused", "catalog_unavailable"):
+        assert f"'{outcome}'" in sql
+    for error_type in ENFORCEMENT_ERRORS:
+        assert f"'{error_type}'" in sql
+
+
+def test_the_error_types_the_drift_query_names_are_the_enforcement_exceptions():
+    """``error_type`` is the exception's class name; a rename would silently blind the query."""
+    raised = (
+        ContractViolationError,
+        MalformedRowsError,
+        ContractPreflightError,
+        SchemaEvolutionRefusedError,
+    )
+
+    assert tuple(error.__name__ for error in raised) == ENFORCEMENT_ERRORS
+
+
+def test_the_operator_register_documents_the_three_columns():
+    guide = OPERATOR_GUIDE.read_text(encoding="utf-8")
+    register = guide.split("## Column register", 1)[1].split("## Published Spark SQL", 1)[0]
+
+    for column in ENFORCEMENT_COLUMNS:
+        assert f"| `{column}` |" in register
+    assert SCHEMA_DRIFT_QUERY in guide

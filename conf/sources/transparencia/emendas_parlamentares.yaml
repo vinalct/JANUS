@@ -70,12 +70,7 @@ sources:
         path: data/metadata/transparencia/emendas_parlamentares__emendas
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
-      allow_schema_evolution: true
+    quality: {}
 
   - source_id: transparencia__emendas_parlamentares__documentos__full_refresh
     name: Portal da Transparencia - Emendas parlamentares - Documentos
@@ -158,9 +153,4 @@ sources:
         path: data/metadata/transparencia/emendas_parlamentares__documentos
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
-      allow_schema_evolution: true
+    quality: {}

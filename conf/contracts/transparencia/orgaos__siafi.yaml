@@ -2,7 +2,7 @@ apiVersion: v3.2.0
 kind: DataContract
 id: transparencia.orgaos__siafi
 name: Portal da Transparencia - Órgãos do SIAFI
-version: 0.1.0
+version: 0.1.1
 status: draft
 domain: transparencia
 description:
@@ -58,7 +58,7 @@ customProperties:
 - property: janus.compatibility
   value: additive
 - property: janus.enforcement
-  value: lenient
+  value: strict
 - property: janus.draftedFrom
   value: official OpenAPI response model CodigoDescricaoDTO at https://api.portaldatransparencia.gov.br/v3/api-docs
     for GET /api-de-dados/orgaos-siafi; no sample payload, fixture or saved raw run was available on 2026-09-23,

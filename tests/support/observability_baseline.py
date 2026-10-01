@@ -25,7 +25,8 @@ from janus.scripts.raw_to_bronze import RawToBronzeLoader
 from janus.strategies.api import ApiHook, ApiResponse, ApiStrategy
 from janus.strategies.catalog import CatalogStrategy
 from janus.utils.storage import StorageLayout, bronze_table_identifier
-from tests.support.contracts import CONTRACT_SCHEMA_BLOCK, write_minimal_contract
+from tests.support.contract_frames import SchemaRows
+from tests.support.contracts import KEYED_CONTRACT_PATH, keyed_contract_yaml
 
 # Fixed instants: every timestamp in a golden is derived from one of these two.
 STARTED_AT = datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)
@@ -128,7 +129,8 @@ class JsonReader:
                 if artifact.format == "jsonl"
                 else json.loads(content)
             )
-        return rows
+        # The rows keep their shape; the schema is the one the read was handed, as Spark applies.
+        return SchemaRows(rows, schema=kwargs.get("schema"))
 
 
 class IdentityNormalizer:
@@ -208,7 +210,7 @@ def source_payload(case: str) -> dict[str, Any]:
             "checkpoint_strategy": "max_value",
             "retry": {"max_attempts": 1, "backoff_seconds": 1},
         },
-        "schema": dict(CONTRACT_SCHEMA_BLOCK),
+        "schema": {"contract": KEYED_CONTRACT_PATH},
         "spark": {
             "input_format": "jsonl" if family == "catalog" else "json",
             "write_mode": "overwrite",
@@ -224,7 +226,6 @@ def source_payload(case: str) -> dict[str, Any]:
         "quality": {
             "required_fields": ["id"],
             "unique_fields": ["id"],
-            "allow_schema_evolution": True,
         },
     }
 
@@ -235,13 +236,20 @@ def source_payload(case: str) -> dict[str, Any]:
     return payload
 
 
-def write_project(root: Path, document: dict[str, Any]) -> None:
+def contract_yaml(case: str) -> str:
+    """``id`` is the key; quality_failure leaves it unrequired, which the config check refuses."""
+    return keyed_contract_yaml(required=() if case == "quality_failure" else None)
+
+
+def write_project(root: Path, document: dict[str, Any], *, contract: str | None = None) -> None:
     sources_dir = root / "conf" / "sources"
     sources_dir.mkdir(parents=True, exist_ok=True)
     (root / "conf" / "app.yaml").write_text(
         "registry:\n  sources_dir: conf/sources\n  file_pattern: '*.yaml'\n", encoding="utf-8"
     )
-    write_minimal_contract(root)
+    contract_path = root / KEYED_CONTRACT_PATH
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(contract or keyed_contract_yaml(), encoding="utf-8")
     (sources_dir / "sources.yaml").write_text(
         yaml.safe_dump({"sources": [document]}, sort_keys=False), encoding="utf-8"
     )
@@ -253,7 +261,7 @@ def capture_case(root: Path, case: str) -> dict[str, Any]:
     """Run one case end to end and return its manifest; JSON lands in the metadata zone."""
 
     document = source_payload(case)
-    write_project(root, document)
+    write_project(root, document, contract=contract_yaml(case))
 
     environment: dict[str, Any] = {
         "storage": {

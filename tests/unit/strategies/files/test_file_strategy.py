@@ -601,7 +601,7 @@ def _build_source_config(
                     "backoff_seconds": retry_backoff_seconds,
                 },
             },
-            "schema": {"mode": "infer"},
+            "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
             "spark": {
                 "input_format": spark_input_format,
                 "write_mode": "append",
@@ -612,7 +612,6 @@ def _build_source_config(
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
             "quality": {
-                "allow_schema_evolution": True,
                 **({"unique_fields": list(unique_fields)} if unique_fields else {}),
             },
         },

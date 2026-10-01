@@ -16,6 +16,7 @@ import inspect
 
 import pytest
 
+from janus.writers.evolution import EvolutionPlan, EvolutionRefusal
 from janus.writers.overwrite import (
     FullRefreshOverwritePlan,
     build_create_table_as_select_sql,
@@ -77,23 +78,17 @@ def test_several_added_columns_keep_source_order():
     assert plan.reason == "columns added to the target: c, d; table history retained"
 
 
-def test_added_columns_are_not_gated_on_schema_evolution():
-    """A full refresh has always accepted new columns; gating them would be a regression.
+def test_evolution_is_optional_so_existing_pure_plans_still_work():
+    parameters = inspect.signature(plan_full_refresh_overwrite).parameters
 
-    ``REPLACE TABLE`` recreated the bronze schema on every run, so an added column has never
-    needed ``quality.allow_schema_evolution``. The merge path gates them because a MERGE
-    against an older table is a genuine incremental-semantics question — this is not that.
-    The planner therefore takes no evolution flag at all, and cannot grow one silently.
-    """
-    parameters = set(inspect.signature(plan_full_refresh_overwrite).parameters)
-
-    assert parameters == {
+    assert set(parameters) == {
         "source_columns",
         "target_columns",
         "configured_partitions",
         "target_partitions",
+        "evolution",
     }
-    assert not any("evolution" in name or "quality" in name for name in parameters)
+    assert parameters["evolution"].default is None
 
 
 def test_dropped_column_falls_back_to_replace_table():
@@ -134,9 +129,7 @@ def test_partition_spec_change_falls_back_to_replace_table():
     )
 
     assert plan.mechanism == "replace_table"
-    assert plan.reason == (
-        "partition spec changed: ingestion_date -> ingestion_date, janus_run_id"
-    )
+    assert plan.reason == ("partition spec changed: ingestion_date -> ingestion_date, janus_run_id")
 
 
 def test_partition_spec_change_to_unpartitioned_names_both_specs():
@@ -245,9 +238,7 @@ def test_insert_overwrite_sql_quotes_every_identifier():
 
 def test_insert_overwrite_sql_rejects_an_empty_projection():
     with pytest.raises(ValueError, match="at least one projected column"):
-        build_insert_overwrite_sql(
-            table_identifier="ns.tbl", source_view="v", projection=()
-        )
+        build_insert_overwrite_sql(table_identifier="ns.tbl", source_view="v", projection=())
 
 
 def test_create_and_replace_sql_match_the_previous_literals():
@@ -284,3 +275,42 @@ def test_no_pyspark_import_in_the_pure_modules():
     for module in (identifiers, overwrite):
         source = inspect.getsource(module)
         assert "pyspark" not in source, f"{module.__name__} must not import pyspark"
+
+
+def test_breaking_evolution_forces_replace_with_declared_reason():
+    reason = "contract major version 1 -> 2 authorizes full refresh table replacement (dropped)"
+    evolution = EvolutionPlan(
+        "breaking_replace",
+        (),
+        (),
+        (EvolutionRefusal("dropped", "legacy", "removed"),),
+        reason,
+        1,
+        2,
+    )
+
+    plan = plan_full_refresh_overwrite(
+        source_columns=BASE_COLUMNS,
+        target_columns=BASE_COLUMNS,
+        configured_partitions=PARTITIONS,
+        target_partitions=PARTITIONS,
+        evolution=evolution,
+    )
+
+    assert plan.mechanism == "replace_table"
+    assert plan.reason == reason
+
+
+def test_promoted_target_type_preserves_history_after_alter():
+    evolution = EvolutionPlan("evolve", (), (("amount", "integer", "long"),), (), "promotion", 1, 1)
+
+    plan = plan_full_refresh_overwrite(
+        source_columns=BASE_COLUMNS,
+        target_columns=BASE_COLUMNS,
+        configured_partitions=PARTITIONS,
+        target_partitions=PARTITIONS,
+        evolution=evolution,
+    )
+
+    assert plan.mechanism == "insert_overwrite"
+    assert plan.preserves_history

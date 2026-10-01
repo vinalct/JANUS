@@ -11,7 +11,7 @@ import janus.models.data_contracts as data_contracts
 
 PACKAGE_ROOT = Path(data_contracts.__file__).resolve().parent
 SRC_ROOT = PACKAGE_ROOT.parents[2]
-ANCHORS = {"errors.py", "legacy.py", "loader.py", "model.py", "vocabulary.py"}
+ANCHORS = {"errors.py", "loader.py", "model.py", "vocabulary.py"}
 FORBIDDEN_IMPORTS = (
     "janus.observability",
     "janus.readers",

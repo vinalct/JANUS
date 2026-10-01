@@ -38,6 +38,7 @@ from janus.registry.dependencies import (
 )
 from janus.strategies.api.request_inputs import _iceberg_table_identifier
 from janus.utils.storage import bronze_table_identifier
+from tests.support.contracts import KEYED_CONTRACT_PATH, write_keyed_contract
 from tests.support.orchestration import (
     GRAPH_CASES,
     GraphCase,
@@ -235,9 +236,11 @@ def test_a_full_refresh_and_an_incremental_pipeline_may_write_one_table(tmp_path
     _document(documents, "C")["extraction"]["mode"] = "incremental"
     _document(documents, "C")["extraction"]["checkpoint_field"] = "updated_at"
     _document(documents, "C")["extraction"]["checkpoint_strategy"] = "max_value"
-    _document(documents, "C")["quality"]["unique_fields"] = ["id"]
+    _document(documents, "C")["schema"] = {"contract": KEYED_CONTRACT_PATH}
+    root = _project(tmp_path, documents)
+    write_keyed_contract(root)
 
-    graph = _load_documents(tmp_path, documents).graph
+    graph = load_registry(root).graph
 
     assert [node.bronze_table for node in graph.nodes] == [
         "bronze__shared.one_dataset",

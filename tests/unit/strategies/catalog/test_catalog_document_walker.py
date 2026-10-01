@@ -295,14 +295,14 @@ def _build_plan_for_generic_tests(tmp_path: Path) -> ExecutionPlan:
                 "mode": "full_refresh",
                 "retry": {"max_attempts": 1, "backoff_strategy": "fixed", "backoff_seconds": 1},
             },
-            "schema": {"mode": "infer"},
+            "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
             "spark": {"input_format": "jsonl", "write_mode": "append"},
             "outputs": {
                 "raw": {"path": "data/raw/example/test_generic", "format": "json"},
                 "bronze": {"path": "data/bronze/example/test_generic", "format": "iceberg"},
                 "metadata": {"path": "data/metadata/example/test_generic", "format": "json"},
             },
-            "quality": {"allow_schema_evolution": True},
+            "quality": {},
         },
         tmp_path / "conf" / "sources" / "test_generic.yaml",
     )

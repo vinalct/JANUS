@@ -204,28 +204,15 @@ def _prepare_draft_command(args: argparse.Namespace):
     source = planned_run.plan.source_config
     existing_contract_path = (
         planned_run.plan.data_contract.contract_path.resolve()
-        if source.schema.declares_contract and planned_run.plan.data_contract is not None
+        if planned_run.plan.data_contract is not None
         else None
     )
-    if source.schema.declares_contract and (
-        output_path is None or existing_contract_path == output_path
-    ):
+    if output_path is None or existing_contract_path == output_path:
         declared = str(existing_contract_path or source.schema.contract)
         raise _DraftArgumentError(
             f"Source {source.source_id!r} already declares schema.contract at {declared}; "
             "pass --out to write the draft to a different project-local path."
         )
-
-    if output_path is None:
-        try:
-            output_path = _default_output_path(project_root, planned_run)
-        except ValueError as exc:
-            raise _DraftArgumentError(str(exc)) from exc
-        if output_path.exists():
-            raise _DraftArgumentError(
-                f"Refusing to overwrite existing contract file {output_path}; pass --out "
-                "explicitly to replace it."
-            )
 
     if any(Path(value).resolve() == output_path for value in input_request["fixture_paths"]):
         raise _DraftArgumentError("--out must not overwrite one of the fixture input files")
@@ -402,21 +389,6 @@ def _refuse_zone_output(
         )
         if any(output_path == root or output_path.is_relative_to(root) for root in roots):
             raise ValueError(f"--out must not write into the {zone} zone: {output_path}")
-
-
-def _default_output_path(project_root: Path, planned_run: PlannedRun) -> Path:
-    source_domain = planned_run.plan.source_config.domain
-    relative_domain = normalize_relative_path(Path(source_domain))
-    if len(relative_domain.parts) != 1:
-        raise ValueError(f"Source domain must be one path segment: {source_domain!r}")
-    table_name = _bronze_table_name(planned_run.plan)
-    relative = normalize_relative_path(
-        Path("conf") / "contracts" / relative_domain / f"{table_name}.yaml"
-    )
-    candidate = (project_root / relative).resolve()
-    if not candidate.is_relative_to(project_root.resolve()):
-        raise ValueError(f"Default contract path resolves outside the project root: {candidate}")
-    return candidate
 
 
 def _bronze_table_name(plan: ExecutionPlan) -> str:

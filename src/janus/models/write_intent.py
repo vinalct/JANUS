@@ -35,7 +35,7 @@ class BronzeWriteIntent:
 
     strategy: str  # one of BRONZE_WRITE_STRATEGIES
     configured_mode: str  # spark.write_mode, verbatim (audit trail)
-    merge_keys: tuple[str, ...] = ()  # quality.unique_fields when upserting
+    merge_keys: tuple[str, ...] = ()  # the contract's primaryKey when upserting
     partition_columns: tuple[str, ...] = ()  # spark.partition_by
     reason: str = ""  # human-readable derivation, for logs/metadata
 
@@ -72,15 +72,14 @@ class BronzeWriteIntent:
 def resolve_bronze_write_intent(plan: ExecutionPlan) -> BronzeWriteIntent:
     """Derive the bronze write decision from the source contract alone.
 
-    Pure: no Spark, no I/O, no ``source_id`` conditionals. The four contract facts that
-    already exist — ``extraction.mode``, ``spark.write_mode``, ``quality.unique_fields`` and
-    ``spark.partition_by`` — fully determine the write. Every non-``incremental`` source
-    resolves to today's exact behaviour.
+    Pure: no Spark, no I/O, no ``source_id`` conditionals. Four facts fully determine the
+    write — ``extraction.mode``, ``spark.write_mode`` and ``spark.partition_by`` from the
+    source config, and the data contract's ``primaryKey`` as the merge key. Every
+    non-``incremental`` source resolves to today's exact behaviour and needs no key.
     """
     source_config = plan.source_config
     mode = source_config.extraction.mode
     write_mode = source_config.spark.write_mode
-    unique_fields = source_config.quality.unique_fields
     partition_columns = source_config.spark.partition_by
 
     if write_mode == "ignore":
@@ -117,13 +116,7 @@ def resolve_bronze_write_intent(plan: ExecutionPlan) -> BronzeWriteIntent:
             ),
         )
 
-    if not unique_fields:
-        raise ValueError(
-            "incremental sources require quality.unique_fields to derive an idempotent "
-            f"bronze write; none declared for {source_config.source_id!r}"
-        )
-
-    merge_keys = tuple(unique_fields)
+    merge_keys = _merge_keys(plan)
     if _partitions_align_with_window(plan, merge_keys):
         return BronzeWriteIntent(
             strategy="overwrite_partitions",
@@ -146,6 +139,22 @@ def resolve_bronze_write_intent(plan: ExecutionPlan) -> BronzeWriteIntent:
             f"{', '.join(merge_keys)} keeps the re-fetched window idempotent"
         ),
     )
+
+
+def _merge_keys(plan: ExecutionPlan) -> tuple[str, ...]:
+    """The contract's ``primaryKey``: the one declaration an upsert may match rows on."""
+    contract = plan.data_contract
+    if contract is None:
+        # Deferred: janus.quality imports janus.models, so the reverse import waits for a call.
+        from janus.quality.contract_checks import MissingContractError
+
+        raise MissingContractError(plan.source.source_id)
+    if not contract.primary_key:
+        raise ValueError(
+            "incremental sources require a primaryKey in their data contract to derive an "
+            f"idempotent bronze write; none declared for {plan.source.source_id!r}"
+        )
+    return contract.primary_key
 
 
 def _partitions_align_with_window(

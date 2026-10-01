@@ -22,6 +22,7 @@ from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.utils.environment import (
     HADOOP_CATALOG_TYPE,
+    ICEBERG_CATALOG_DB_PATH_KEY,
     ICEBERG_CATALOG_IMPL,
     JDBC_SCHEMA_VERSION_OPTION,
     build_spark_options,
@@ -229,6 +230,7 @@ def differential(catalogs):
             session,
             catalog,
             tmp_path_factory.mktemp(f"janus-catalog-{catalog}"),
+            catalog_options=_options,
             run_id=FIRST_RUN_ID,
             started_at=FIRST_STARTED_AT,
         )
@@ -296,7 +298,7 @@ def test_the_bronze_write_result_still_reports_what_it_reported_before_order_13(
     assert bronze.mode == "overwrite"
     assert bronze.records_written == BASELINE_ROW_COUNT
     assert bronze.partition_by == BASELINE_PARTITION_BY
-    assert bronze.metadata == ()
+    assert bronze.metadata == (("schema_evolution", "none"),)
 
 
 # ── the recorded baseline: both catalogs ≡ the pre state ────────────
@@ -329,6 +331,7 @@ def second_full_refresh(catalogs, differential):
         session,
         JDBC_CATALOG,
         tmp_path_factory.mktemp("janus-catalog-jdbc-second"),
+        catalog_options=_options,
         run_id=SECOND_RUN_ID,
         started_at=SECOND_STARTED_AT,
     )
@@ -350,7 +353,10 @@ def test_a_second_full_refresh_grows_the_snapshot_log_under_the_jdbc_catalog(
 
     assert operations == BASELINE_SNAPSHOT_OPERATIONS
     assert second_full_refresh.bronze_result.mode == "overwrite"
-    assert second_full_refresh.bronze_result.metadata == BASELINE_SECOND_RUN_METADATA
+    assert second_full_refresh.bronze_result.metadata == (
+        *BASELINE_SECOND_RUN_METADATA,
+        ("schema_evolution", "none"),
+    )
 
     assert "history_reset_reason" not in dict(second_full_refresh.bronze_result.metadata)
 
@@ -402,6 +408,7 @@ def test_a_first_write_into_a_fresh_jdbc_warehouse_bootstraps_its_namespace(
         session,
         FRESH_BOOTSTRAP_CATALOG,
         tmp_path_factory.mktemp("janus-catalog-fresh"),
+        catalog_options=_options,
         run_id=FIRST_RUN_ID,
         started_at=FIRST_STARTED_AT,
     )
@@ -432,7 +439,13 @@ def test_the_local_profile_catalog_database_is_created_under_the_metadata_zone(
 
 
 def materialize_into(
-    session, catalog: str, project_root: Path, *, run_id: str, started_at: datetime
+    session,
+    catalog: str,
+    project_root: Path,
+    *,
+    catalog_options: dict[str, str],
+    run_id: str,
+    started_at: datetime,
 ) -> BronzeEvidence:
     """Run the live executor once, into ``catalog``, and collect every AC-4 observable."""
 
@@ -462,12 +475,38 @@ def materialize_into(
     )
 
     plan = with_registry_contract(strategy.plan(source_config, run_context))
+    if catalog == HADOOP_BASELINE_CATALOG:
+
+        contract = plan.data_contract
+        assert contract is not None
+        plan = plan.with_data_contract(
+            replace(contract, janus=replace(contract.janus, enforcement="lenient"))
+        )
+    prefix = f"spark.sql.catalog.{catalog}"
+    iceberg = {
+        "catalog_name": catalog,
+        "catalog_type": catalog_options[f"{prefix}.type"],
+        "warehouse_dir": catalog_options[f"{prefix}.warehouse"],
+    }
+    if f"{prefix}.uri" in catalog_options:
+        iceberg["uri"] = catalog_options[f"{prefix}.uri"]
+    environment_config = {**ENVIRONMENT_CONFIG, "spark": {"iceberg": iceberg}}
+    resolved_paths = {"iceberg_warehouse_dir": Path(iceberg["warehouse_dir"])}
+    if "uri" in iceberg:
+        resolved_paths[ICEBERG_CATALOG_DB_PATH_KEY] = Path(
+            iceberg["uri"].removeprefix("jdbc:sqlite:").partition("?")[0]
+        )
     executed = SourceExecutor().execute(
         PlannedRun(plan=plan, strategy=strategy),
-        SparkSessionProvider.wrapping(session),
-        ENVIRONMENT_CONFIG,
+        SparkSessionProvider.wrapping(session, resolved_paths=resolved_paths),
+        environment_config,
     )
     assert executed.status == "succeeded", executed.failure_reason
+    preflight = dict(executed.planned_run.plan.run_context.attributes)["contract_preflight_outcome"]
+    if catalog == HADOOP_BASELINE_CATALOG:
+        assert preflight == "catalog_unavailable"
+    else:
+        assert preflight in {"table_missing", "ok"}
 
     bronze_results = tuple(
         result for result in executed.write_results if result.zone == "bronze"

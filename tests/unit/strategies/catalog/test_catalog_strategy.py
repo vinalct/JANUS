@@ -656,7 +656,7 @@ def _build_source_config_with_url(
                     "backoff_seconds": 1,
                 },
             },
-            "schema": {"mode": "infer"},
+            "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
             "spark": {
                 "input_format": "jsonl",
                 "write_mode": "append",
@@ -667,7 +667,6 @@ def _build_source_config_with_url(
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
             "quality": {
-                "allow_schema_evolution": True,
                 **({"unique_fields": list(unique_fields)} if unique_fields else {}),
             },
         },
@@ -792,7 +791,7 @@ def _build_source_config(
                     "backoff_seconds": 1,
                 },
             },
-            "schema": {"mode": "infer"},
+            "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
             "spark": {
                 "input_format": "jsonl",
                 "write_mode": "append",
@@ -803,7 +802,6 @@ def _build_source_config(
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
             "quality": {
-                "allow_schema_evolution": True,
                 **({"unique_fields": list(unique_fields)} if unique_fields else {}),
             },
         },
@@ -920,14 +918,14 @@ def _build_source_config_with_request_inputs(
                     "backoff_seconds": 1,
                 },
             },
-            "schema": {"mode": "infer"},
+            "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
             "spark": {"input_format": "jsonl", "write_mode": "overwrite"},
             "outputs": {
                 "raw": {"path": f"data/raw/example/{source_id}", "format": "json"},
                 "bronze": {"path": f"data/bronze/example/{source_id}", "format": "iceberg"},
                 "metadata": {"path": f"data/metadata/example/{source_id}", "format": "json"},
             },
-            "quality": {"allow_schema_evolution": True},
+            "quality": {},
         },
         tmp_path / "conf" / "sources" / f"{source_id}.yaml",
     )
@@ -1301,14 +1299,14 @@ def test_catalog_source_config_rejects_request_inputs_for_file_source(tmp_path):
                         "backoff_seconds": 0,
                     },
                 },
-                "schema": {"mode": "infer"},
+                "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
                 "spark": {"input_format": "csv", "write_mode": "overwrite"},
                 "outputs": {
                     "raw": {"path": "data/raw/x", "format": "csv"},
                     "bronze": {"path": "data/bronze/x", "format": "iceberg"},
                     "metadata": {"path": "data/metadata/x", "format": "json"},
                 },
-                "quality": {"allow_schema_evolution": True},
+                "quality": {},
             },
             tmp_path / "conf" / "sources" / "file_src.yaml",
         )

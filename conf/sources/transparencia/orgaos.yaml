@@ -70,12 +70,7 @@ sources:
         path: data/metadata/transparencia/orgaos__siape
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
-      allow_schema_evolution: true
+    quality: {}
 
   - source_id: transparencia__orgaos__siafi__full_refresh
     name: Portal da Transparencia - Órgãos do SIAFI
@@ -151,9 +146,4 @@ sources:
         path: data/metadata/transparencia/orgaos__siafi
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
-      allow_schema_evolution: true
+    quality: {}

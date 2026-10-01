@@ -58,14 +58,14 @@ def _base_payload() -> dict[str, Any]:
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
         "spark": {"input_format": "json", "write_mode": "append"},
         "outputs": {
             "raw": {"path": "data/raw/example", "format": "json"},
             "bronze": {"path": "data/bronze/example", "format": "iceberg"},
             "metadata": {"path": "data/metadata/example", "format": "json"},
         },
-        "quality": {"allow_schema_evolution": True},
+        "quality": {},
     }
 
 

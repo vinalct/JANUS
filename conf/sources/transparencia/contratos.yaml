@@ -81,9 +81,4 @@ sources:
         path: data/metadata/transparencia/contratos__contratos
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
-      allow_schema_evolution: true
+    quality: {}

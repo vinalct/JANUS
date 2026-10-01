@@ -15,14 +15,15 @@ import yaml
 
 import janus.cli.contract as contract_cli
 import janus.runtime.spark_lifecycle as spark_lifecycle
-from janus.cli.contract_drafting import _DataProfile
+from janus.cli.contract_drafting import _DataProfile, _draft_properties
 from janus.main import main
-from janus.models import load_data_contract
+from janus.models import QualityConfig, load_data_contract
 from janus.planner import Planner, PlanningRequest
+from janus.registry import load_registry
 from tests.support.observability_baseline import capture_case
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-def _write_project(root: Path, *, declares_contract: bool = False) -> Path:
+def _write_project(root: Path) -> Path:
     sources = root / "conf" / "sources"
     sources.mkdir(parents=True)
     (root / "conf" / "app.yaml").write_text(
@@ -46,11 +47,7 @@ spark:
 """.lstrip(),
         encoding="utf-8",
     )
-    schema = (
-        "schema:\n  contract: conf/contracts/test/active.yaml\n"
-        if declares_contract
-        else "schema:\n  mode: infer\n"
-    )
+    schema = "schema:\n  contract: conf/contracts/test/active.yaml\n"
     source = f"""
 source_id: draft_source
 name: Draft source
@@ -99,17 +96,15 @@ outputs:
   metadata:
     path: data/metadata/test/draft_source
     format: json
-quality:
-  allow_schema_evolution: true
+quality: {{}}
 """.lstrip()
     (sources / "draft.yaml").write_text(source, encoding="utf-8")
-    if declares_contract:
-        contract = root / "conf" / "contracts" / "test" / "active.yaml"
-        contract.parent.mkdir(parents=True)
-        shutil.copyfile(
-            PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "minimal_contract.yaml",
-            contract,
-        )
+    contract = root / "conf" / "contracts" / "test" / "active.yaml"
+    contract.parent.mkdir(parents=True)
+    shutil.copyfile(
+        PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "minimal_contract.yaml",
+        contract,
+    )
     fixture = root / "fixtures" / "records.json"
     fixture.parent.mkdir(parents=True, exist_ok=True)
     fixture.write_text('[{"id": "1", "name": "Ada"}]\n', encoding="utf-8")
@@ -225,7 +220,7 @@ def test_explicit_output_cannot_write_into_raw_or_bronze(capsys, tmp_path, zone)
 
 
 def test_source_with_contract_requires_an_explicit_different_output(capsys, tmp_path):
-    fixture = _write_project(tmp_path, declares_contract=True)
+    fixture = _write_project(tmp_path)
 
     result = main(_fixture_arguments(tmp_path, fixture))
 
@@ -238,7 +233,7 @@ def test_source_with_contract_requires_an_explicit_different_output(capsys, tmp_
 def test_source_with_contract_allows_a_different_explicit_output(
     monkeypatch, capsys, tmp_path
 ):
-    fixture = _write_project(tmp_path, declares_contract=True)
+    fixture = _write_project(tmp_path)
     output = tmp_path / "drafts" / "second-version.yaml"
     drafted = contract_cli.DraftedContract(
         source_id="draft_source",
@@ -255,19 +250,6 @@ def test_source_with_contract_allows_a_different_explicit_output(
 
     assert result == 0
     assert json.loads(capsys.readouterr().out)["out"] == str(output)
-
-
-def test_default_contract_path_is_not_overwritten_without_out(capsys, tmp_path):
-    fixture = _write_project(tmp_path)
-    existing = tmp_path / "conf" / "contracts" / "test" / "draft_table.yaml"
-    existing.parent.mkdir(parents=True)
-    existing.write_text("existing: contract\n", encoding="utf-8")
-
-    result = main(_fixture_arguments(tmp_path, fixture))
-
-    assert result == 2
-    assert "Refusing to overwrite existing contract file" in capsys.readouterr().err
-    assert existing.read_text(encoding="utf-8") == "existing: contract\n"
 
 
 def test_draft_uses_one_session_and_releases_it_before_writing(
@@ -326,6 +308,26 @@ def test_draft_uses_one_session_and_releases_it_before_writing(
     )
     validator_class = jsonschema.validators.validator_for(schema)
     assert list(validator_class(schema).iter_errors(yaml.safe_load(output.read_text()))) == []
+
+
+def test_a_draft_reproduces_the_quality_keys_its_source_still_declares(tmp_path):
+    """The loader refuses quality keys that disagree with the contract, so a draft copies them."""
+    _write_project(tmp_path)
+    source = load_registry(tmp_path).get_source("draft_source", include_disabled=True)
+    profile = _DataProfile(schema=_FakeSchema(), row_count=3, null_counts=(0, 0))
+    keyed = replace(source, quality=QualityConfig(required_fields=("id",), unique_fields=("id",)))
+
+    declared = _draft_properties(profile, keyed)
+    inferred = _draft_properties(profile, source)
+
+    assert [(prop.name, prop.required, prop.primary_key) for prop in declared] == [
+        ("id", True, True),
+        ("name", False, False),
+    ]
+    assert [(prop.name, prop.required, prop.primary_key) for prop in inferred] == [
+        ("id", True, False),
+        ("name", True, False),
+    ]
 
 
 def test_main_dispatches_contract_lazily(monkeypatch):
@@ -477,8 +479,7 @@ def test_ibge_fixture_draft_reproduces_the_inferred_bronze_golden(
     assert draft_schema.jsonValue() == baseline["inferred_struct_type"]
 
 
-def test_transparencia_fixture_draft_matches_legacy_logical_types(spark, tmp_path):
-    from janus.models.data_contracts import contract_from_legacy_schema_file
+def test_transparencia_fixture_draft_matches_declared_logical_types(spark, tmp_path):
     from janus.runtime import SparkSessionProvider
 
     source_id = "transparencia__poder_executivo_federal__servidores_por_orgao__full_refresh"
@@ -502,31 +503,22 @@ def test_transparencia_fixture_draft_matches_legacy_logical_types(spark, tmp_pat
         source=planned.plan.source_config,
         environment_config=environment,
     )
-    expected = contract_from_legacy_schema_file(
-        PROJECT_ROOT
-        / "tests"
-        / "fixtures"
-        / "contracts"
-        / "legacy_schemas"
-        / "transparencia"
-        / "servidores_por_orgao_schema.json",
-        source_id=source_id,
-        bronze_table="poder_executivo_federal__servidores_por_orgao",
-        domain="transparencia",
-        project_root=PROJECT_ROOT,
+    expected = load_data_contract(
+        PROJECT_ROOT / "conf" / "contracts" / "transparencia"
+        / "poder_executivo_federal__servidores_por_orgao.yaml"
     )
 
     draft_properties = load_data_contract(output).schema.properties
     logical = {prop.name: prop.logical_type for prop in draft_properties}
     physical = {prop.name: prop.physical_type for prop in draft_properties}
-    legacy_logical = {prop.name: prop.logical_type for prop in expected.schema.properties}
-    legacy_physical = {prop.name: prop.physical_type for prop in expected.schema.properties}
+    declared_logical = {prop.name: prop.logical_type for prop in expected.schema.properties}
+    declared_physical = {prop.name: prop.physical_type for prop in expected.schema.properties}
 
-    assert drafted.columns == tuple(sorted(legacy_logical))
-    assert logical == legacy_logical
+    assert drafted.columns == tuple(sorted(declared_logical))
+    assert logical == declared_logical
     assert set(logical.values()) <= {"integer", "string"}
-    assert {name: kind for name, kind in physical.items() if kind != legacy_physical[name]} == {
-        name: "long" for name, kind in legacy_physical.items() if kind == "integer"
+    assert {name: kind for name, kind in physical.items() if kind != declared_physical[name]} == {
+        name: "long" for name, kind in declared_physical.items() if kind == "integer"
     }
 
 

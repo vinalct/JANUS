@@ -36,6 +36,10 @@ class UnsupportedSparkTypeError(VocabularyError):
     """A Spark schema carries a type no vocabulary entry can express."""
 
 
+class UnsupportedIcebergTypeError(VocabularyError):
+    """An Iceberg schema carries a type no vocabulary entry can express."""
+
+
 @dataclass(frozen=True, slots=True)
 class VocabularyType:
     """One vocabulary entry and its spelling in each of the three dialects."""
@@ -67,6 +71,11 @@ _BY_NAME: dict[str, VocabularyType] = {entry.name: entry for entry in VOCABULARY
 
 _BY_SPARK_JSON: dict[str, VocabularyType] = {
     entry.spark_json_type: entry
+    for entry in VOCABULARY
+    if entry.name not in CONTAINER_TYPE_NAMES and entry.name != DECIMAL_TYPE_NAME
+}
+_BY_ICEBERG_NAME: dict[str, VocabularyType] = {
+    entry.iceberg_name: entry
     for entry in VOCABULARY
     if entry.name not in CONTAINER_TYPE_NAMES and entry.name != DECIMAL_TYPE_NAME
 }
@@ -129,13 +138,25 @@ def odcs_logical_type_for(physical: str) -> str:
     return parse_physical_type(physical).type.odcs_logical_type
 
 
+def spark_sql_type(physical_type: str) -> str:
+    """Return the scalar Spark SQL spelling used by Iceberg schema DDL."""
+    parsed = parse_physical_type(physical_type)
+    if parsed.name in CONTAINER_TYPE_NAMES:
+        raise UnknownPhysicalTypeError(
+            f"nested type {physical_type!r} requires a property tree for Spark SQL DDL"
+        )
+    if parsed.name == "long":
+        return "bigint"
+    if parsed.name == "integer":
+        return "int"
+    return parsed.spark_json_type
+
+
 def iceberg_type_name(prop: ContractProperty) -> str:
     """The Iceberg type name for one property, recursing through containers."""
     parsed = parse_physical_type(prop.physical_type)
     if parsed.name == "struct":
-        fields = ", ".join(
-            f"{child.name}: {iceberg_type_name(child)}" for child in prop.properties
-        )
+        fields = ", ".join(f"{child.name}: {iceberg_type_name(child)}" for child in prop.properties)
         return f"struct<{fields}>"
     if parsed.name == "array":
         return f"list<{iceberg_type_name(_array_items(prop))}>"
@@ -143,6 +164,36 @@ def iceberg_type_name(prop: ContractProperty) -> str:
         keys, values = _map_children(prop)
         return f"map<{iceberg_type_name(keys)}, {iceberg_type_name(values)}>"
     return parsed.iceberg_name
+
+
+def physical_type_from_iceberg_name(text: str) -> str:
+    """Map an Iceberg type spelling to the contract vocabulary.
+
+    Container children are read from the Iceberg field objects by callers; the
+    rendered container spelling identifies only its top-level kind here.
+    """
+    if not isinstance(text, str):
+        raise UnsupportedIcebergTypeError(f"unsupported Iceberg type: {text!r}")
+    spelling = text.strip()
+    entry = _BY_ICEBERG_NAME.get(spelling)
+    if entry is not None:
+        return entry.name
+    if spelling == DECIMAL_TYPE_NAME:
+        return DECIMAL_TYPE_NAME
+    if spelling.startswith("decimal"):
+        compact = re.sub(r",\s+", ",", spelling)
+        try:
+            return _parse_decimal(compact).physical_type
+        except UnknownPhysicalTypeError as exc:
+            raise UnsupportedIcebergTypeError(str(exc)) from exc
+    for iceberg_prefix, physical_type in (
+        ("struct<", "struct"),
+        ("list<", "array"),
+        ("map<", "map"),
+    ):
+        if spelling.startswith(iceberg_prefix) and spelling.endswith(">"):
+            return physical_type
+    raise UnsupportedIcebergTypeError(f"unsupported Iceberg type: {text!r}")
 
 
 def spark_json_type(prop: ContractProperty) -> dict[str, Any] | str:
@@ -222,9 +273,7 @@ def _parse_decimal(spelling: str) -> ParsedType:
             f"'{spelling}' precision must be between 1 and {MAX_DECIMAL_PRECISION}"
         )
     if scale > precision:
-        raise UnknownPhysicalTypeError(
-            f"'{spelling}' scale must not be greater than its precision"
-        )
+        raise UnknownPhysicalTypeError(f"'{spelling}' scale must not be greater than its precision")
     return ParsedType(_DECIMAL_TYPE, precision=precision, scale=scale)
 
 
@@ -260,9 +309,7 @@ def _container_physical_type_from_spark_json(value: Mapping[str, Any]) -> str:
 def _required_key(value: Mapping[str, Any], key: str) -> Any:
     """One structural key of a Spark container, refused by name when it is missing."""
     if key not in value:
-        raise UnsupportedSparkTypeError(
-            f"a Spark {value.get('type')!r} type must declare {key!r}"
-        )
+        raise UnsupportedSparkTypeError(f"a Spark {value.get('type')!r} type must declare {key!r}")
     return value[key]
 
 
@@ -317,9 +364,7 @@ def _source_nullable(prop: ContractProperty) -> bool:
 def _spark_struct_fields(value: _SparkJson) -> tuple[Mapping[str, Any], ...]:
     struct = _spark_mapping(value)
     if struct.get("type") != "struct" or not isinstance(struct.get("fields"), list):
-        raise UnsupportedSparkTypeError(
-            "expected a Spark struct JSON object with a 'fields' list"
-        )
+        raise UnsupportedSparkTypeError("expected a Spark struct JSON object with a 'fields' list")
     fields = struct["fields"]
     for field in fields:
         if not isinstance(field, Mapping) or "type" not in field:

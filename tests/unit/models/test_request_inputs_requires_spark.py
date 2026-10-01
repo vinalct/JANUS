@@ -147,12 +147,12 @@ def _source_mapping(request_inputs: dict[str, Any] | None) -> dict[str, Any]:
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
         "spark": {"input_format": "json", "write_mode": "append"},
         "outputs": {
             "raw": {"path": "data/raw/example/spark_need_source", "format": "json"},
             "bronze": {"path": "data/bronze/example/spark_need_source", "format": "iceberg"},
             "metadata": {"path": "data/metadata/example/spark_need_source", "format": "json"},
         },
-        "quality": {"allow_schema_evolution": True},
+        "quality": {},
     }

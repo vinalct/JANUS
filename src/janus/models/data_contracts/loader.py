@@ -37,8 +37,9 @@ from janus.models.data_contracts.vocabulary import (
 )
 
 PINNED_ODCS_API_VERSION = "v3.2.0"
+_CORRUPT_RECORD_COLUMN = "_janus_corrupt_record"
 _ALLOWED_JANUS_PROPERTIES = frozenset(
-    {"janus.compatibility", "janus.draftedFrom", "janus.enforcement"}
+    {"janus.compatibility", "janus.draftedFrom", "janus.enforcement", "janus.maxMalformedRows"}
 )
 
 
@@ -150,15 +151,11 @@ def _read_version(data: Mapping[str, Any], issues: list[ValidationIssue]) -> str
         return ""
     if not isinstance(value, str):
         issues.append(
-            ValidationIssue(
-                "version", "must be a quoted semver string (MAJOR.MINOR.PATCH)"
-            )
+            ValidationIssue("version", "must be a quoted semver string (MAJOR.MINOR.PATCH)")
         )
         return ""
     if not _is_semver(value):
-        issues.append(
-            ValidationIssue("version", "must be MAJOR.MINOR.PATCH using digits only")
-        )
+        issues.append(ValidationIssue("version", "must be MAJOR.MINOR.PATCH using digits only"))
     return value
 
 
@@ -185,9 +182,7 @@ def _read_team(value: Any, issues: list[ValidationIssue]) -> tuple[str, ...]:
                 owners.append(username)
 
     if not has_owner_role:
-        issues.append(
-            ValidationIssue("team", "must include at least one member with role 'owner'")
-        )
+        issues.append(ValidationIssue("team", "must include at least one member with role 'owner'"))
     return tuple(owners)
 
 
@@ -200,14 +195,11 @@ def _read_schema(value: Any, issues: list[ValidationIssue]) -> ContractSchema | 
         return None
     if len(value) != 1:
         issues.append(
-            ValidationIssue(
-                "schema", f"must declare exactly one table; found {len(value)}"
-            )
+            ValidationIssue("schema", f"must declare exactly one table; found {len(value)}")
         )
 
     schemas = [
-        _read_schema_entry(item, f"schema[{index}]", issues)
-        for index, item in enumerate(value)
+        _read_schema_entry(item, f"schema[{index}]", issues) for index, item in enumerate(value)
     ]
     return schemas[0] if schemas else None
 
@@ -266,33 +258,27 @@ def _record_duplicate_name(
         return
     if value in seen_names:
         issues.append(
-            ValidationIssue(
-                f"{path}.name", f"must be unique within its level; found '{value}'"
-            )
+            ValidationIssue(f"{path}.name", f"must be unique within its level; found '{value}'")
         )
     seen_names.add(value)
 
 
-def _read_property(
-    value: Any, path: str, issues: list[ValidationIssue]
-) -> ContractProperty | None:
+def _read_property(value: Any, path: str, issues: list[ValidationIssue]) -> ContractProperty | None:
     start = len(issues)
     if not isinstance(value, Mapping):
         issues.append(ValidationIssue(path, "must be a mapping"))
         return None
 
     name = _read_property_name(value, path, issues)
+    if name == _CORRUPT_RECORD_COLUMN:
+        issues.append(ValidationIssue(f"{path}.name", "reserved column name"))
     physical_type = _require_string(value, "physicalType", issues, path)
     vocabulary_name = _read_vocabulary_name(physical_type, path, issues)
-    logical_type = _read_logical_type(
-        value, physical_type, vocabulary_name, path, issues
-    )
+    logical_type = _read_logical_type(value, physical_type, vocabulary_name, path, issues)
     custom = _read_custom_properties(
         value.get("customProperties"), f"{path}.customProperties", issues
     )
-    nested = _read_nested_declarations(
-        value, physical_type, vocabulary_name, path, issues
-    )
+    nested = _read_nested_declarations(value, physical_type, vocabulary_name, path, issues)
 
     business_name = _optional_string(value, "businessName", issues, path)
     description = _optional_string(value, "description", issues, path)
@@ -374,9 +360,7 @@ def _read_logical_type(
     return expected
 
 
-def _read_property_name(
-    data: Mapping[str, Any], path: str, issues: list[ValidationIssue]
-) -> str:
+def _read_property_name(data: Mapping[str, Any], path: str, issues: list[ValidationIssue]) -> str:
     value = data.get("name")
     field_path = f"{path}.name"
     if value is None:
@@ -388,9 +372,7 @@ def _read_property_name(
     if not value.strip():
         issues.append(ValidationIssue(field_path, "must not be empty"))
     elif value != value.strip():
-        issues.append(
-            ValidationIssue(field_path, "must not contain surrounding whitespace")
-        )
+        issues.append(ValidationIssue(field_path, "must not contain surrounding whitespace"))
     return value
 
 
@@ -407,30 +389,22 @@ def _read_nested_declarations(
     if vocabulary_name == "struct":
         _reject_nested_keys(data, ("items", "map"), physical_type, path, issues)
         return _Nested(
-            properties=_read_properties(
-                data.get("properties"), f"{path}.properties", issues
-            )
+            properties=_read_properties(data.get("properties"), f"{path}.properties", issues)
         )
     if vocabulary_name == "array":
         _reject_nested_keys(data, ("properties", "map"), physical_type, path, issues)
         return _Nested(
-            items=_read_required_child(
-                data.get("items"), f"{path}.items", physical_type, issues
-            )
+            items=_read_required_child(data.get("items"), f"{path}.items", physical_type, issues)
         )
     if vocabulary_name == "map":
         _reject_nested_keys(data, ("properties", "items"), physical_type, path, issues)
         return _read_map_children(data.get("map"), f"{path}.map", issues)
 
-    _reject_nested_keys(
-        data, ("properties", "items", "map"), physical_type, path, issues
-    )
+    _reject_nested_keys(data, ("properties", "items", "map"), physical_type, path, issues)
     return _Nested()
 
 
-def _read_map_children(
-    value: Any, path: str, issues: list[ValidationIssue]
-) -> _Nested:
+def _read_map_children(value: Any, path: str, issues: list[ValidationIssue]) -> _Nested:
     """Read the ODCS ``map`` block, whose key and value are properties in their own right."""
     if value is None:
         issues.append(ValidationIssue(path, "is required for physicalType 'map'"))
@@ -440,9 +414,7 @@ def _read_map_children(
         return _Nested()
     return _Nested(
         keys=_read_required_child(value.get("key"), f"{path}.key", "map", issues),
-        values=_read_required_child(
-            value.get("value"), f"{path}.value", "map", issues
-        ),
+        values=_read_required_child(value.get("value"), f"{path}.value", "map", issues),
     )
 
 
@@ -450,9 +422,7 @@ def _read_required_child(
     value: Any, path: str, physical_type: str, issues: list[ValidationIssue]
 ) -> ContractProperty | None:
     if value is None:
-        issues.append(
-            ValidationIssue(path, f"is required for physicalType '{physical_type}'")
-        )
+        issues.append(ValidationIssue(path, f"is required for physicalType '{physical_type}'"))
         return None
     return _read_property(value, path, issues)
 
@@ -474,9 +444,7 @@ def _reject_nested_keys(
             )
 
 
-def _read_custom_properties(
-    value: Any, path: str, issues: list[ValidationIssue]
-) -> dict[str, str]:
+def _read_custom_properties(value: Any, path: str, issues: list[ValidationIssue]) -> dict[str, str]:
     if value is None:
         return {}
     if not isinstance(value, list):
@@ -491,10 +459,7 @@ def _read_custom_properties(
             continue
         property_name = _require_string(item, "property", issues, item_path)
         property_value = _require_string(item, "value", issues, item_path)
-        if (
-            property_name.startswith("janus.")
-            and property_name not in _ALLOWED_JANUS_PROPERTIES
-        ):
+        if property_name.startswith("janus.") and property_name not in _ALLOWED_JANUS_PROPERTIES:
             issues.append(
                 ValidationIssue(
                     f"{item_path}.property",
@@ -506,9 +471,7 @@ def _read_custom_properties(
     return result
 
 
-def _read_janus_options(
-    value: Any, issues: list[ValidationIssue]
-) -> JanusContractOptions | None:
+def _read_janus_options(value: Any, issues: list[ValidationIssue]) -> JanusContractOptions | None:
     start = len(issues)
     custom = _read_custom_properties(value, "customProperties", issues)
     compatibility = _require_enum(
@@ -525,13 +488,32 @@ def _read_janus_options(
         issues,
         "customProperties",
     )
-    drafted_from = _optional_string(
-        custom, "janus.draftedFrom", issues, "customProperties"
-    )
+    drafted_from = _optional_string(custom, "janus.draftedFrom", issues, "customProperties")
+    max_malformed_raw = custom.get("janus.maxMalformedRows")
+    max_malformed_rows = 0
+    if max_malformed_raw is not None:
+        if not max_malformed_raw.isascii() or not max_malformed_raw.isdecimal():
+            issues.append(
+                ValidationIssue(
+                    "customProperties.janus.maxMalformedRows",
+                    "must be a non-negative integer string",
+                )
+            )
+        else:
+            try:
+                max_malformed_rows = int(max_malformed_raw)
+            except ValueError:
+                issues.append(
+                    ValidationIssue(
+                        "customProperties.janus.maxMalformedRows",
+                        "integer string is too long",
+                    )
+                )
     if len(issues) != start:
         return None
     return JanusContractOptions(
         compatibility=compatibility,
         enforcement=enforcement,
         drafted_from=drafted_from,
+        max_malformed_rows=max_malformed_rows,
     )

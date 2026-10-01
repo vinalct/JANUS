@@ -30,6 +30,7 @@ from janus.models import (
 from janus.planner import PlannedRun
 from janus.runtime.materialize import BronzeMaterializer
 from janus.utils.storage import StorageLayout
+from tests.support.contracts import with_registry_contract
 
 ENVIRONMENT_CONFIG = {
     "storage": {
@@ -66,11 +67,13 @@ def spark():
 
 @dataclass(slots=True)
 class FakeReader:
+    frames: list[Any]
+
     def read_extraction_result(
         self, spark, extraction_result, format_name=None, schema=None, options=None
     ):
         del spark, extraction_result, format_name, schema, options
-        return object()
+        return self.frames.pop(0)
 
 
 @dataclass(slots=True)
@@ -107,11 +110,11 @@ def test_run_keys_span_every_batch(spark, tmp_path):
     frames = [spark.createDataFrame(rows) for rows in BATCH_KEY_ROWS]
 
     materializer = BronzeMaterializer(
-        reader=FakeReader(),
+        reader=FakeReader(frames=list(frames)),
         normalizer=QueueNormalizer(frames=frames),
         writer_factory=lambda storage_layout: NoopWriter(plan.bronze_output.path),
     )
-    _, _, run_keys = materializer.materialize(
+    _, _, run_keys, _ = materializer.materialize(
         planned_run,
         plan,
         spark,
@@ -147,7 +150,7 @@ def _plan(tmp_path: Path) -> tuple[ExecutionPlan, PlannedRun]:
         project_root=tmp_path,
         started_at=datetime(2026, 7, 8, 12, 0, tzinfo=UTC),
     )
-    plan = ExecutionPlan.from_source_config(source_config, run_context)
+    plan = with_registry_contract(ExecutionPlan.from_source_config(source_config, run_context))
     planned_run = PlannedRun(
         plan=plan,
         strategy=SimpleNamespace(strategy_family="file"),
@@ -191,7 +194,7 @@ def _source_config(tmp_path: Path) -> SourceConfig:
             "dead_letter_max_items": 0,
             "retry": {"max_attempts": 3, "backoff_strategy": "fixed", "backoff_seconds": 1},
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/multi_batch_run_keys.yaml"},
         "spark": {
             "input_format": "json",
             "write_mode": "append",
@@ -211,10 +214,15 @@ def _source_config(tmp_path: Path) -> SourceConfig:
         "quality": {
             "required_fields": ["event_id", "event_date"],
             "unique_fields": ["event_id"],
-            "allow_schema_evolution": True,
         },
     }
     config_path = tmp_path / "conf" / "sources" / f"{source_id}.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    contract_path = tmp_path / "conf" / "contracts" / "test" / "multi_batch_run_keys.yaml"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_bytes(
+        (Path(__file__).resolve().parents[2] / "fixtures" / "contracts" / "baseline"
+         / "multi_batch_run_keys.yaml").read_bytes()
+    )
     return SourceConfig.from_mapping(payload, config_path)

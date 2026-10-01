@@ -55,7 +55,7 @@ def test_example_contract_loads_into_the_complete_frozen_model():
         api_version="v3.2.0",
         id="example.federal_open_data_example",
         name="Federal open data example",
-        version="1.0.0",
+        version="1.0.1",
         status="active",
         domain="example",
         purpose=(
@@ -87,9 +87,7 @@ def test_example_contract_loads_into_the_complete_frozen_model():
                     physical_type="string",
                     logical_type="string",
                     business_name="Updated at",
-                    description=(
-                        "Upstream update timestamp, kept as the string the API sent."
-                    ),
+                    description=("Upstream update timestamp, kept as the string the API sent."),
                     required=True,
                     classification="public",
                     source_field="updated_at",
@@ -100,7 +98,7 @@ def test_example_contract_loads_into_the_complete_frozen_model():
         ),
         janus=JanusContractOptions(
             compatibility="additive",
-            enforcement="lenient",
+            enforcement="strict",
         ),
         schema_version=expected_hash,
     )
@@ -128,8 +126,7 @@ def test_load_data_contract_owns_the_single_raise_site():
     function = next(
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "load_data_contract"
+        if isinstance(node, ast.FunctionDef) and node.name == "load_data_contract"
     )
     raise_lines = [node.lineno for node in ast.walk(function) if isinstance(node, ast.Raise)]
 
@@ -154,9 +151,7 @@ def test_two_schemas_fail_closed():
         load_data_contract(path)
 
     assert exc_info.value.issues[0].path == "schema"
-    assert exc_info.value.issues[0].message == (
-        "must declare exactly one table; found 2"
-    )
+    assert exc_info.value.issues[0].message == ("must declare exactly one table; found 2")
 
 
 def test_five_independent_problems_are_collected_and_sorted(tmp_path):
@@ -166,9 +161,7 @@ def test_five_independent_problems_are_collected_and_sorted(tmp_path):
     data["status"] = "unknown"
     duplicate = copy.deepcopy(data["schema"][0]["properties"][0])
     data["schema"][0]["properties"].append(duplicate)
-    data["customProperties"].append(
-        {"property": "janus.foo", "value": "unsupported"}
-    )
+    data["customProperties"].append({"property": "janus.foo", "value": "unsupported"})
     path = _write_contract(tmp_path, data)
 
     with pytest.raises(ContractValidationError) as exc_info:
@@ -411,3 +404,54 @@ def test_a_nested_shape_belonging_to_another_container_is_rejected(tmp_path):
     assert [(issue.path, issue.message) for issue in exc_info.value.issues] == [
         ("schema[0].properties[1].map", "is not allowed for physicalType 'array'")
     ]
+
+
+@pytest.mark.parametrize("value", ["-1", "x", "1.5", "+2"])
+def test_max_malformed_rows_rejects_invalid_strings(tmp_path, value):
+    data = _minimal_mapping()
+    data["customProperties"].append({"property": "janus.maxMalformedRows", "value": value})
+
+    with pytest.raises(ContractValidationError) as exc_info:
+        load_data_contract(_write_contract(tmp_path, data))
+
+    assert any(
+        issue.path == "customProperties.janus.maxMalformedRows" for issue in exc_info.value.issues
+    )
+
+
+def test_max_malformed_rows_parses_and_defaults_to_zero(tmp_path):
+    data = _minimal_mapping()
+    assert load_data_contract(_write_contract(tmp_path, data)).janus.max_malformed_rows == 0
+    data["customProperties"].append({"property": "janus.maxMalformedRows", "value": "3"})
+    assert load_data_contract(_write_contract(tmp_path, data)).janus.max_malformed_rows == 3
+
+
+def test_corrupt_record_column_is_reserved_even_when_nested(tmp_path):
+    data = _minimal_mapping()
+    data["schema"][0]["properties"].append(
+        {"name": "_janus_corrupt_record", "physicalType": "string"}
+    )
+
+    with pytest.raises(ContractValidationError) as exc_info:
+        load_data_contract(_write_contract(tmp_path, data))
+
+    assert any(
+        issue.path == "schema[0].properties[1].name" and "reserved" in issue.message
+        for issue in exc_info.value.issues
+    )
+
+
+def test_corrupt_schema_flag_appends_one_nullable_string_and_preserves_default():
+    from janus.schema_contracts import spark_schema_from_contract
+
+    contract = load_data_contract(CONTRACT_FIXTURES / "hostile" / "base.yaml")
+    default_schema = spark_schema_from_contract(contract).jsonValue()
+    tracked_schema = spark_schema_from_contract(contract, with_corrupt_record=True).jsonValue()
+
+    assert tracked_schema["fields"][:-1] == default_schema["fields"]
+    assert tracked_schema["fields"][-1] == {
+        "name": "_janus_corrupt_record",
+        "type": "string",
+        "nullable": True,
+        "metadata": {},
+    }

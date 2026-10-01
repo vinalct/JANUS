@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -181,15 +181,18 @@ class RunObserver:
         )
         run_metadata_path = self.run_metadata_store.write(plan, run_metadata)
 
-        lineage_record = LineageRecord.from_runtime(
-            plan,
-            status="failed",
-            extraction_result=extraction_result,
-            write_results=write_results,
-            failure_reason=run_metadata.failure_reason,
-            error_type=run_metadata.error_type,
-            emitted_at=finished_at,
-            metadata=prepared_metadata,
+        lineage_record = replace(
+            LineageRecord.from_runtime(
+                plan,
+                status="failed",
+                extraction_result=extraction_result,
+                write_results=write_results,
+                failure_reason=run_metadata.failure_reason,
+                error_type=run_metadata.error_type,
+                emitted_at=finished_at,
+                metadata=prepared_metadata,
+            ),
+            failure_stage=run_metadata.failure_stage,
         )
         lineage_path = self.lineage_store.write(plan, lineage_record)
         persisted = PersistedArtifacts(

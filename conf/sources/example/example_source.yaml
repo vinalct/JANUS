@@ -77,4 +77,3 @@ quality:
     - updated_at
   unique_fields:
     - id
-  allow_schema_evolution: true

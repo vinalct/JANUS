@@ -1,0 +1,37 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: test.multi_batch_run_keys
+name: D-1 baseline multi_batch_run_keys
+version: 1.0.0
+status: active
+domain: test
+description:
+  purpose: 'D-1 contract for tests/integration/incremental_upsert/test_multi_batch_run_keys.py: the schema
+    its per-batch rows infer.'
+team:
+- username: janus-tests
+  role: owner
+schema:
+- name: multi_batch_run_keys_fixture
+  physicalType: table
+  properties:
+  - name: event_id
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+    customProperties:
+    - property: sourceNullable
+      value: 'true'
+  - name: event_date
+    logicalType: string
+    physicalType: string
+    required: true
+    customProperties:
+    - property: sourceNullable
+      value: 'true'
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: lenient

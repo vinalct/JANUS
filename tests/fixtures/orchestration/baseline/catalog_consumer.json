@@ -49,7 +49,7 @@
         }
       ],
       "checkpoint_strategy": "none",
-      "config_version": "7e0fbc769b0391c9e56f0bd29ee0c64586d08ddadf3e732915e4d950d79e5a1c",
+      "config_version": "7c97204a90b13fe82e0d63f57f33177fca3ef31f3bde32d065ef1215f5f1998a",
       "configured_outputs": [
         {
           "format": "json",
@@ -163,6 +163,7 @@
       ],
       "records_extracted": 1,
       "run_attributes": {
+        "contract_preflight_outcome": "catalog_unavailable",
         "source_id": "B",
         "source_type": "catalog",
         "strategy": "catalog",
@@ -276,6 +277,7 @@
       ],
       "records_extracted": 1,
       "run_attributes": {
+        "contract_preflight_outcome": "catalog_unavailable",
         "source_id": "B",
         "source_type": "catalog",
         "strategy": "catalog",
@@ -306,6 +308,8 @@
         },
         {
           "details": {
+            "compatibility": "additive",
+            "enforcement": "lenient",
             "expected_field_count": "1",
             "schema_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
           },
@@ -362,7 +366,8 @@
       "emitted_at": "2026-09-13T12:00:05+00:00",
       "environment": "local",
       "metadata": {
-        "allow_schema_evolution": "True",
+        "compatibility": "additive",
+        "enforcement": "lenient",
         "schema_expectation_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
       },
       "run_id": "order14-catalog_consumer",

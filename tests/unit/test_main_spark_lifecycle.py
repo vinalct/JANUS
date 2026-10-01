@@ -7,8 +7,8 @@ under test is exactly the lifecycle wiring:
 
 - the CLI hands the executor a **provider**, never a started session;
 - the `spark_session` summary block reports what actually happened, not what was intended;
-- the provider is released on the success path, the failed-run path, and the raised-exception
-  path (FR-4);
+- the provider is released on the success path, the failed-run path (a refused contract check
+  included), and the raised-exception path (FR-4);
 - `--execute` and `--ingest-raw-to-bronze` converge on the same shape (FR-3).
 """
 
@@ -54,13 +54,17 @@ class RecordingRun:
     """Whatever the stubbed execution stage returns to `main()`."""
 
     status: str = "succeeded"
+    failure_stage: str | None = None
 
     @property
     def is_successful(self) -> bool:
         return self.status == "succeeded"
 
     def to_summary(self) -> dict[str, Any]:
-        return {"status": self.status}
+        summary: dict[str, Any] = {"status": self.status}
+        if self.failure_stage is not None:
+            summary["failure_stage"] = self.failure_stage
+        return summary
 
 
 @dataclass(slots=True)
@@ -73,6 +77,7 @@ class ExecutionSpy:
     starts_a_session: bool = False
     raises: Exception | None = None
     status: str = "succeeded"
+    failure_stage: str | None = None
 
     def run(self, provider: SparkSessionProvider) -> RecordingRun:
         self.seen_provider = provider
@@ -81,7 +86,7 @@ class ExecutionSpy:
             self.sessions.append(provider.get())
         if self.raises is not None:
             raise self.raises
-        return RecordingRun(self.status)
+        return RecordingRun(self.status, self.failure_stage)
 
 
 def _planned_run_double() -> SimpleNamespace:
@@ -92,7 +97,6 @@ def _planned_run_double() -> SimpleNamespace:
             source_config=SimpleNamespace(
                 source_id="stub_source",
                 config_path=Path("conf/sources/stub.yaml"),
-                deprecations=(),
             )
         ),
     )
@@ -204,6 +208,70 @@ def test_the_session_is_released_when_the_run_fails_validation(cli, capsys):
     assert exit_code == 1
     assert [session.stop_calls for session in cli.sessions] == [1]
     assert _summary(capsys)["executed_run"]["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("argv", "summary_key"),
+    [
+        (["--execute", "--source-id", SOURCE_ID], "executed_run"),
+        (
+            [
+                "--ingest-raw-to-bronze",
+                "--source-id",
+                SOURCE_ID,
+                "--bronze-table",
+                "bronze_example.federal_open_data_example",
+            ],
+            "raw_to_bronze_run",
+        ),
+    ],
+    ids=["execute", "ingest_raw_to_bronze"],
+)
+def test_the_session_is_released_when_the_contract_check_refuses_a_batch(
+    cli, capsys, argv, summary_key
+):
+    """a batch refused before its write is a failed run like any other."""
+
+    cli.starts_a_session = True
+    cli.status = "failed"
+    cli.failure_stage = "contract_check"
+
+    exit_code = main(argv)
+
+    assert exit_code == 1
+    assert [session.stop_calls for session in cli.sessions] == [1]
+    assert _summary(capsys)[summary_key]["failure_stage"] == "contract_check"
+
+
+
+@pytest.mark.parametrize(
+    ("argv", "summary_key"),
+    [
+        (["--execute", "--source-id", SOURCE_ID], "executed_run"),
+        (
+            [
+                "--ingest-raw-to-bronze",
+                "--source-id",
+                SOURCE_ID,
+                "--bronze-table",
+                "bronze_example.federal_open_data_example",
+            ],
+            "raw_to_bronze_run",
+        ),
+    ],
+    ids=["execute", "ingest_raw_to_bronze"],
+)
+def test_preflight_refusal_exits_one_without_starting_spark(cli, capsys, argv, summary_key):
+    cli.status = "failed"
+    cli.failure_stage = "contract_preflight"
+
+    exit_code = main(argv)
+
+    assert exit_code == 1
+    assert cli.sessions == []
+    summary = _summary(capsys)
+    assert summary[summary_key]["failure_stage"] == "contract_preflight"
+    assert "spark_session" not in summary
 
 
 def test_the_session_is_released_when_the_run_raises(cli):

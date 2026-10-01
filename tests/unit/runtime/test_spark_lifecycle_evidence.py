@@ -29,6 +29,7 @@ from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.runtime.spark_lifecycle import scoped_request_input_session
 from janus.utils.logging import build_structured_logger
 from janus.utils.storage import StorageLayout
+from tests.support.contract_frames import lenient_contract_for_fake_frame, read_frame
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -176,9 +177,8 @@ class StubReader:
     def read_extraction_result(self, spark, extraction_result, **kwargs):
         del spark
         del extraction_result
-        del kwargs
         self.calls.append("read")
-        return object()
+        return read_frame(kwargs.get("schema"))
 
 
 @dataclass(slots=True)
@@ -300,6 +300,7 @@ def test_extraction_completes_without_being_able_to_obtain_a_session(
     # Exactly one session, and it opens only after the handoff is prepared.
     assert provider.start_count == 1
     assert provider.stop_count == 1
+    assert calls.index("observe_start") < calls.index("preflight") < calls.index("extract_started")
     assert calls.index("extract_finished") < calls.index("handoff")
     assert calls.index("handoff") < calls.index("read")
 
@@ -548,7 +549,9 @@ def _planned_run(
         started_at=datetime(2026, 7, 6, 12, 0, tzinfo=UTC),
     )
     return PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=ExecutionPlan.from_source_config(source_config, run_context).with_data_contract(
+            lenient_contract_for_fake_frame(PROJECT_ROOT / source_config.schema.contract)
+        ),
         strategy=RequestInputAwareStrategy(calls, provider),
         hook=None,
     )
@@ -564,6 +567,7 @@ def _executor(tmp_path: Path, calls: list[str]) -> SourceExecutor:
         observer=StubObserver(calls, metadata_root),
         writer_factory=lambda storage_layout: StubWriter(calls, bronze_path),
         storage_layout_resolver=lambda plan, config: _storage_layout(tmp_path),
+        preflight_loader=lambda *args, **kwargs: calls.append("preflight") or None,
     )
 
 

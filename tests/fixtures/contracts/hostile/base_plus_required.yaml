@@ -1,0 +1,39 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: test.hostile.base_plus_required
+name: hostile fixture base_plus_required
+version: 1.1.0
+status: active
+domain: test
+description:
+  purpose: 'base plus a required code string: refused, existing rows would hold nulls in it.'
+team:
+- username: janus-tests
+  role: owner
+schema:
+- name: hostile_base
+  physicalType: table
+  properties:
+  - name: id
+    logicalType: string
+    physicalType: string
+    required: true
+    primaryKey: true
+  - name: label
+    logicalType: string
+    physicalType: string
+  - name: amount
+    logicalType: integer
+    physicalType: long
+  - name: when
+    logicalType: date
+    physicalType: timestamptz
+  - name: code
+    logicalType: string
+    physicalType: string
+    required: true
+customProperties:
+- property: janus.compatibility
+  value: additive
+- property: janus.enforcement
+  value: strict

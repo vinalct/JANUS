@@ -7,18 +7,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from janus.models.config.issues import ValidationIssue
 from janus.models.config.policy import DEFAULT_VALIDATION_POLICY, ValidationPolicy
 from janus.models.source_config import SourceConfig, SourceConfigValidationError
+from janus.registry import load_registry
+from tests.support.contracts import write_minimal_contract
 
 CONFIG_PATH = Path("conf/sources/example/policy_injection.yaml")
 
 PUBLIC_SOURCES_ALLOWED = replace(DEFAULT_VALIDATION_POLICY, require_public_access=False)
-ACTIVE_CONTRACTS_ALLOWED = replace(
-    DEFAULT_VALIDATION_POLICY, require_active_contract=False
-)
-
 SPLIT_FAMILIES_ALLOWED = replace(
     DEFAULT_VALIDATION_POLICY, require_strategy_matches_source_type=False
 )
@@ -84,7 +83,7 @@ def _base_mapping(**overrides: Any) -> dict[str, Any]:
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
         "spark": {"input_format": "json", "write_mode": "append"},
         "outputs": {
             "raw": {"path": "data/raw/example/policy_injection_source", "format": "json"},
@@ -97,7 +96,7 @@ def _base_mapping(**overrides: Any) -> dict[str, Any]:
                 "format": "json",
             },
         },
-        "quality": {"allow_schema_evolution": True},
+        "quality": {},
     }
     mapping.update(overrides)
     return mapping
@@ -147,36 +146,6 @@ def test_broadened_federation_policy_accepts_a_state_source():
     assert config.federation_level == "state"
 
 
-@pytest.mark.parametrize(
-    ("mapping", "expected_path"),
-    [
-        (_base_mapping(source_type="graphql"), "source_type"),
-        (_base_mapping(strategy="catalog"), "strategy"),
-        (_base_mapping(federation_level="state"), "federation_level"),
-        (_base_mapping(public_access=False), "public_access"),
-    ],
-    ids=["source_type_set", "strategy_pairing", "federation_level_set", "public_access"],
-)
-def test_relaxing_contract_requirement_leaves_config_scope_rules_strict(
-    mapping: dict[str, Any], expected_path: str
-):
-    with pytest.raises(SourceConfigValidationError) as exc_info:
-        SourceConfig.from_mapping(mapping, CONFIG_PATH, policy=ACTIVE_CONTRACTS_ALLOWED)
-
-    assert expected_path in [issue.path for issue in exc_info.value.issues]
-
-
-def test_relaxing_public_access_leaves_active_contract_requirement_strict():
-    issues: list[ValidationIssue] = []
-
-    PUBLIC_SOURCES_ALLOWED.validate_schema_declaration(
-        enabled=True, contract_status="draft", issues=issues
-    )
-
-    assert [issue.path for issue in issues] == ["schema.contract"]
-    assert issues[0].message.endswith("(found 'draft')")
-
-
 def test_a_hand_written_policy_object_works():
     """The seam is a protocol, not a base class — proven by not inheriting from one.
 
@@ -200,12 +169,6 @@ def test_a_hand_written_policy_object_works():
 
         def validate_public_access(
             self, public_access: bool, issues: list[ValidationIssue]
-        ) -> None:
-            return None
-
-        def validate_schema_declaration(
-            self, *, enabled: bool, contract_status: str | None,
-            issues: list[ValidationIssue],
         ) -> None:
             return None
 
@@ -252,23 +215,6 @@ def test_relaxing_one_rule_leaves_the_others_strict():
     ("case", "overrides", "expected_issue_path"),
     [
         (
-            "incremental_without_unique_fields",
-            {
-                "extraction": {
-                    "mode": "incremental",
-                    "checkpoint_field": "updated_at",
-                    "checkpoint_strategy": "max_value",
-                    "retry": {
-                        "max_attempts": 3,
-                        "backoff_strategy": "fixed",
-                        "backoff_seconds": 1,
-                    },
-                },
-                "quality": {"allow_schema_evolution": True},
-            },
-            "quality.unique_fields",
-        ),
-        (
             "concurrency_with_cursor_pagination",
             {
                 "access": _access_block(
@@ -280,7 +226,7 @@ def test_relaxing_one_rule_leaves_the_others_strict():
             "access.rate_limit.concurrency",
         ),
     ],
-    ids=["incremental_without_unique_fields", "concurrency_with_cursor_pagination"],
+    ids=["concurrency_with_cursor_pagination"],
 )
 def test_structural_rules_are_not_relaxable_by_policy(
     case: str, overrides: dict[str, Any], expected_issue_path: str
@@ -295,3 +241,29 @@ def test_structural_rules_are_not_relaxable_by_policy(
         f"{expected_issue_path} is a structural rule — it must not be reachable from the "
         "ValidationPolicy seam."
     )
+
+
+def test_the_incremental_key_rule_is_not_relaxable_by_policy(tmp_path):
+    """The rule lives in the loader since order-19, where the contract's primaryKey is known."""
+    (tmp_path / "conf").mkdir()
+    (tmp_path / "conf" / "app.yaml").write_text(
+        'registry:\n  sources_dir: conf/sources\n  file_pattern: "*.yaml"\n', encoding="utf-8"
+    )
+    write_minimal_contract(tmp_path)
+    mapping = _base_mapping(
+        extraction={
+            "mode": "incremental",
+            "checkpoint_field": "updated_at",
+            "checkpoint_strategy": "max_value",
+            "retry": {"max_attempts": 3, "backoff_strategy": "fixed", "backoff_seconds": 1},
+        },
+    )
+    source = tmp_path / "conf" / "sources" / "example" / "source.yaml"
+    source.parent.mkdir(parents=True)
+    source.write_text(yaml.safe_dump(mapping, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(SourceConfigValidationError) as exc_info:
+        load_registry(tmp_path, policy=NOTHING_RELAXABLE_LEFT_STRICT)
+
+    assert [issue.path for issue in exc_info.value.issues] == ["schema.contract"]
+    assert "primaryKey" in exc_info.value.issues[0].message

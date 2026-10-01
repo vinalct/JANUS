@@ -6,13 +6,20 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from janus.models import (
+    DataContract,
     ExecutionPlan,
-    QualityConfig,
     WriteResult,
     resolve_bronze_write_intent,
 )
 from janus.normalizers import NORMALIZATION_METADATA_COLUMNS
+from janus.quality.contract_checks import check_frame_against_contract
 from janus.quality.models import QualityValidationError, ValidationCheck, ValidationReport
+from janus.quality.pre_write import (
+    PreWriteEvidence,
+    required_fields_check,
+    required_null_aggregations,
+    summarize_pre_write_evidence,
+)
 from janus.quality.schema_expectation import SchemaExpectation, resolve_schema_expectation
 from janus.quality.store import PersistedValidationReport, ValidationReportStore
 from janus.utils.environment import resolve_project_path
@@ -24,7 +31,13 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class QualityGate:
-    """Strategy-agnostic validation orchestrator for config, data, and outputs."""
+    """Strategy-agnostic validation orchestrator for config, data, and outputs.
+
+    The structural contract check is decided before the write, by the materializer; given that
+    ``pre_write_evidence``, the gate reports it as ``data.schema_expectations`` (and, for a
+    ``strict`` contract, ``data.required_fields``) and ``data.malformed_rows`` instead
+    of deciding a second time.
+    """
 
     report_store: ValidationReportStore | None = None
 
@@ -34,30 +47,27 @@ class QualityGate:
         *,
         dataframe: DataFrame | None = None,
         write_results: Sequence[WriteResult] = (),
-        expected_fields: Sequence[str] | None = None,
         output_columns: Sequence[str] = NORMALIZATION_METADATA_COLUMNS,
         bronze_dataframe: DataFrame | None = None,
         run_keys: DataFrame | None = None,
+        pre_write_evidence: Sequence[PreWriteEvidence] | None = None,
         raise_on_failure: bool = False,
     ) -> ValidationReport:
-        schema_expectation = resolve_schema_expectation(plan, expected_fields=expected_fields)
+        schema_expectation = resolve_schema_expectation(plan)
+        reported = _pre_write_report(plan, pre_write_evidence)
         checks = (
-            validate_quality_contract(plan.source_config.quality),
+            validate_quality_contract(plan.data_contract),
             validate_schema_contract_mode(plan, schema_expectation),
-            validate_required_fields(plan, dataframe),
+            reported.get("required_fields") or validate_required_fields(plan, dataframe),
             validate_unique_fields(plan, dataframe),
-            validate_schema_expectations(plan, dataframe, schema_expectation),
+            reported.get("schema_expectations") or validate_schema_expectations(plan, dataframe),
+            *((reported["malformed_rows"],) if "malformed_rows" in reported else ()),
             validate_output_columns(dataframe, output_columns),
             validate_materialized_outputs(plan, write_results),
             validate_bronze_key_uniqueness(plan, bronze_dataframe, run_keys),
         )
         report = ValidationReport.from_plan(
-            plan,
-            checks,
-            metadata={
-                "allow_schema_evolution": str(plan.source_config.quality.allow_schema_evolution),
-                "schema_expectation_source": schema_expectation.source or "",
-            },
+            plan, checks, metadata=_report_metadata(plan, schema_expectation)
         )
         if raise_on_failure and not report.is_successful:
             raise QualityValidationError(report)
@@ -69,10 +79,10 @@ class QualityGate:
         *,
         dataframe: DataFrame | None = None,
         write_results: Sequence[WriteResult] = (),
-        expected_fields: Sequence[str] | None = None,
         output_columns: Sequence[str] = NORMALIZATION_METADATA_COLUMNS,
         bronze_dataframe: DataFrame | None = None,
         run_keys: DataFrame | None = None,
+        pre_write_evidence: Sequence[PreWriteEvidence] | None = None,
         raise_on_failure: bool = False,
     ) -> PersistedValidationReport:
         if self.report_store is None:
@@ -82,10 +92,10 @@ class QualityGate:
             plan,
             dataframe=dataframe,
             write_results=write_results,
-            expected_fields=expected_fields,
             output_columns=output_columns,
             bronze_dataframe=bronze_dataframe,
             run_keys=run_keys,
+            pre_write_evidence=pre_write_evidence,
             raise_on_failure=False,
         )
         persisted_path = self.report_store.write(plan, report)
@@ -95,45 +105,51 @@ class QualityGate:
         return persisted
 
 
-def validate_quality_contract(quality_config: QualityConfig) -> ValidationCheck:
-    issues: list[str] = []
-    duplicate_required = _duplicate_fields(quality_config.required_fields)
-    duplicate_unique = _duplicate_fields(quality_config.unique_fields)
-    if duplicate_required:
-        issues.append("required_fields contains duplicates: " + ", ".join(duplicate_required))
-    if duplicate_unique:
-        issues.append("unique_fields contains duplicates: " + ", ".join(duplicate_unique))
+def _pre_write_report(
+    plan: ExecutionPlan, evidence: Sequence[PreWriteEvidence] | None
+) -> dict[str, ValidationCheck]:
+    """The checks the materializer already decided, merged across batches; none without it."""
+    contract = plan.data_contract
+    if not evidence or contract is None:
+        return {}
+    return summarize_pre_write_evidence(evidence, enforcement=contract.janus.enforcement)
 
-    missing_from_required = [
-        field
-        for field in quality_config.unique_fields
-        if field not in quality_config.required_fields
-    ]
+
+def _report_metadata(plan: ExecutionPlan, expectation: SchemaExpectation) -> dict[str, str]:
+    metadata = {"schema_expectation_source": expectation.source or ""}
+    if plan.data_contract is not None:
+        metadata["compatibility"] = plan.data_contract.janus.compatibility
+        metadata["enforcement"] = plan.data_contract.janus.enforcement
+    return metadata
+
+
+def validate_quality_contract(contract: DataContract | None) -> ValidationCheck:
+    """Every ``primaryKey`` column must also be ``required``: a null merge key is a failure.
+
+    Duplicates cannot occur here, because the contract loader rejects a repeated property name.
+    The details keep their ``required_fields``/``unique_fields`` keys, now carrying the
+    contract's ``required`` and ``primaryKey`` columns.
+    """
+    required_fields = _required_columns(contract)
+    unique_fields = _primary_key(contract)
+    details = {
+        "required_fields": ",".join(required_fields),
+        "unique_fields": ",".join(unique_fields),
+    }
+    missing_from_required = [field for field in unique_fields if field not in required_fields]
     if missing_from_required:
-        issues.append(
-            "unique_fields must also appear in required_fields: "
-            + ", ".join(missing_from_required)
-        )
-
-    if issues:
         return ValidationCheck.failed(
             "config",
             "quality_contract",
-            "; ".join(issues),
-            details={
-                "required_fields": ",".join(quality_config.required_fields),
-                "unique_fields": ",".join(quality_config.unique_fields),
-            },
+            "primaryKey columns must also be required: " + ", ".join(missing_from_required),
+            details=details,
         )
 
     return ValidationCheck.passed(
         "config",
         "quality_contract",
         "Quality rules are internally consistent.",
-        details={
-            "required_fields": ",".join(quality_config.required_fields),
-            "unique_fields": ",".join(quality_config.unique_fields),
-        },
+        details=details,
     )
 
 
@@ -141,49 +157,26 @@ def validate_schema_contract_mode(
     plan: ExecutionPlan,
     schema_expectation: SchemaExpectation,
 ) -> ValidationCheck:
-    if schema_expectation.error:
-        return ValidationCheck.failed(
+    contract = plan.data_contract
+    if contract is None:
+        # Not decided here: the materializer refuses to write without a contract.
+        return ValidationCheck.skipped(
             "config",
             "schema_contract_mode",
-            schema_expectation.error,
-            details={"schema_source": schema_expectation.source or ""},
-        )
-
-    if (
-        not plan.source_config.quality.allow_schema_evolution
-        and not plan.source_config.schema.is_declared
-    ):
-        return ValidationCheck.failed(
-            "config",
-            "schema_contract_mode",
-            "allow_schema_evolution=false requires schema.mode='explicit'.",
-            details={"schema_mode": plan.source_config.schema.mode},
-        )
-
-    if schema_expectation.fields:
-        return ValidationCheck.passed(
-            "config",
-            "schema_contract_mode",
-            "Schema validation will use an explicit field contract.",
-            details={
-                "schema_source": schema_expectation.source or "",
-                "expected_field_count": len(schema_expectation.fields),
-            },
-        )
-
-    if plan.source_config.quality.allow_schema_evolution:
-        return ValidationCheck.passed(
-            "config",
-            "schema_contract_mode",
-            "Schema evolution is enabled; unexpected columns will be tolerated.",
-            details={"schema_mode": plan.source_config.schema.mode},
+            "No data contract is declared; bronze is materialized only under one.",
+            details={"schema_contract": plan.source_config.schema.contract},
         )
 
     return ValidationCheck.passed(
         "config",
         "schema_contract_mode",
-        "Strict schema mode is configured through an explicit schema contract.",
-        details={"schema_mode": plan.source_config.schema.mode},
+        "Schema validation will use an explicit field contract.",
+        details={
+            "schema_source": schema_expectation.source or "",
+            "expected_field_count": len(schema_expectation.fields),
+            "compatibility": contract.janus.compatibility,
+            "enforcement": contract.janus.enforcement,
+        },
     )
 
 
@@ -191,7 +184,8 @@ def validate_required_fields(
     plan: ExecutionPlan,
     dataframe: DataFrame | None,
 ) -> ValidationCheck:
-    required_fields = plan.source_config.quality.required_fields
+    """The post-write count; a ``strict`` run's gate renders the pre-write count instead."""
+    required_fields = _required_columns(plan.data_contract)
     if not required_fields:
         return ValidationCheck.skipped(
             "data",
@@ -214,30 +208,14 @@ def validate_required_fields(
             details={"missing_fields": ",".join(missing_columns)},
         )
 
-    invalid_counts = _required_field_violation_counts(dataframe, required_fields)
-    failing_fields = {field: count for field, count in invalid_counts.items() if count > 0}
-    if failing_fields:
-        rendered_counts = ", ".join(f"{field} ({count})" for field, count in failing_fields.items())
-        return ValidationCheck.failed(
-            "data",
-            "required_fields",
-            "Required fields contain null or blank values: " + rendered_counts,
-            details={field: count for field, count in failing_fields.items()},
-        )
-
-    return ValidationCheck.passed(
-        "data",
-        "required_fields",
-        "All required fields are present and populated.",
-        details={"required_field_count": len(required_fields)},
-    )
+    return required_fields_check(_required_field_violation_counts(dataframe, required_fields))
 
 
 def validate_unique_fields(
     plan: ExecutionPlan,
     dataframe: DataFrame | None,
 ) -> ValidationCheck:
-    unique_fields = plan.source_config.quality.unique_fields
+    unique_fields = _primary_key(plan.data_contract)
     if not unique_fields:
         return ValidationCheck.skipped(
             "data",
@@ -287,8 +265,8 @@ def validate_bronze_key_uniqueness(
     run_keys: DataFrame | None,
 ) -> ValidationCheck:
     """Assert the committed bronze table holds one row per key this run wrote."""
-    
-    unique_fields = plan.source_config.quality.unique_fields
+
+    unique_fields = _primary_key(plan.data_contract)
     if not unique_fields:
         return ValidationCheck.skipped(
             "output",
@@ -353,78 +331,34 @@ def validate_bronze_key_uniqueness(
 def validate_schema_expectations(
     plan: ExecutionPlan,
     dataframe: DataFrame | None,
-    schema_expectation: SchemaExpectation,
 ) -> ValidationCheck:
+    """Report the structural contract check for a frame validated outside the materializer.
+
+    It is the same pure check the pre-write gate runs, so the two cannot disagree; the
+    normalization columns a normalized frame carries are ignored unless the contract declares them.
+    """
     if dataframe is None:
         return ValidationCheck.skipped(
             "data",
             "schema_expectations",
             "No dataframe was provided for schema validation.",
         )
-    if schema_expectation.error:
-        return ValidationCheck.failed(
-            "data",
-            "schema_expectations",
-            schema_expectation.error,
-            details={"schema_source": schema_expectation.source or ""},
-        )
-    if not schema_expectation.fields:
+    if plan.data_contract is None:
         return ValidationCheck.skipped(
             "data",
             "schema_expectations",
             "No explicit schema expectation was available for comparison.",
         )
+    from janus.schema_contracts import frame_columns_from_spark_schema
 
-    observed_fields = tuple(dataframe.columns)
-    missing_fields = [
-        field for field in schema_expectation.fields if field not in observed_fields
+    contract = plan.data_contract
+    declared = set(contract.column_names)
+    columns = [
+        column
+        for column in frame_columns_from_spark_schema(dataframe.schema)
+        if column.name in declared or column.name not in NORMALIZATION_METADATA_COLUMNS
     ]
-    unexpected_fields = [
-        field for field in observed_fields if field not in schema_expectation.fields
-    ]
-    if missing_fields:
-        return ValidationCheck.failed(
-            "data",
-            "schema_expectations",
-            "Observed schema is missing expected fields: " + ", ".join(missing_fields),
-            details={
-                "schema_source": schema_expectation.source or "",
-                "missing_fields": ",".join(missing_fields),
-            },
-        )
-
-    if unexpected_fields and not plan.source_config.quality.allow_schema_evolution:
-        return ValidationCheck.failed(
-            "data",
-            "schema_expectations",
-            "Observed schema contains unexpected fields while schema evolution is disabled: "
-            + ", ".join(unexpected_fields),
-            details={
-                "schema_source": schema_expectation.source or "",
-                "unexpected_fields": ",".join(unexpected_fields),
-            },
-        )
-
-    if unexpected_fields:
-        return ValidationCheck.passed(
-            "data",
-            "schema_expectations",
-            "Observed schema satisfies the expected contract and allowed extra fields.",
-            details={
-                "schema_source": schema_expectation.source or "",
-                "unexpected_fields": ",".join(unexpected_fields),
-            },
-        )
-
-    return ValidationCheck.passed(
-        "data",
-        "schema_expectations",
-        "Observed schema matches the expected contract.",
-        details={
-            "schema_source": schema_expectation.source or "",
-            "expected_field_count": len(schema_expectation.fields),
-        },
-    )
+    return check_frame_against_contract(columns, contract).to_validation_check()
 
 
 def validate_output_columns(
@@ -529,19 +463,7 @@ def _required_field_violation_counts(
     dataframe: DataFrame,
     fields: Sequence[str],
 ) -> dict[str, int]:
-    from pyspark.sql.functions import col, trim, when
-    from pyspark.sql.functions import sum as spark_sum
-    from pyspark.sql.types import StringType
-
-    schema_by_name = {field.name: field.dataType for field in dataframe.schema.fields}
-    aggregations = []
-    for field in fields:
-        invalid_condition = col(field).isNull()
-        if isinstance(schema_by_name[field], StringType):
-            invalid_condition = invalid_condition | (trim(col(field)) == "")
-        aggregations.append(spark_sum(when(invalid_condition, 1).otherwise(0)).alias(field))
-
-    row = dataframe.agg(*aggregations).first()
+    row = dataframe.agg(*required_null_aggregations(dataframe, fields)).first()
     if row is None:
         raise RuntimeError("Spark returned no row for the required-field aggregation")
     return {field: int(row[field] or 0) for field in fields}
@@ -583,14 +505,14 @@ def _bronze_duplicate_key_groups(
     return duplicate_groups, sample_duplicates, keys_checked
 
 
-def _duplicate_fields(fields: Sequence[str]) -> list[str]:
-    seen: set[str] = set()
-    duplicates: list[str] = []
-    for field in fields:
-        if field in seen and field not in duplicates:
-            duplicates.append(field)
-        seen.add(field)
-    return duplicates
+def _required_columns(contract: DataContract | None) -> tuple[str, ...]:
+    """The contract's ``required`` columns; none without a contract, which cannot be written."""
+    return () if contract is None else contract.required_columns
+
+
+def _primary_key(contract: DataContract | None) -> tuple[str, ...]:
+    """The contract's ``primaryKey`` columns; none without a contract, which cannot be written."""
+    return () if contract is None else contract.primary_key
 
 
 def _expected_zone_path(plan: ExecutionPlan, zone: str) -> str:

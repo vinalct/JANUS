@@ -12,8 +12,10 @@
     },
     {
       "details": {
+        "compatibility": "additive",
+        "enforcement": "lenient",
         "expected_field_count": "1",
-        "schema_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
+        "schema_source": "<PROJECT>/conf/contracts/test/keyed_contract.yaml"
       },
       "message": "Schema validation will use an explicit field contract.",
       "name": "schema_contract_mode",
@@ -70,8 +72,9 @@
   "emitted_at": "2026-07-04T12:00:05+00:00",
   "environment": "local",
   "metadata": {
-    "allow_schema_evolution": "True",
-    "schema_expectation_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
+    "compatibility": "additive",
+    "enforcement": "lenient",
+    "schema_expectation_source": "<PROJECT>/conf/contracts/test/keyed_contract.yaml"
   },
   "run_id": "order15-api_success",
   "source_id": "baseline_api",

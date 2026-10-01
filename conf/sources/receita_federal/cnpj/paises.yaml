@@ -76,4 +76,3 @@ quality:
     - codigo
   unique_fields:
     - codigo
-  allow_schema_evolution: false

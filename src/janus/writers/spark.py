@@ -1,10 +1,9 @@
 """Spark writers for the bronze zone and for path-based Spark outputs.
 
-A full refresh overwrites bronze *in place* (``INSERT OVERWRITE``) rather than recreating the
-table, so the Iceberg snapshot log grows instead of resetting and time travel reaches previous
-runs. :mod:`janus.writers.overwrite` decides between that and the history-resetting
-``REPLACE TABLE`` fallback; this module only reads the target's state, executes the chosen
-statement and records which one ran in the write metadata.
+A full refresh normally uses ``INSERT OVERWRITE`` to preserve snapshot ancestry.
+Contract compatibility decides schema changes before each write, and a declared
+breaking change on a full refresh may choose ``REPLACE TABLE``. The writer records
+the operation and its effect on history in write metadata.
 
 The cost of retaining history is real and deliberate: **snapshots are never
 expired here.** Every full refresh keeps the previous run's data files until someone expires
@@ -16,8 +15,7 @@ run, which makes it an operational policy rather than a writer concern.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from janus.models import (
@@ -26,13 +24,25 @@ from janus.models import (
     WriteResult,
     resolve_bronze_write_intent,
 )
+from janus.models.data_contracts import spark_sql_type
+from janus.quality.contract_checks import MissingContractError
 from janus.utils.storage import StorageLayout, bronze_table_identifier
+from janus.writers.errors import SchemaEvolutionRefusedError
+from janus.writers.evolution import PLAN_METADATA_KEY, EvolutionPlan, plan_schema_evolution
 from janus.writers.identifiers import build_bronze_temp_view_name, quote_identifier
-from janus.writers.overwrite import (
-    build_create_table_as_select_sql,
-    build_insert_overwrite_sql,
-    build_replace_table_as_select_sql,
-    plan_full_refresh_overwrite,
+from janus.writers.overwrite import build_create_table_as_select_sql
+from janus.writers.overwrite_exec import execute_full_refresh_overwrite
+from janus.writers.schema_ddl import (
+    build_add_columns_sql,
+    build_alter_column_type_sql,
+    build_insert_into_sql,
+    project_append_columns,
+)
+from janus.writers.table_state import (
+    read_contract_stamp,
+    read_live_columns,
+    read_target_columns,
+    stamp_contract,
 )
 
 if TYPE_CHECKING:
@@ -76,6 +86,7 @@ class SparkDatasetWriter:
         records_written: int | None = None,
         count_records: bool = False,
         apply_repartition: bool = True,
+        batch_index: int = 1,
     ) -> WriteResult:
         """Write ``dataframe`` to ``zone``.
 
@@ -87,6 +98,8 @@ class SparkDatasetWriter:
         wins — and is only consulted for non-bronze / non-iceberg zones, which ignore
         ``intent`` entirely.
         """
+        if zone == "bronze" and plan.data_contract is None:
+            raise MissingContractError(plan.source.source_id)
         resolved_target = self.storage_layout.resolve_output(plan, zone)
         resolved_format = format_name or resolved_target.format
         if zone == "bronze" and resolved_format.strip().lower() == "iceberg":
@@ -100,6 +113,7 @@ class SparkDatasetWriter:
                 records_written=records_written,
                 count_records=count_records,
                 apply_repartition=apply_repartition,
+                batch_index=batch_index,
             )
 
         path = (
@@ -136,7 +150,9 @@ class SparkDatasetWriter:
             mode=write_mode,
             records_written=resolved_records_written,
             partition_by=partition_columns,
-            metadata=metadata,
+            metadata=(
+                {**(metadata or {}), PLAN_METADATA_KEY: "none"} if zone == "bronze" else metadata
+            ),
         )
 
     def _write_bronze_iceberg(
@@ -151,7 +167,11 @@ class SparkDatasetWriter:
         records_written: int | None,
         count_records: bool,
         apply_repartition: bool,
+        batch_index: int,
     ) -> WriteResult:
+        contract = plan.data_contract
+        if contract is None:
+            raise MissingContractError(plan.source.source_id)
         if configured_format.strip().lower() != "iceberg":
             raise ValueError("bronze outputs must use the 'iceberg' format")
 
@@ -183,76 +203,72 @@ class SparkDatasetWriter:
                 metadata=metadata,
                 records_written=records_written,
                 count_records=count_records,
+                batch_index=batch_index,
             )
 
         effective_mode = _BRONZE_STRATEGY_ICEBERG_MODE.get(resolved_intent.strategy)
         if effective_mode is None:
-            raise ValueError(
-                f"unsupported bronze write strategy: {resolved_intent.strategy!r}"
-            )
+            raise ValueError(f"unsupported bronze write strategy: {resolved_intent.strategy!r}")
 
         resolved_records_written = records_written
         if count_records and resolved_records_written is None:
             resolved_records_written = prepared_frame.count()
 
         write_metadata: dict[str, str] = dict(metadata or {})
+        write_metadata[PLAN_METADATA_KEY] = "none"
         spark = prepared_frame.sparkSession
         temp_view_name = build_bronze_temp_view_name(plan.source.source_id)
 
         prepared_frame.createOrReplaceTempView(temp_view_name)
         try:
-            spark.sql(
-                f"CREATE NAMESPACE IF NOT EXISTS {quote_identifier(namespace_identifier)}"
-            )
+            spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {quote_identifier(namespace_identifier)}")
 
-            quoted_table = quote_identifier(table_identifier)
-            quoted_temp_view = quote_identifier(temp_view_name)
             table_exists = spark.catalog.tableExists(table_identifier)
+
+            recorded_stamp = None
+            evolution = None
+            if table_exists and effective_mode != "ignore":
+                evolution, recorded_stamp = _evolve_target_for_batch(
+                    spark, table_identifier, plan, resolved_intent, batch_index=batch_index
+                )
+                write_metadata[PLAN_METADATA_KEY] = evolution.render()
 
             if effective_mode == "ignore" and table_exists:
                 pass
             elif effective_mode == "overwrite" and table_exists:
-                target_columns, target_partitions = _read_target_table_state(
-                    spark, table_identifier
-                )
-                overwrite_plan = plan_full_refresh_overwrite(
-                    source_columns=tuple(
-                        (field.name, field.dataType.simpleString())
-                        for field in prepared_frame.schema.fields
-                    ),
-                    target_columns=target_columns,
-                    configured_partitions=partition_columns,
-                    target_partitions=target_partitions,
+                overwrite_plan = execute_full_refresh_overwrite(
+                    spark,
+                    table_identifier,
+                    temp_view_name,
+                    prepared_frame,
+                    partition_columns,
+                    evolution,
                 )
                 write_metadata["overwrite_mechanism"] = overwrite_plan.mechanism
                 if not overwrite_plan.preserves_history:
                     write_metadata["history_reset_reason"] = overwrite_plan.reason
-
-                if overwrite_plan.mechanism == "replace_table":
-                    spark.sql(
-                        build_replace_table_as_select_sql(
-                            table_identifier=table_identifier,
-                            source_view=temp_view_name,
-                            partition_columns=partition_columns,
-                        )
-                    )
-                else:
-                    add_columns_sql = build_add_columns_sql(
-                        table_identifier=table_identifier,
-                        columns=list(overwrite_plan.add_columns),
-                    )
-                    if add_columns_sql is not None:
-                        spark.sql(add_columns_sql)
-                    with _static_partition_overwrite(spark):
-                        spark.sql(
-                            build_insert_overwrite_sql(
-                                table_identifier=table_identifier,
-                                source_view=temp_view_name,
-                                projection=overwrite_plan.projection,
-                            )
-                        )
+                stamp_contract(
+                    spark,
+                    table_identifier,
+                    contract,
+                    None if overwrite_plan.mechanism == "replace_table" else recorded_stamp,
+                )
             elif effective_mode == "append" and table_exists:
-                spark.sql(f"INSERT INTO {quoted_table} SELECT * FROM {quoted_temp_view}")
+                target_columns = read_target_columns(spark, table_identifier)
+                projection = project_append_columns(
+                    source_names={field.name for field in prepared_frame.schema.fields},
+                    target_names=tuple(name for name, _ in target_columns),
+                    required_names=set(contract.required_columns),
+                    table_identifier=table_identifier,
+                )
+                spark.sql(
+                    build_insert_into_sql(
+                        table_identifier=table_identifier,
+                        source_view=temp_view_name,
+                        projection=projection,
+                    )
+                )
+                stamp_contract(spark, table_identifier, contract, recorded_stamp)
             else:
                 # A first write for any of ignore/append/overwrite creates the table.
                 spark.sql(
@@ -262,6 +278,7 @@ class SparkDatasetWriter:
                         partition_columns=partition_columns,
                     )
                 )
+                stamp_contract(spark, table_identifier, contract, None)
         finally:
             spark.catalog.dropTempView(temp_view_name)
 
@@ -288,8 +305,12 @@ class SparkDatasetWriter:
         metadata: Mapping[str, str] | None,
         records_written: int | None,
         count_records: bool,
+        batch_index: int,
     ) -> WriteResult:
         """Make a bronze write idempotent on ``intent.merge_keys`` via Iceberg ``MERGE INTO``."""
+        contract = plan.data_contract
+        if contract is None:
+            raise MissingContractError(plan.source.source_id)
         merge_keys = intent.merge_keys
         _reject_complex_merge_keys(prepared_frame, merge_keys)
 
@@ -298,6 +319,7 @@ class SparkDatasetWriter:
         )
 
         write_metadata: dict[str, str] = dict(metadata or {})
+        write_metadata[PLAN_METADATA_KEY] = "none"
         write_metadata["write_strategy"] = "merge_on_keys"
         write_metadata["merge_keys"] = ",".join(merge_keys)
         if duplicates_dropped is not None:
@@ -328,9 +350,7 @@ class SparkDatasetWriter:
         temp_view_name = build_bronze_temp_view_name(plan.source.source_id)
         merge_source.createOrReplaceTempView(temp_view_name)
         try:
-            spark.sql(
-                f"CREATE NAMESPACE IF NOT EXISTS {quote_identifier(namespace_identifier)}"
-            )
+            spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {quote_identifier(namespace_identifier)}")
 
             if not table_exists:
                 spark.sql(
@@ -342,12 +362,12 @@ class SparkDatasetWriter:
                 )
                 write_metadata["write_strategy"] = "create"
                 write_metadata["requested_strategy"] = "merge_on_keys"
+                stamp_contract(spark, table_identifier, contract, None)
             else:
-                evolved_columns = _reconcile_merge_schema(
-                    spark, merge_source, table_identifier, plan
+                evolution, recorded_stamp = _evolve_target_for_batch(
+                    spark, table_identifier, plan, intent, batch_index=batch_index
                 )
-                if evolved_columns:
-                    write_metadata["schema_evolved_columns"] = ",".join(evolved_columns)
+                write_metadata[PLAN_METADATA_KEY] = evolution.render()
                 spark.sql(
                     build_merge_sql(
                         table_identifier=table_identifier,
@@ -355,6 +375,7 @@ class SparkDatasetWriter:
                         merge_keys=merge_keys,
                     )
                 )
+                stamp_contract(spark, table_identifier, contract, recorded_stamp)
         finally:
             spark.catalog.dropTempView(temp_view_name)
 
@@ -400,68 +421,6 @@ def build_merge_sql(
         "WHEN MATCHED THEN UPDATE SET *\n"
         "WHEN NOT MATCHED THEN INSERT *"
     )
-
-
-def build_add_columns_sql(
-    *,
-    table_identifier: str,
-    columns: Sequence[tuple[str, str]],
-) -> str | None:
-    """Render ``ALTER TABLE ... ADD COLUMNS`` for schema evolution, or ``None`` if empty."""
-    if not columns:
-        return None
-
-    quoted_table = quote_identifier(table_identifier)
-    rendered = ", ".join(
-        f"{quote_identifier(name)} {column_type}" for name, column_type in columns
-    )
-    return f"ALTER TABLE {quoted_table} ADD COLUMNS ({rendered})"
-
-
-def _read_target_table_state(
-    spark: Any, table_identifier: str
-) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...] | None]:
-    """Return ``(columns, partition_columns)`` for an existing Iceberg table."""
-    columns = tuple(
-        (field.name, field.dataType.simpleString())
-        for field in spark.table(table_identifier).schema.fields
-    )
-    try:
-        partitions_schema = spark.table(f"{table_identifier}.partitions").schema
-        partition_field = next(
-            (field for field in partitions_schema.fields if field.name == "partition"),
-            None,
-        )
-        if partition_field is None:
-            return columns, ()
-        # JANUS only ever emits identity partitioning, so the struct's field names are the
-        # column names verbatim.
-        return columns, tuple(field.name for field in partition_field.dataType.fields)
-    except Exception:
-        return columns, None
-
-
-@contextmanager
-def _static_partition_overwrite(spark: Any) -> Iterator[None]:
-    """Force ``INSERT OVERWRITE`` to replace *every* partition, then restore the session.
-
-    Iceberg resolves ``INSERT OVERWRITE`` against ``spark.sql.sources.partitionOverwriteMode``:
-    ``static`` (Spark's default) deletes all rows when no PARTITION clause is given, while
-    ``dynamic`` deletes only the partitions the SELECT produces. A full refresh means *all*, so
-    the mode is pinned for the statement rather than inherited — a cluster profile or a future
-    environment config that sets ``dynamic`` globally must not silently turn a full refresh into
-    a partial one that leaves the previous run's partitions behind.
-    """
-    key = "spark.sql.sources.partitionOverwriteMode"
-    previous = spark.conf.get(key, None)
-    spark.conf.set(key, "static")
-    try:
-        yield
-    finally:
-        if previous is None:
-            spark.conf.unset(key)
-        else:
-            spark.conf.set(key, previous)
 
 
 def _dedupe_for_merge(
@@ -518,36 +477,45 @@ def _reject_complex_merge_keys(frame: DataFrame, merge_keys: tuple[str, ...]) ->
         )
 
 
-def _reconcile_merge_schema(
+def _evolve_target_for_batch(
     spark: Any,
-    deduped: DataFrame,
     table_identifier: str,
     plan: ExecutionPlan,
-) -> list[str]:
-    """Reconcile source columns absent from the target before ``UPDATE SET *`` runs."""
-    source_fields = deduped.schema.fields
-    target_columns = set(spark.table(table_identifier).columns)
-    missing_in_target = [
-        field.name for field in source_fields if field.name not in target_columns
-    ]
-    if not missing_in_target:
-        return []
-
-    if not plan.source_config.quality.allow_schema_evolution:
-        raise ValueError(
-            f"bronze target {table_identifier!r} is missing columns present in this batch: "
-            f"{', '.join(missing_in_target)}; set quality.allow_schema_evolution to add "
-            "them automatically"
-        )
-
-    source_types = {field.name: field.dataType.simpleString() for field in source_fields}
-    add_columns_sql = build_add_columns_sql(
-        table_identifier=table_identifier,
-        columns=[(name, source_types[name]) for name in missing_in_target],
+    intent: BronzeWriteIntent,
+    *,
+    batch_index: int,
+) -> tuple[EvolutionPlan, dict[str, str]]:
+    """Read the live table once, decide from its contract, and apply allowed DDL."""
+    contract = plan.data_contract
+    if contract is None:
+        raise MissingContractError(plan.source.source_id)
+    live_columns = read_live_columns(spark, table_identifier)
+    recorded_stamp = read_contract_stamp(spark, table_identifier)
+    evolution = plan_schema_evolution(
+        contract=contract,
+        live_columns=live_columns,
+        recorded_contract_version=recorded_stamp.get("janus.contract_version"),
+        write_strategy=intent.strategy,
+        batch_index=batch_index,
     )
-    if add_columns_sql is not None:
-        spark.sql(add_columns_sql)
-    return missing_in_target
+    if evolution.outcome == "refused":
+        raise SchemaEvolutionRefusedError(evolution)
+    if evolution.outcome == "evolve":
+        add_sql = build_add_columns_sql(
+            table_identifier=table_identifier,
+            columns=[(name, spark_sql_type(type_)) for name, type_ in evolution.add_columns],
+        )
+        if add_sql is not None:
+            spark.sql(add_sql)
+        for name, _before, after in evolution.promote_columns:
+            spark.sql(
+                build_alter_column_type_sql(
+                    table_identifier=table_identifier,
+                    column=name,
+                    spark_type=spark_sql_type(after),
+                )
+            )
+    return evolution, recorded_stamp
 
 
 def _normalize_options(options: Mapping[str, Any] | None) -> dict[str, str]:

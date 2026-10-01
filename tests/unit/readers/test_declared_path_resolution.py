@@ -1,15 +1,13 @@
-"""One search resolves a declared schema file, whether it is a contract or a legacy path.
+"""One search resolves a declared contract file.
 
 The four steps — absolute as written, project-relative when it exists, each parent of the
 source config, and the runtime path anyway when nothing exists — are what an operator
 relies on when they write ``conf/contracts/<domain>/<table>.yaml`` into a source. They
-predate this order for ``schema.path``; ``schema.contract`` inherits them exactly, from
-the same function, so a repointed entry cannot start resolving somewhere else.
+keep source declarations stable across project and config-relative paths.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,7 +18,6 @@ from janus.registry import load_registry
 from janus.schema_contracts import (
     resolve_contract_path_for_plan,
     resolve_declared_path,
-    resolve_schema_path_for_plan,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -43,10 +40,6 @@ def _plan(source_config: SourceConfig, project_root: Path) -> ExecutionPlan:
             started_at=STARTED_AT,
         ),
     )
-
-
-def _declaring(source_config: SourceConfig, **schema: object) -> SourceConfig:
-    return replace(source_config, schema=replace(source_config.schema, **schema))
 
 
 # ── the four steps ────────────────────────────────────────────────────────────
@@ -100,57 +93,7 @@ def test_an_undeclared_file_resolves_to_nothing(tmp_path: Path) -> None:
     assert resolve_declared_path(tmp_path, tmp_path / "conf" / "s.yaml", "") is None
 
 
-# ── the two plan-scoped entry points ──────────────────────────────────────────
-
-
-def test_the_contract_declaration_resolves_like_the_legacy_one(
-    source_config: SourceConfig,
-) -> None:
-    legacy = _plan(
-        _declaring(
-            source_config,
-            mode="explicit",
-            path="tests/fixtures/contracts/legacy_schemas/example/source_schema.json",
-            contract=None,
-        ),
-        PROJECT_ROOT,
-    )
-    declared = _plan(source_config, PROJECT_ROOT)
-
-    assert resolve_schema_path_for_plan(legacy) == (
-        PROJECT_ROOT / "tests" / "fixtures" / "contracts"
-        / "legacy_schemas" / "example" / "source_schema.json"
-    )
-    assert resolve_contract_path_for_plan(declared) == (
-        PROJECT_ROOT / "conf" / "contracts" / "example" / "federal_open_data_example.yaml"
-    )
-
-
-def test_each_entry_point_ignores_the_other_declaration(
-    source_config: SourceConfig,
-) -> None:
-    legacy = _plan(
-        _declaring(
-            source_config,
-            mode="explicit",
-            path="tests/fixtures/contracts/legacy_schemas/example/source_schema.json",
-            contract=None,
-        ),
-        PROJECT_ROOT,
-    )
-    declared = _plan(source_config, PROJECT_ROOT)
-
-    assert resolve_contract_path_for_plan(legacy) is None
-    assert resolve_schema_path_for_plan(declared) is None
-
-
-def test_an_inferred_source_declares_neither(source_config: SourceConfig) -> None:
-    plan = _plan(
-        _declaring(source_config, mode="infer", path=None, contract=None), PROJECT_ROOT
-    )
-
-    assert resolve_schema_path_for_plan(plan) is None
-    assert resolve_contract_path_for_plan(plan) is None
+# ── the plan-scoped entry point ───────────────────────────────────────────────
 
 
 def test_the_plan_free_entry_point_agrees_with_the_plan_one(

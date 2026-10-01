@@ -70,12 +70,7 @@ sources:
         path: data/metadata/transparencia/renuncias_fiscais__renuncias_valores
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
-      allow_schema_evolution: true
+    quality: {}
 
   - source_id: transparencia__renuncias_fiscais__empresas_imunes_isentas__full_refresh
     name: Portal da Transparencia - Renuncias Fiscais - Empresas Imunes e Isentas
@@ -150,12 +145,7 @@ sources:
         path: data/metadata/transparencia/renuncias_fiscais__empresas_imunes_isentas
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
-      allow_schema_evolution: true
+    quality: {}
 
   - source_id: transparencia__renuncias_fiscais__empresas_habilitadas__full_refresh
     name: Portal da Transparencia - Renuncias Fiscais - Empresas Habilitadas a Beneficios Fiscais
@@ -230,9 +220,4 @@ sources:
         path: data/metadata/transparencia/renuncias_fiscais__empresas_habilitadas
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
-      allow_schema_evolution: true
+    quality: {}

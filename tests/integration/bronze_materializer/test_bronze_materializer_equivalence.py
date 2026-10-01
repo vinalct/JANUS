@@ -17,7 +17,7 @@ from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.strategies.files import FileStrategy
 from janus.utils.storage import StorageLayout
 from tests.support.contracts import with_registry_contract
-from tests.support.spark_sessions import build_iceberg_session
+from tests.support.spark_sessions import sqlite_catalog_target, start_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TRANSPARENCIA_FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures" / "transparencia"
@@ -78,17 +78,23 @@ class FixtureTransport:
 
 
 @pytest.fixture(scope="module")
-def spark(tmp_path_factory):
-    session = build_iceberg_session(
-        "janus-bronze-materializer-equivalence",
-        tmp_path_factory.mktemp("janus-bronze-materializer-iceberg"),
+def catalog_target(tmp_path_factory):
+    target = sqlite_catalog_target(tmp_path_factory.mktemp("janus-bronze-materializer-iceberg"))
+    target.prepare()
+    return target
+
+
+@pytest.fixture(scope="module")
+def spark(catalog_target):
+    session = start_session(
+        "janus-bronze-materializer-equivalence", catalog_target.session_options()
     )
     yield session
     session.stop()
 
 
 @pytest.fixture(scope="module")
-def file_family_runs(spark, tmp_path_factory):
+def file_family_runs(spark, tmp_path_factory, catalog_target):
     """Run the live executor and the raw replay once, over one shared raw zone.
 
     The archive yields six CSV members so the file-family batching is
@@ -115,15 +121,17 @@ def file_family_runs(spark, tmp_path_factory):
     planned_run = PlannedRun(plan=plan, strategy=strategy)
 
     executed = SourceExecutor().execute(
-        planned_run, SparkSessionProvider.wrapping(spark), ENVIRONMENT_CONFIG
+        planned_run,
+        SparkSessionProvider.wrapping(spark, resolved_paths=catalog_target.resolved_paths),
+        {**ENVIRONMENT_CONFIG, **catalog_target.environment_config()},
     )
     assert executed.status == "succeeded", executed.failure_reason
     assert executed.strategy_metadata["archive_member_count"] == str(ARCHIVE_MEMBER_COUNT)
 
     ingested = ingest_raw_to_bronze(
         planned_run,
-        spark,
-        ENVIRONMENT_CONFIG,
+        SparkSessionProvider.wrapping(spark, resolved_paths=catalog_target.resolved_paths),
+        {**ENVIRONMENT_CONFIG, **catalog_target.environment_config()},
         bronze_table="censo_escolar_microdados_replay",
     )
     assert ingested.status == "succeeded", ingested.failure_reason
@@ -164,7 +172,7 @@ def test_file_family_replay_bronze_commit_count_matches_live(file_family_runs):
     assert replay_commit_count == live_commit_count
 
 
-def test_api_family_replay_produces_identical_bronze(spark, tmp_path, monkeypatch):
+def test_api_family_replay_produces_identical_bronze(spark, tmp_path, monkeypatch, catalog_target):
     source_config = _cloned_api_source_config(tmp_path, page_size=2)
     run_context = RunContext.create(
         run_id="run-bronze-equivalence-api-001",
@@ -191,14 +199,16 @@ def test_api_family_replay_produces_identical_bronze(spark, tmp_path, monkeypatc
     planned_run = PlannedRun(plan=plan, strategy=strategy)
 
     executed = SourceExecutor().execute(
-        planned_run, SparkSessionProvider.wrapping(spark), ENVIRONMENT_CONFIG
+        planned_run,
+        SparkSessionProvider.wrapping(spark, resolved_paths=catalog_target.resolved_paths),
+        {**ENVIRONMENT_CONFIG, **catalog_target.environment_config()},
     )
     assert executed.status == "succeeded", executed.failure_reason
 
     ingested = ingest_raw_to_bronze(
         planned_run,
-        spark,
-        ENVIRONMENT_CONFIG,
+        SparkSessionProvider.wrapping(spark, resolved_paths=catalog_target.resolved_paths),
+        {**ENVIRONMENT_CONFIG, **catalog_target.environment_config()},
         bronze_table="servidores_por_orgao_replay",
     )
     assert ingested.status == "succeeded", ingested.failure_reason

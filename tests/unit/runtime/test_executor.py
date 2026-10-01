@@ -10,7 +10,6 @@ from typing import Any
 
 from janus.lineage import RunObserver
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext, WriteResult
-from janus.models.data_contracts import load_data_contract
 from janus.models.source_config import IcebergRowsRequestInputsConfig
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
@@ -19,6 +18,11 @@ from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.runtime.executor import _plan_with_storage_layout_outputs
 from janus.utils.logging import build_structured_logger
 from janus.utils.storage import StorageLayout
+from tests.support.contract_frames import (
+    contract_schema,
+    lenient_contract_for_fake_frame,
+    read_frame,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -82,6 +86,7 @@ class FakeReader:
     seen_schema: Any | None = None
     seen_options: dict[str, str] | None = None
     read_artifact_counts: list[int] = field(default_factory=list)
+    inferred_schema: Any | None = None
 
     def read_extraction_result(
         self,
@@ -97,7 +102,7 @@ class FakeReader:
         self.seen_schema = schema
         self.seen_options = None if options is None else dict(options)
         self.calls.append("read")
-        return object()
+        return read_frame(schema, self.inferred_schema)
 
 
 @dataclass(slots=True)
@@ -380,7 +385,7 @@ def test_source_executor_passes_explicit_schema_for_headerless_csv_sources(tmp_p
         plan=ExecutionPlan.from_source_config(
             source_config, run_context
         ).with_data_contract(
-            load_data_contract(PROJECT_ROOT / source_config.schema.contract)
+            lenient_contract_for_fake_frame(PROJECT_ROOT / source_config.schema.contract)
         ),
         strategy=CnpjCsvStrategy(calls),
         hook=None,
@@ -467,7 +472,7 @@ def test_source_executor_reads_using_handoff_format_instead_of_source_config_for
         started_at=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=JsonlStrategy(calls),
         hook=None,
     )
@@ -476,7 +481,8 @@ def test_source_executor_reads_using_handoff_format_instead_of_source_config_for
         [ValidationCheck.passed("output", "materialized_outputs", "ok")],
     )
     metadata_root = tmp_path / "data" / "metadata" / "receita_federal" / "cnpj" / "empresas"
-    reader = FakeReader(calls)
+    # Handed no schema, Spark infers one from the JSONL rows — the contract's own shape here.
+    reader = FakeReader(calls, inferred_schema=contract_schema(planned_run.plan.data_contract))
 
     executed_run = SourceExecutor(
         reader=reader,
@@ -556,7 +562,7 @@ def test_source_executor_batches_file_handoff_artifacts_and_appends_after_overwr
         started_at=datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=MultiFileCnpjStrategy(calls),
         hook=None,
     )
@@ -724,7 +730,7 @@ def test_source_executor_persists_empty_strategy_metadata_on_early_exception(tmp
         started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=ExplodingStrategy(calls),
         hook=None,
     )
@@ -806,7 +812,7 @@ def _planned_run(
         started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
     )
     return PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=FakeStrategy(calls),
         hook=None,
     )
@@ -826,6 +832,10 @@ class SpySparkSessionProvider:
     get_calls: int = 0
     start_count: int = 0
     stop_calls: int = 0
+
+    @property
+    def resolved_paths(self) -> dict[str, Any]:
+        return {}
 
     def get(self) -> Any:
         self.get_calls += 1
@@ -857,6 +867,7 @@ def _boundary_executor(tmp_path: Path, calls: list[str], validation_report, **ov
         "observer": FakeObserver(calls, metadata_root),
         "writer_factory": lambda storage_layout: FakeWriter(calls, bronze_path),
         "storage_layout_resolver": lambda plan, config: _storage_layout(tmp_path),
+        "preflight_loader": lambda *args, **kwargs: calls.append("preflight") or None,
     }
     defaults.update(overrides)
     return SourceExecutor(**defaults)
@@ -917,7 +928,7 @@ def test_executor_never_starts_a_session_for_an_empty_handoff(tmp_path):
         started_at=datetime(2026, 4, 9, 12, 0, tzinfo=UTC),
     )
     planned_run = PlannedRun(
-        plan=ExecutionPlan.from_source_config(source_config, run_context),
+        plan=_with_contract(ExecutionPlan.from_source_config(source_config, run_context)),
         strategy=EmptyHandoffStrategy(calls),
         hook=None,
     )
@@ -1013,14 +1024,19 @@ def test_executor_hands_the_provider_to_extract_without_starting_a_session(tmp_p
     assert provider.stop_calls == 1
 
 
+def _with_contract(plan: ExecutionPlan) -> ExecutionPlan:
+    """Use the source schema with lenient data checks for frame doubles."""
+    return plan.with_data_contract(
+        lenient_contract_for_fake_frame(PROJECT_ROOT / plan.source_config.schema.contract)
+    )
+
+
 def _source_config_with_absolute_schema(source_config):
-    if source_config.schema.path is None:
-        return source_config
     return replace(
         source_config,
         schema=replace(
             source_config.schema,
-            path=str(PROJECT_ROOT / source_config.schema.path),
+            contract=str(PROJECT_ROOT / source_config.schema.contract),
         ),
     )
 

@@ -52,7 +52,7 @@ The checked-in source contracts already cover the three core strategy families.
 | dados.gov.br catalog | `catalog` | [`conjuntos_dados.yaml`](conf/contracts/dados_abertos/conjuntos_dados.yaml), [`conjuntos_dados_details.yaml`](conf/contracts/dados_abertos/conjuntos_dados_details.yaml) | Catalog listing and detail sources; disabled by default; require `DADOS_GOV_BR_API_TOKEN` for live execution |
 | IBGE SIDRA | `api` | [`pib_brasil.yaml`](conf/contracts/estatisticas/pib_brasil.yaml), [`agro_abacaxi_pronaf.yaml`](conf/contracts/estatisticas/agro_abacaxi_pronaf.yaml) | Two fixture-reviewed sources; disabled by default; public execution path; use the `ibge.sidra_flat` hook |
 | INEP microdata | `file` | [`censo_escolar_microdados.yaml`](conf/contracts/educacao/censo_escolar_microdados.yaml) | Disabled by default; exercises ZIP extraction and configured CSV read options |
-| Receita Federal CNPJ | `file` | [`conf/contracts/receita_federal/*.yaml`](conf/contracts/receita_federal/) | Empresas, estabelecimentos, socios, simples, and lookup tables; disabled by default; use WebDAV discovery and archive filtering |
+| Receita Federal CNPJ | `file` | [`conf/contracts/receita_federal/*.yaml`](conf/contracts/receita_federal/) | Empresas, estabelecimentos, socios, simples, and lookup tables with strict contracts; disabled by default; use WebDAV discovery and archive filtering |
 | `federal_open_data_example` | `api` | [`federal_open_data_example.yaml`](conf/contracts/example/federal_open_data_example.yaml) | Contract example only; points to `example.invalid` and is not a live source |
 
 Output zones live under `data/`:
@@ -130,6 +130,8 @@ janus \
 
 This runs planning, extraction, Spark normalization, bronze writing, validation, and metadata persistence. Outputs are materialized under the configured `raw`, `bronze`, and `metadata` paths.
 
+Every checked-in contract runs `strict`: before extraction the live bronze table is checked against the source's data contract, and every batch is checked against it before its bronze commit, so a drifted table, a column whose type differs from the contract, or an unparseable value fails the run instead of reaching bronze. See [Data contracts](docs/data-contracts.md#enforcement-modes).
+
 Notes:
 
 - `--include-disabled` is required for the checked-in live sources because they are disabled by default for safer development.
@@ -197,6 +199,7 @@ retention limits, retry semantics, and troubleshooting are in the
 - [Architecture guide](docs/architecture.md): control flow and extension boundaries.
 - [Strategy patterns](docs/strategy-patterns.md): when to use `api`, `file`, or `catalog`.
 - [Source onboarding](docs/source-onboarding.md): how to add a new source without script sprawl.
+- [Data contracts](docs/data-contracts.md): the ODCS contract format, enforcement modes, the evolution matrix, and the breaking-change workflow.
 - [Batch orchestration guide](docs/orchestration.md): `run-all`, the source DAG, pipeline summaries, and the Dagster adapter.
 - [Orchestration example](examples/orchestration/README.md): a runnable dependency graph and an operations runbook.
 - [Queryable observability guide](docs/queryable-observability.md): `metadata.runs`, tested SQL, OpenLineage, and operational limits.

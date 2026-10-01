@@ -16,6 +16,7 @@ from janus.normalizers import BaseNormalizer
 from janus.quality import QualityGate
 from janus.readers import SparkDatasetReader
 from janus.registry import load_registry
+from janus.schema_contracts import resolve_spark_schema_for_plan
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SparkDatasetWriter
@@ -163,7 +164,9 @@ def test_transparencia_source_extracts_raw_pages_and_materializes_bronze_and_met
     )
 
     reader = SparkDatasetReader()
-    raw_dataframe = reader.read_extraction_result(spark, extraction_result)
+    raw_dataframe = reader.read_extraction_result(
+        spark, extraction_result, schema=resolve_spark_schema_for_plan(plan)
+    )
     normalized_dataframe = BaseNormalizer().normalize(raw_dataframe, plan)
     bronze_result = SparkDatasetWriter(storage_layout).write(
         normalized_dataframe,

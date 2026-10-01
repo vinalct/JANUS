@@ -11,6 +11,7 @@ from janus.models.data_contracts import (
     contract_properties_from_spark_json,
     spark_struct_json,
 )
+from janus.quality.contract_checks import CORRUPT_RECORD_COLUMN, FrameColumn
 from janus.utils.environment import resolve_project_path
 
 
@@ -44,13 +45,6 @@ def _resolve_declared_path_for_plan(plan: ExecutionPlan, configured: str | None)
     )
 
 
-def resolve_schema_path_for_plan(plan: ExecutionPlan) -> Path | None:
-    """Return the legacy schema file configured for one plan, if any."""
-    if not plan.source_config.schema.declares_legacy_file:
-        return None
-    return _resolve_declared_path_for_plan(plan, plan.source_config.schema.path)
-
-
 def resolve_contract_path_for_plan(plan: ExecutionPlan) -> Path | None:
     """Return the data contract configured for one plan, if any."""
     return _resolve_declared_path_for_plan(plan, plan.source_config.schema.contract)
@@ -64,13 +58,17 @@ def resolve_spark_schema_for_plan(plan: ExecutionPlan) -> Any | None:
     return spark_schema_from_contract(contract)
 
 
-def spark_schema_from_contract(contract: DataContract) -> Any:
+def spark_schema_from_contract(contract: DataContract, *, with_corrupt_record: bool = False) -> Any:
     """Build the Spark schema for one contract — the single generator in `src`."""
     struct_json = spark_struct_json(contract.schema.properties)
+    if with_corrupt_record:
+        struct_json["fields"].append(
+            {"name": CORRUPT_RECORD_COLUMN, "type": "string", "nullable": True, "metadata": {}}
+        )
     try:
         from pyspark.sql.types import StructType
     except ImportError:
-        return _FieldNameSchema(contract.column_names)
+        return _FieldNameSchema(contract.schema.properties, with_corrupt_record)
     return StructType.fromJson(struct_json)
 
 
@@ -79,21 +77,46 @@ def contract_properties_from_spark_schema(struct_type: Any) -> tuple[ContractPro
     return contract_properties_from_spark_json(struct_type.jsonValue())
 
 
+def frame_columns_from_spark_schema(schema: Any) -> tuple[FrameColumn, ...]:
+    """StructType -> FrameColumn tuple via ``schema.jsonValue()['fields']`` — the ONE adapter."""
+    return tuple(
+        FrameColumn(
+            name=field["name"],
+            spark_json_type=field["type"],
+            nullable=bool(field.get("nullable", True)),
+        )
+        for field in schema.jsonValue()["fields"]
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _FieldNameSchema:
     """Minimal schema facade for unit tests that run without PySpark installed."""
 
-    field_names: tuple[str, ...]
+    properties: tuple[ContractProperty, ...]
+    with_corrupt_record: bool = False
 
     def fieldNames(self) -> list[str]:
-        return list(self.field_names)
+        names = [prop.name for prop in self.properties]
+        if self.with_corrupt_record:
+            names.append(CORRUPT_RECORD_COLUMN)
+        return names
+
+    def jsonValue(self) -> dict[str, Any]:
+        """The struct JSON ``StructType.fromJson`` reads, which its ``jsonValue()`` returns."""
+        schema = spark_struct_json(self.properties)
+        if self.with_corrupt_record:
+            schema["fields"].append(
+                {"name": CORRUPT_RECORD_COLUMN, "type": "string", "nullable": True, "metadata": {}}
+            )
+        return schema
 
 
 __all__ = [
     "contract_properties_from_spark_schema",
+    "frame_columns_from_spark_schema",
     "resolve_contract_path_for_plan",
     "resolve_declared_path",
-    "resolve_schema_path_for_plan",
     "resolve_spark_schema_for_plan",
     "spark_schema_from_contract",
 ]

@@ -70,14 +70,14 @@ def _build_plan(
                     "backoff_seconds": retry_backoff_seconds,
                 },
             },
-            "schema": {"mode": "infer"},
+            "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
             "spark": {"input_format": "csv", "write_mode": "append"},
             "outputs": {
                 "raw": {"path": "data/raw/example/file_helper_test", "format": "binary"},
                 "bronze": {"path": "data/bronze/example/file_helper_test", "format": "iceberg"},
                 "metadata": {"path": "data/metadata/example/file_helper_test", "format": "json"},
             },
-            "quality": {"allow_schema_evolution": True},
+            "quality": {},
         },
         tmp_path / "conf" / "sources" / "file_helper_test.yaml",
     )

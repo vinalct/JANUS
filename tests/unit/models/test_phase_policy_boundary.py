@@ -1,10 +1,16 @@
 """phase-scope policy lives in exactly one module.
 
-The rules this sweeps for (public-access requirement, federation-level scope, the
-strategy == source_type pairing) are *product-phase decisions*, not structural invariants.
-Move them into models/config/policy.py so broadening JANUS's scope is a policy
-edit rather than type-layer surgery. This test is what keeps that true: a rule that leaks
-back into a builder or into from_mapping would restore the debt silently.
+``from_mapping`` consults the policy for four decisions — the source-type, strategy and
+federation-level value sets, the strategy == source_type pairing, and the public-access
+requirement — at five call sites. Those are *product-phase decisions*, not structural
+invariants, so they live in models/config/policy.py and broadening JANUS's scope is a
+policy edit rather than type-layer surgery. This test is what keeps that true: a rule that
+leaks back into a builder or into from_mapping would restore the debt silently.
+
+The fourth detector, ``contract.status == "active"``, is the one rule that moved the other
+way. Order-18 made it policy; order-19 made it structural, because the materializer cannot
+write without a reviewed contract. Its only licence is therefore one loader function,
+and policy.py is swept for it like every other module.
 """
 
 from __future__ import annotations
@@ -26,6 +32,11 @@ FEDERATION_LEVEL_SCOPE = frozenset({"federal"})
 CONTRACT_STATUS_SCOPE = SUPPORTED_CONTRACT_STATUSES
 
 FEDERATION_LITERAL_EXEMPT_MODULES = frozenset({"constants.py", "config/constants.py"})
+
+#: The one place allowed to decide contract status. Structural since order-19 (D-15): an
+#: enabled source materializes only under an ``active`` contract, so the rule cannot relax
+#: with a policy. Function-scoped, so a second status check in the loader is still flagged.
+STRUCTURAL_STATUS_RULE = ("registry/loader.py", "_require_active_contract")
 
 
 @dataclass(frozen=True)
@@ -77,7 +88,7 @@ def _is_source_type_strategy_pairing(node: ast.Compare) -> bool:
 
 
 def _is_contract_status_decision(node: ast.Compare) -> bool:
-    """(d) ``contract.status == "active"`` — contract lifecycle is phase policy."""
+    """(d) ``contract.status == "active"`` — only the loader may decide this."""
     operands = [node.left, *node.comparators]
     reads_status = any(
         (tail := _operand_tail(operand)) is not None and tail.endswith("status")
@@ -114,6 +125,18 @@ def phase_scope_decisions(tree: ast.Module, *, module: str) -> list[PhaseScopeFi
     """
     findings: list[PhaseScopeFinding] = []
     docstrings = _docstring_constant_ids(tree)
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+
+    def in_structural_loader_rule(node: ast.AST) -> bool:
+        rule_module, rule_function = STRUCTURAL_STATUS_RULE
+        if module != rule_module:
+            return False
+        current = parents.get(node)
+        while current is not None:
+            if isinstance(current, ast.FunctionDef | ast.AsyncFunctionDef):
+                return current.name == rule_function
+            current = parents.get(current)
+        return False
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Compare):
@@ -127,7 +150,7 @@ def phase_scope_decisions(tree: ast.Module, *, module: str) -> list[PhaseScopeFi
                         module, node.lineno, "strategy==source_type", ast.unparse(node)
                     )
                 )
-            if _is_contract_status_decision(node):
+            if _is_contract_status_decision(node) and not in_structural_loader_rule(node):
                 findings.append(
                     PhaseScopeFinding(
                         module, node.lineno, "contract_status", ast.unparse(node)
@@ -203,15 +226,15 @@ def test_no_module_outside_policy_decides_phase_scope():
     findings = [
         finding
         for module, tree in _swept_modules().items()
-        if module != POLICY_MODULE
         for finding in phase_scope_decisions(tree, module=module)
+        if module != POLICY_MODULE or finding.kind == "contract_status"
     ]
 
     assert not findings, (
-        "inline phase-scope decisions found outside models/config/policy.py:\n"
+        "scope decisions found outside policy or the structural loader rule:\n"
         + "\n".join(f"  {finding}" for finding in findings)
-        + "\nThese are product-phase decisions, not structural invariants — they belong to "
-        "the ValidationPolicy so broadening scope needs a policy edit, not a type-layer one."
+        + "\nProduct-phase decisions belong in policy; active status belongs only "
+        "in registry/loader.py::_require_active_contract."
     )
 
 
@@ -262,6 +285,57 @@ def test_phase_policy_detector_flags_a_deliberate_violation(case: str, tmp_path:
     assert expected_kind in {finding.kind for finding in findings}, (
         f"the {case} violation was flagged as {[f.kind for f in findings]}, not {expected_kind!r}"
     )
+
+
+def test_active_status_exemption_is_function_scoped():
+    inside = ast.parse(
+        "def _require_active_contract(contract):\n"
+        "    return contract.status == 'active'\n"
+    )
+    elsewhere = ast.parse(
+        "def another_loader_check(contract):\n"
+        "    return contract.status == 'active'\n"
+    )
+
+    assert not phase_scope_decisions(inside, module="registry/loader.py")
+    assert any(
+        finding.kind == "contract_status"
+        for finding in phase_scope_decisions(elsewhere, module="registry/loader.py")
+    )
+    assert any(
+        finding.kind == "contract_status"
+        for finding in phase_scope_decisions(inside, module=POLICY_MODULE)
+    ), "policy.py lost its licence for contract status in order-19; the sweep must flag it"
+
+
+def test_the_structural_status_exemption_is_load_bearing_and_narrow():
+    """The loader exemption must cover exactly one real decision, in the named function.
+
+    If ``_require_active_contract`` stopped deciding status, the exemption would license
+    nothing and must be deleted; if a second status check appeared anywhere in the loader,
+    counting it here would show the one-decision rule had quietly become two.
+    """
+    rule_module, rule_function = STRUCTURAL_STATUS_RULE
+    loader_tree = _swept_modules()[rule_module]
+
+    exempted = phase_scope_decisions(loader_tree, module=rule_module)
+    assert not exempted, f"{rule_module} is exempt yet still flagged: {list(map(str, exempted))}"
+
+    unexempted = [
+        finding
+        for finding in phase_scope_decisions(loader_tree, module="registry/not_the_loader.py")
+        if finding.kind == "contract_status"
+    ]
+    assert len(unexempted) == 1, (
+        f"{rule_module} must decide contract status exactly once, in {rule_function}; "
+        f"found {list(map(str, unexempted))}"
+    )
+    rule = next(
+        node
+        for node in ast.walk(loader_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == rule_function
+    )
+    assert rule.lineno <= unexempted[0].lineno <= (rule.end_lineno or rule.lineno)
 
 
 def test_phase_policy_detector_does_not_flag_clean_code(tmp_path: Path):

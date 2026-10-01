@@ -409,7 +409,7 @@ def _source_mapping(*, strategy_variant: str) -> dict[str, object]:
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
         "spark": {"input_format": "json", "write_mode": "append"},
         "outputs": {
             "raw": {"path": "data/raw/example/single_source_registry", "format": "json"},
@@ -422,5 +422,5 @@ def _source_mapping(*, strategy_variant: str) -> dict[str, object]:
                 "format": "json",
             },
         },
-        "quality": {"allow_schema_evolution": True},
+        "quality": {},
     }

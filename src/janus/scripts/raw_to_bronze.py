@@ -28,8 +28,19 @@ from janus.observability import (
     wire_run_event_emitter,
 )
 from janus.planner import PlannedRun
-from janus.quality import PersistedValidationReport, QualityGate, ValidationReportStore
+from janus.quality import (
+    ContractEnforcementError,
+    PersistedValidationReport,
+    QualityGate,
+    ValidationReportStore,
+)
 from janus.readers import SparkDatasetReader
+from janus.runtime.contract_preflight import (
+    LiveTable,
+    enforce_preflight,
+    load_live_table,
+    start_observed_preflight,
+)
 from janus.runtime.executor import _plan_with_storage_layout_outputs
 from janus.runtime.materialize import (
     BronzeMaterializer,
@@ -40,7 +51,6 @@ from janus.runtime.materialize import (
     _log_info,
     _quality_failure_message,
     _raw_write_results,
-    read_committed_bronze,
 )
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.scripts.checksums import _artifact_format_for_path, _sha256
@@ -82,6 +92,7 @@ class RawToBronzeRun:
     failure_reason: str | None = None
     error_type: str | None = None
     run_event_emission: RunEmissionResult | None = None
+    failure_stage: str | None = None
 
     @property
     def is_successful(self) -> bool:
@@ -146,6 +157,8 @@ class RawToBronzeRun:
             summary["failure_reason"] = self.failure_reason
         if self.error_type is not None:
             summary["error_type"] = self.error_type
+        if self.failure_stage is not None:
+            summary["failure_stage"] = self.failure_stage
         if self.run_event_emission is not None:
             summary["run_event_emission"] = self.run_event_emission.to_summary()
 
@@ -164,7 +177,9 @@ class RawToBronzeLoader:
         default_factory=lambda: _default_storage_layout
     )
 
-    def ingest(
+    preflight_loader: Callable[..., LiveTable | None] = load_live_table
+
+    def ingest( 
         self,
         planned_run: PlannedRun,
         spark: SparkSessionProvider | SparkSession,
@@ -208,8 +223,23 @@ class RawToBronzeLoader:
                     target_table=_bronze_target_identifier(plan),
                 )
 
-                observer.start_run(plan)
-                _log_info(logger, "run_observation_started")
+                runtime_planned_run, preflight = start_observed_preflight(
+                    runtime_planned_run,
+                    observer,
+                    environment_config,
+                    spark_provider.resolved_paths,
+                    identifier=_bronze_target_identifier(plan),
+                    logger=logger,
+                    loader=self.preflight_loader,
+                )
+                plan = runtime_planned_run.plan
+                enforce_preflight(
+                    preflight,
+                    enforcement=(
+                        plan.data_contract.janus.enforcement if plan.data_contract else "strict"
+                    ),
+                    logger=logger,
+                )
 
                 extraction_result = _build_extraction_result_from_raw(
                     runtime_planned_run,
@@ -237,33 +267,21 @@ class RawToBronzeLoader:
                     is_empty=handoff.is_empty,
                 )
 
-                normalized_dataframe = None
-                bronze_dataframe = None
-                run_keys = None
-                if not handoff.is_empty:
-                    materializer = BronzeMaterializer(
-                        reader=self.reader,
-                        normalizer=self.normalizer,
-                        writer_factory=self.writer_factory,
-                    )
-                    bronze_results, normalized_dataframe, run_keys = materializer.materialize(
-                        runtime_planned_run,
-                        plan,
-                        spark_provider.get(),
-                        handoff,
-                        storage_layout,
-                        logger,
-                        bronze_target_identifier=_bronze_target_identifier(plan),
-                    )
-                    write_results = write_results + bronze_results
-                    # Symmetric with the executor: read the committed table for the bronze
-                    # uniqueness oracle while the replay's session is still live.
-                    bronze_dataframe = read_committed_bronze(
-                        spark_provider.get(),
-                        bronze_results,
-                    )
-                else:
-                    _log_info(logger, "spark_session_skipped")
+                # Symmetric with the executor, through the same materializer entry point.
+                materialized = BronzeMaterializer(
+                    reader=self.reader,
+                    normalizer=self.normalizer,
+                    writer_factory=self.writer_factory,
+                ).materialize_handoff(
+                    runtime_planned_run,
+                    plan,
+                    spark_provider,
+                    handoff,
+                    storage_layout,
+                    logger,
+                    bronze_target_identifier=_bronze_target_identifier(plan),
+                )
+                write_results = write_results + materialized.bronze_results
 
                 strategy_metadata = dict(
                     runtime_planned_run.strategy.emit_metadata(
@@ -282,10 +300,11 @@ class RawToBronzeLoader:
                 _log_info(logger, "quality_validation_started")
                 validation_report = self.quality_gate.validate_and_store(
                     plan,
-                    dataframe=normalized_dataframe,
+                    dataframe=materialized.normalized_dataframe,
                     write_results=write_results,
-                    bronze_dataframe=bronze_dataframe,
-                    run_keys=run_keys,
+                    bronze_dataframe=materialized.bronze_dataframe,
+                    run_keys=materialized.run_keys,
+                    pre_write_evidence=materialized.pre_write_evidence,
                     raise_on_failure=False,
                 )
                 _log_info(
@@ -356,6 +375,46 @@ class RawToBronzeLoader:
                     persisted=persisted,
                     run_event_emission=latest_run_emission(observer),
                 )
+            except ContractEnforcementError as exc:
+                # Symmetric with the executor: the refused batch committed nothing, and the
+                # gate reports the same result before the session is released.
+                write_results = write_results + exc.committed_results
+                validation_report = self.quality_gate.validate_and_store(
+                    plan,
+                    write_results=write_results,
+                    pre_write_evidence=exc.evidence,
+                    raise_on_failure=False,
+                )
+                spark_provider.stop()
+                persisted = observer.record_failure(
+                    plan,
+                    exc,
+                    extraction_result,
+                    write_results,
+                    strategy_metadata=strategy_metadata,
+                    validation_report=validation_report,
+                )
+                _log_error(
+                    logger,
+                    "raw_to_bronze_failed",
+                    failure_reason=str(exc),
+                    error_type=type(exc).__name__,
+                    failure_stage=exc.failure_stage,
+                )
+                return _build_result(
+                    runtime_planned_run,
+                    status="failed",
+                    extraction_result=extraction_result,
+                    handoff=handoff,
+                    write_results=write_results,
+                    validation_report=validation_report,
+                    strategy_metadata=strategy_metadata,
+                    persisted=persisted,
+                    run_event_emission=latest_run_emission(observer),
+                    failure_reason=str(exc),
+                    error_type=type(exc).__name__,
+                    failure_stage=exc.failure_stage,
+                )
             finally:
                 # Idempotent, so the release above is not repeated; this guarantees
                 # one on the paths that bypassed it.
@@ -387,6 +446,7 @@ class RawToBronzeLoader:
                 run_event_emission=latest_run_emission(observer),
                 failure_reason=str(exc),
                 error_type=type(exc).__name__,
+                failure_stage=getattr(exc, "failure_stage", None),
             )
 
 
@@ -419,6 +479,7 @@ def _build_result(
     run_event_emission: RunEmissionResult | None,
     failure_reason: str | None = None,
     error_type: str | None = None,
+    failure_stage: str | None = None,
 ) -> RawToBronzeRun:
     checkpoint_result = getattr(persisted, "checkpoint_result", None)
     checkpoint_state_path = None
@@ -442,4 +503,5 @@ def _build_result(
         checkpoint_history_path=checkpoint_history_path,
         failure_reason=failure_reason,
         error_type=error_type,
+        failure_stage=failure_stage,
     )

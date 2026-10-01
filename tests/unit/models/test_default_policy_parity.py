@@ -9,8 +9,9 @@ from typing import Any
 import pytest
 import yaml
 
+import janus.registry.loader as loader_module
 from janus.lineage import compute_config_version
-from janus.models.config.policy import DEFAULT_VALIDATION_POLICY, PhaseValidationPolicy
+from janus.models.config.policy import DEFAULT_VALIDATION_POLICY
 from janus.models.config.strategy_registry import STRATEGY_REGISTRY
 from janus.models.source_config import SourceConfig, SourceConfigValidationError
 from janus.registry import load_registry
@@ -63,7 +64,7 @@ def _base_mapping(**overrides: Any) -> dict[str, Any]:
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/minimal_contract.yaml"},
         "spark": {"input_format": "json", "write_mode": "append"},
         "outputs": {
             "raw": {"path": "data/raw/example/default_policy_parity", "format": "json"},
@@ -73,7 +74,7 @@ def _base_mapping(**overrides: Any) -> dict[str, Any]:
                 "format": "json",
             },
         },
-        "quality": {"allow_schema_evolution": True},
+        "quality": {},
     }
     mapping.update(overrides)
     return mapping
@@ -190,58 +191,48 @@ BROKEN_CASES: dict[str, tuple[dict[str, Any], str]] = {
 }
 
 
-def test_loader_contract_policy_error_is_rendered_after_mapping_validation(
+def test_loader_contract_rule_runs_after_mapping_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """The loader consults contract status only after ``from_mapping`` returns cleanly.
+    """The loader checks contract status only after ``from_mapping`` returns cleanly.
 
     The existing ``several_at_once`` differential continues to pin the order of the four
-    mapping consultations. This loader-only case pins that the fifth consultation follows
-    successful mapping validation and renders its own collected issue.
+    mapping-side policy decisions. This loader-only case pins that the structural
+    active-contract rule follows successful mapping validation and renders its own issue.
     """
-    source_path = _write_project_with_contract_status(
-        tmp_path, _base_mapping(), status="draft"
-    )
+    source_path = _write_project_with_contract_status(tmp_path, _base_mapping(), status="draft")
     calls: list[str] = []
     from_mapping = SourceConfig.from_mapping
-    validate_contract = PhaseValidationPolicy.validate_schema_declaration
+    require_active = loader_module._require_active_contract
 
     def record_mapping(mapping, config_path, **kwargs):
-        config = from_mapping(mapping, config_path, **kwargs)
+        result = from_mapping(mapping, config_path, **kwargs)
         calls.append("from_mapping")
-        return config
+        return result
 
-    def record_contract_validation(
-        self, *, enabled: bool, contract_status: str | None, issues
-    ) -> None:
-        calls.append("validate_schema_declaration")
-        validate_contract(
-            self,
-            enabled=enabled,
-            contract_status=contract_status,
-            issues=issues,
-        )
+    def record_active(config, contract, issues):
+        calls.append("_require_active_contract")
+        return require_active(config, contract, issues)
 
     monkeypatch.setattr(SourceConfig, "from_mapping", staticmethod(record_mapping))
-    monkeypatch.setattr(
-        PhaseValidationPolicy, "validate_schema_declaration", record_contract_validation
-    )
+    monkeypatch.setattr(loader_module, "_require_active_contract", record_active)
 
-    with pytest.raises(SourceConfigValidationError) as exc_info:
+    with pytest.raises(SourceConfigValidationError) as raised:
         load_registry(tmp_path)
 
-    assert calls == ["from_mapping", "validate_schema_declaration"]
-    assert [(issue.path, issue.message) for issue in exc_info.value.issues] == [
+    assert calls == ["from_mapping", "_require_active_contract"]
+    assert [(issue.path, issue.message) for issue in raised.value.issues] == [
         (
             "schema.contract",
-            "must reference a contract with status 'active' for an enabled source "
-            "in phase 1 (found 'draft')",
+            "must reference a contract with status 'active' for an enabled source: "
+            "the materializer writes only under a reviewed contract (order-19) (found 'draft')",
         )
     ]
-    assert str(exc_info.value) == (
+    assert str(raised.value) == (
         f"Invalid source config: {source_path}\n"
         "- schema.contract: must reference a contract with status 'active' for an "
-        "enabled source in phase 1 (found 'draft')"
+        "enabled source: the materializer writes only under a reviewed contract "
+        "(order-19) (found 'draft')"
     )
 
 

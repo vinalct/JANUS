@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 import yaml
 
 from janus.models import (
@@ -17,11 +17,14 @@ from janus.models import (
     SourceConfig,
     WriteResult,
 )
-from janus.models.data_contracts import DataContract, contract_from_legacy_schema_file
+from janus.models.data_contracts import DataContract, load_data_contract
 from janus.planner import PlannedRun
+from janus.quality import MissingContractError
 from janus.runtime.materialize import BronzeMaterializer
 from janus.schema_contracts import resolve_spark_schema_for_plan
 from janus.utils.storage import StorageLayout
+from tests.support.contract_frames import contract_schema, read_frame
+from tests.support.contracts import minimal_contract_yaml
 
 ENVIRONMENT_CONFIG = {
     "storage": {
@@ -65,7 +68,7 @@ def test_resolving_the_read_schema_opens_no_file(tmp_path: Path, monkeypatch):
     assert reads == []
 
 
-def test_a_source_that_declares_nothing_still_hands_the_reader_no_schema(tmp_path: Path):
+def test_a_plan_without_a_loaded_contract_hands_the_reader_no_schema(tmp_path: Path):
     """``infer`` is unchanged: Spark decides the types, exactly as it did before."""
     assert resolve_spark_schema_for_plan(_plan(tmp_path)) is None
 
@@ -86,7 +89,8 @@ def test_the_materializer_reads_with_the_generated_schema(tmp_path: Path):
 def test_a_handoff_in_another_format_is_still_read_without_a_schema(tmp_path: Path):
     """The format condition is the one that decides, and this order did not touch it."""
     plan = _plan(tmp_path, contract=_contract(tmp_path))
-    reader = SchemaRecordingReader()
+    # Handed no schema, Spark infers one — here the contract's own shape, so the check passes.
+    reader = SchemaRecordingReader(inferred_schema=contract_schema(plan.data_contract))
 
     _materialize(plan, reader, tmp_path, artifact_format="csv")
 
@@ -108,16 +112,16 @@ def test_the_read_event_names_the_contract_it_was_shaped_by(tmp_path: Path):
     assert fields["schema_version"] == contract.schema_version
 
 
-def test_the_read_event_of_an_inferred_source_names_no_contract(tmp_path: Path):
+def test_a_plan_without_a_loaded_contract_is_refused_before_anything_is_read(tmp_path: Path):
+    """No contract, nothing to check a batch against: the materializer reads nothing at all."""
     logger = RecordingLogger()
+    reader = SchemaRecordingReader()
 
-    _materialize(
-        _plan(tmp_path), SchemaRecordingReader(), tmp_path, artifact_format="json", logger=logger
-    )
+    with pytest.raises(MissingContractError):
+        _materialize(_plan(tmp_path), reader, tmp_path, artifact_format="json", logger=logger)
 
-    fields = logger.fields_for("spark_read_started")
-    assert "contract_id" not in fields
-    assert "schema_version" not in fields
+    assert reader.schemas == []
+    assert logger.events == []
 
 
 # ── fakes ─────────────────────────────────────────────────────────────────────
@@ -129,6 +133,7 @@ class SchemaRecordingReader:
 
     schemas: list[Any] = field(default_factory=list)
     options: list[Any] = field(default_factory=list)
+    inferred_schema: Any | None = None
 
     def read_extraction_result(
         self, spark, extraction_result, format_name=None, schema=None, options=None
@@ -136,7 +141,7 @@ class SchemaRecordingReader:
         del spark, extraction_result, format_name
         self.schemas.append(schema)
         self.options.append(options)
-        return object()
+        return read_frame(schema, self.inferred_schema)
 
 
 @dataclass(slots=True)
@@ -216,17 +221,18 @@ def _materialize(
 
 
 def _contract(tmp_path: Path) -> DataContract:
-    """A contract converted from a legacy columns-only file, as the registry converts it."""
-    schema_path = tmp_path / "conf" / "schemas" / "generated_read.json"
-    schema_path.parent.mkdir(parents=True, exist_ok=True)
-    schema_path.write_text(json.dumps({"columns": list(COLUMNS)}), encoding="utf-8")
-    return contract_from_legacy_schema_file(
-        schema_path,
-        source_id="generated_read_fixture",
-        bronze_table="bronze_test.generated_read_fixture",
-        domain="example",
-        project_root=tmp_path,
-    )
+    """Load the declared contract whose fields the read must preserve."""
+    contract_path = tmp_path / "conf" / "contracts" / "test" / "generated_read.yaml"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    document = yaml.safe_load(minimal_contract_yaml())
+    document["id"] = "example.generated_read_fixture"
+    document["schema"][0]["name"] = "generated_read_fixture"
+    document["schema"][0]["properties"] = [
+        {"name": name, "logicalType": "string", "physicalType": "string"}
+        for name in COLUMNS
+    ]
+    contract_path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    return load_data_contract(contract_path)
 
 
 def _plan(tmp_path: Path, *, contract: DataContract | None = None) -> ExecutionPlan:
@@ -274,7 +280,7 @@ def _source_config(tmp_path: Path) -> SourceConfig:
             "dead_letter_max_items": 0,
             "retry": {"max_attempts": 3, "backoff_strategy": "fixed", "backoff_seconds": 1},
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/generated_read.yaml"},
         "spark": {
             "input_format": "json",
             "write_mode": "overwrite",
@@ -295,7 +301,6 @@ def _source_config(tmp_path: Path) -> SourceConfig:
         "quality": {
             "required_fields": [],
             "unique_fields": [],
-            "allow_schema_evolution": True,
         },
     }
     config_path = tmp_path / "conf" / "sources" / f"{source_id}.yaml"

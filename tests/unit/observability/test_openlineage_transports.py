@@ -544,10 +544,11 @@ def test_the_total_emission_budget_holds_with_the_slowest_transport(tmp_path):
             dataset_context=sink.dataset_context,
         ),
     )
+    plan = _plan(tmp_path, "unused")
     persisted = _terminal_artifacts(tmp_path, status="succeeded")
     started_at = time.monotonic()
 
-    emitter.emit_succeeded(_plan(tmp_path, "unused"), persisted)
+    emitter.emit_succeeded(plan, persisted)
 
     assert time.monotonic() - started_at < 1.0
     assert emitter.last_result.outcome is RunEmissionOutcome.FAILED

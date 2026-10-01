@@ -2,7 +2,7 @@ apiVersion: v3.2.0
 kind: DataContract
 id: transparencia.renuncias_fiscais__empresas_habilitadas
 name: Portal da Transparencia - Renuncias Fiscais - Empresas Habilitadas a Beneficios Fiscais
-version: 0.1.0
+version: 0.1.1
 status: draft
 domain: transparencia
 description:
@@ -313,7 +313,7 @@ customProperties:
 - property: janus.compatibility
   value: additive
 - property: janus.enforcement
-  value: lenient
+  value: strict
 - property: janus.draftedFrom
   value: official OpenAPI response model EmpresaHabilitadaBeneficioFiscalDTO at https://api.portaldatransparencia.gov.br/v3/api-docs
     for GET /api-de-dados/renuncias-fiscais-empresas-habilitadas-beneficios-fiscais; no sample payload,

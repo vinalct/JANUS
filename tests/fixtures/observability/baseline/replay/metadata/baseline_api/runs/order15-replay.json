@@ -18,7 +18,7 @@
       "zone": "metadata"
     }
   ],
-  "contract_id": "example.minimal",
+  "contract_id": "example.keyed",
   "contract_version": "1.0.0",
   "duration_seconds": 5.0,
   "ended_at": "2026-07-04T12:00:05+00:00",
@@ -71,6 +71,7 @@
     "dispatch:api.page_number_api"
   ],
   "run_attributes": {
+    "contract_preflight_outcome": "catalog_unavailable",
     "source_id": "baseline_api",
     "source_type": "api",
     "strategy": "api",
@@ -78,7 +79,7 @@
     "trigger": "baseline"
   },
   "run_id": "order15-replay",
-  "schema_version": "36b064711c0849a241baa4eb3a5af56c7b8c40c1bb394413797146324b996583",
+  "schema_version": "7531305ae748d87770d496ce14be356423ae36bfae50532322dfc22d228226e0",
   "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
   "source_id": "baseline_api",
   "source_name": "Baseline api source",

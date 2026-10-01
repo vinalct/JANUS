@@ -92,12 +92,7 @@ sources:
         path: data/metadata/transparencia/licitacoes__licitacoes
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
-      allow_schema_evolution: true
+    quality: {}
 
 
   - source_id: transparencia__licitacoes__unidades_gestoras__full_refresh
@@ -171,12 +166,7 @@ sources:
         path: data/metadata/transparencia/licitacoes__unidades_gestoras
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
-      allow_schema_evolution: true
+    quality: {}
 
   - source_id: transparencia__licitacoes__modalidades__full_refresh
     name: Portal da Transparencia - Modalidades das Licitações
@@ -248,9 +238,4 @@ sources:
         path: data/metadata/transparencia/licitacoes__modalidades
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
-      allow_schema_evolution: true
+    quality: {}

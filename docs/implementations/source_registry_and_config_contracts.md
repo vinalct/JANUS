@@ -37,10 +37,10 @@ A source definition is expected to carry these sections:
 - Strategy fields such as `source_type`, `strategy`, and `strategy_variant`.
 - An `access` block for connection details, auth, pagination, rate limits, request inputs, and file discovery options.
 - An `extraction` block for mode, checkpoint semantics, retry behavior, and the dead-letter budget for item-level self-healing.
-- A `schema` block for infer-vs-explicit schema handling.
+- A `schema` block whose only key, `contract`, points at the bronze table's ODCS data contract.
 - A `spark` block for input format and write behavior.
 - An `outputs` block for `raw`, `bronze`, and `metadata` targets. Each target declares `path` and `format`, and Iceberg bronze targets may optionally declare `namespace` and `table_name`.
-- A `quality` block for required fields, uniqueness hints, and schema evolution behavior.
+- A `quality` block whose `required_fields` / `unique_fields`, when declared, must equal the contract's `required` columns and `primaryKey`. Schema evolution is governed by the contract's `janus.compatibility`.
 
 Two choices are worth calling out:
 

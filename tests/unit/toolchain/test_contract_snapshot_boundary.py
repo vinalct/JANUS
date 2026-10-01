@@ -33,14 +33,11 @@ SNAPSHOT_SCOPED_ANCHORS = {
 
 #: Importing the loader is as much a re-read as calling it: the import is the intent.
 FORBIDDEN_LOADER_IMPORTS = (
-    "janus.models.data_contracts.legacy",
     "janus.models.data_contracts.loader",
 )
 
 #: The functions that turn a path into a contract. Every one of them reads a file.
 FORBIDDEN_LOADER_CALLS = (
-    "contract_from_legacy_schema_bytes",
-    "contract_from_legacy_schema_file",
     "load_data_contract",
 )
 
@@ -183,12 +180,8 @@ def test_every_recorded_allowance_is_load_bearing() -> None:
     "source",
     [
         "from janus.models.data_contracts.loader import load_data_contract",
-        "from janus.models.data_contracts import legacy",
-        "import janus.models.data_contracts.legacy",
         "contract = load_data_contract(path)",
         "contract = contracts.load_data_contract(path)",
-        "contract = contract_from_legacy_schema_file(path, source_id=x)",
-        "contract = contract_from_legacy_schema_bytes(raw, path, source_id=x)",
     ],
 )
 def test_the_detector_flags_a_deliberate_violation(source: str) -> None:

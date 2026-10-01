@@ -546,6 +546,18 @@ it once with the source snapshot, and JANUS generates the Spark read schema from
 normalization handoff format matches `spark.input_format`. See [Data contracts](data-contracts.md)
 for the format, type vocabulary, drafting workflow and bronze naming rule.
 
+`schema.contract` is the only schema key, and it is required for every source, including disabled
+sources. An enabled source must reference a contract with `status: active`. Schema inference is
+gone: the retired `schema.mode` and `schema.path` keys are named validation errors, not warnings:
+
+```text
+schema.mode: is no longer supported: declare schema.contract: conf/contracts/<domain>/<table>.yaml — draft one with `janus contract draft --source-id <id>` (see docs/data-contracts.md)
+schema.path: is no longer supported: declare schema.contract: conf/contracts/<domain>/<table>.yaml — draft one with `janus contract draft --source-id <id>` (see docs/data-contracts.md)
+```
+
+The contract is enforced. Every bronze batch is checked against it before the write, and the live
+Iceberg table is checked against it before extraction starts; see
+[Enforcement modes](data-contracts.md#enforcement-modes) for what `strict` and `lenient` do.
 
 ### `spark`
 
@@ -559,12 +571,17 @@ A source that combines `extraction.mode: full_refresh` with `spark.write_mode: o
 bronze target **keeps its snapshot history across runs**. Each run replaces every row, but the previous
 run stays readable: you can `SELECT ... VERSION AS OF <snapshot_id>` to compare against yesterday's bronze,
 or roll the table back to it after a bad load. Query `<table>.history` and `<table>.snapshots` to see what
-is available. Two things are worth knowing as a source owner. First, a **schema or partition change resets
-that history by design** — if a run drops a column, changes a column's type, or changes
-`spark.partition_by`, JANUS recreates the table and starts a fresh snapshot log, recording
-`history_reset_reason` in the run metadata so the reset is visible rather than assumed. Adding a new column
-does *not* reset history. Second, snapshots are retained indefinitely — nothing expires them today — so the
-storage a full-refresh source occupies grows with each run.
+is available. Two things are worth knowing as a source owner. First, **what the table may become is
+decided by the contract**, not by the batch. A new nullable column, and a promotion the contract's
+`janus.compatibility` allows (`integer → long`, `float → double`, decimal precision widening), is applied
+in place with `ALTER TABLE` and keeps history. A declared breaking change — the contract's MAJOR version
+bumped and the run a full refresh — replaces the table with `REPLACE TABLE`, as does a changed
+`spark.partition_by`; both record `history_reset_reason` in the run metadata so the cut is visible rather
+than assumed. On the pinned Iceberg version a replacement keeps the old snapshots readable with
+`VERSION AS OF` but no longer lets you roll back to them. Any other difference fails the run before it
+writes. See [The evolution matrix](data-contracts.md#the-evolution-matrix). Second, snapshots are retained
+indefinitely — nothing expires them today — so the storage a full-refresh source occupies grows with each
+run.
 
 ### `outputs`
 
@@ -576,9 +593,17 @@ storage a full-refresh source occupies grows with each run.
 
 ### `quality`
 
-- `quality.required_fields` is an optional list of fields that must be present.
-- `quality.unique_fields` is an optional list of uniqueness hints.
-- `quality.allow_schema_evolution` is a boolean flag.
+The contract, not this block, declares which columns are required and what the key is: its `required`
+properties drive the required-field check, and its `primaryKey` drives the uniqueness check and the
+incremental merge key. An incremental source must declare a `primaryKey` in its contract.
+
+- `quality.required_fields` and `quality.unique_fields` are optional cross-checks for this release only.
+  When declared, each must equal the contract's `required` columns and `primaryKey` respectively, or the
+  registry refuses to load the source. Nothing reads them at run time. They will be removed in a later
+  release; omit them in new sources.
+- `quality.allow_schema_evolution` is removed and is a named validation error. Schema evolution is
+  governed by `janus.compatibility` in the contract's `customProperties` (`additive`, `backward`, or
+  `frozen`); see [The evolution matrix](data-contracts.md#the-evolution-matrix).
 
 If you are unsure whether a field belongs in config, check the example source and the typed contract before inventing a new key.
 
@@ -588,7 +613,7 @@ Before touching Python, ask:
 
 - Can this source fit an existing family and variant?
 - Can the odd behavior be expressed through config already?
-- Are output paths, schema mode, and checkpoint rules declarative?
+- Are output paths, the contract path, and checkpoint rules declarative?
 - Is the only missing piece a runtime secret value that should come from the environment?
 
 If the answer is yes, stay in YAML.

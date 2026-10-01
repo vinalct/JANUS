@@ -28,6 +28,7 @@ from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.scripts import ingest_raw_to_bronze
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.utils.storage import StorageLayout, bronze_table_identifier
+from tests.support.contracts import with_registry_contract
 from tests.support.spark_sessions import build_iceberg_session, require_iceberg_runtime
 
 SOURCE_ID = "incremental_upsert_fixture"
@@ -364,7 +365,7 @@ def _run_once(
         project_root=tmp_path,
         started_at=started_at,
     )
-    plan = strategy.plan(_source_config(tmp_path), run_context)
+    plan = with_registry_contract(strategy.plan(_source_config(tmp_path), run_context))
     planned_run = PlannedRun(plan=plan, strategy=strategy)
     provider = SparkSessionProvider({}, {}, session_factory=session_factory)
 
@@ -388,7 +389,7 @@ def _replay_planned_run(tmp_path: Path) -> PlannedRun:
         project_root=tmp_path,
         started_at=RUN_TWO_STARTED_AT,
     )
-    plan = strategy.plan(_source_config(tmp_path), run_context)
+    plan = with_registry_contract(strategy.plan(_source_config(tmp_path), run_context))
     return PlannedRun(plan=plan, strategy=strategy)
 
 
@@ -448,6 +449,12 @@ def _source_config(tmp_path: Path) -> SourceConfig:
     config_path = tmp_path / "conf" / "sources" / f"{SOURCE_ID}.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    contract_path = tmp_path / "conf" / "contracts" / "test" / "incremental_upsert_fixture.yaml"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_bytes(
+        (Path(__file__).resolve().parents[2] / "fixtures" / "contracts" / "baseline"
+         / "incremental_upsert_fixture.yaml").read_bytes()
+    )
     return SourceConfig.from_mapping(payload, config_path)
 
 
@@ -497,7 +504,7 @@ def _source_config_payload() -> dict[str, Any]:
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"mode": "infer"},
+        "schema": {"contract": "conf/contracts/test/incremental_upsert_fixture.yaml"},
         "spark": {
             "input_format": "json",
             # Today's incremental idiom, and the carrier of the bug under test.
@@ -525,6 +532,5 @@ def _source_config_payload() -> dict[str, Any]:
             # `validate_quality_contract` fails the config check and the data check
             # never runs.
             "unique_fields": ["event_id"],
-            "allow_schema_evolution": True,
         },
     }

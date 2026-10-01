@@ -2,7 +2,7 @@ apiVersion: v3.2.0
 kind: DataContract
 id: dados_abertos.conjuntos_dados_details
 name: Portal Brasileiro de Dados Abertos - Catalogo de conjuntos de dados
-version: 1.0.0
+version: 1.0.1
 status: active
 domain: dados_abertos
 description:
@@ -280,4 +280,4 @@ customProperties:
 - property: janus.compatibility
   value: additive
 - property: janus.enforcement
-  value: lenient
+  value: strict
