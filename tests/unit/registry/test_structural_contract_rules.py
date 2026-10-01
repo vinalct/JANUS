@@ -136,7 +136,7 @@ def test_the_refusal_names_the_idempotency_the_key_protects(tmp_path):
 
     assert issues == {
         "schema.contract": "an incremental source needs a primaryKey in its contract to derive "
-        "an idempotent bronze write (order-07/19)"
+        "an idempotent bronze write."
     }
 
 

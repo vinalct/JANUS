@@ -344,3 +344,21 @@ def test_budget_bounds_a_locked_catalog(tmp_path):
     assert holder.exitcode == 0
     assert result.outcome == "catalog_unavailable"
     assert elapsed <= LOCK_BUDGET_SECONDS + 0.5
+
+
+def test_a_fresh_catalog_preflight_does_not_create_catalog_tables(tmp_path):
+    """The read must leave bootstrap to the writer, including on repeated probes."""
+    import sqlite3
+
+    from tests.support.spark_sessions import sqlite_catalog_target
+
+    target = sqlite_catalog_target(tmp_path / "fresh-catalog")
+    target.prepare()
+    case = _case("pf_fresh_read_only", "base")
+    for _ in range(2):
+        result = _preflight(target, tmp_path, case)
+        assert result.outcome == "table_missing", result.reason
+        with sqlite3.connect(target.catalog_db) as connection:
+            assert connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall() == []

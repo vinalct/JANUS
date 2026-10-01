@@ -661,7 +661,9 @@ def test_the_postgres_credentials_are_the_same_on_both_sides(tmp_path):
 FORBIDDEN_RUNTIME_IMPORTS = ("pyarrow", "pyiceberg", "sqlalchemy", "duckdb")
 ALLOWED_SESSION_FREE_IMPORTS = {
     "observability/iceberg_sink.py": frozenset({"pyarrow", "pyiceberg"}),
-    "runtime/contract_preflight.py": frozenset({"pyiceberg"}),
+    # SQLAlchemy inspects SQL catalog metadata without bootstrapping it. Both
+    # dependencies remain lazy and confined to this session-free adapter.
+    "runtime/contract_preflight.py": frozenset({"pyiceberg", "sqlalchemy"}),
 }
 JANUS_PACKAGE = Path(janus.__file__).parent
 

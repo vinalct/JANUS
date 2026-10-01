@@ -33,6 +33,7 @@ from janus.schema_contracts import resolve_contract_path_for_plan, resolve_spark
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.strategies.catalog import CatalogStrategy
 from janus.strategies.files import FileStrategy
+from tests.support.spark_sessions import CatalogTarget, sqlite_catalog_target
 
 STARTED_AT = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
 PROJECT_PLACEHOLDER = "<PROJECT>"
@@ -257,6 +258,7 @@ def bronze_golden(
     project_root: Path,
     *,
     spark: Any | None = None,
+    catalog_target: CatalogTarget | None = None,
     work_root: Path | None = None,
 ) -> dict[str, Any]:
     """Run one offline source through ``SourceExecutor`` and capture its Bronze shape."""
@@ -265,7 +267,11 @@ def bronze_golden(
         raise ValueError(f"Unknown Bronze baseline case {case!r}")
 
     if spark is not None and work_root is not None:
-        return _capture_bronze_case(_CASE_BY_NAME[case], project_root, spark, work_root)
+        if catalog_target is None:
+            raise ValueError("catalog_target is required with an external Spark session")
+        return _capture_bronze_case(
+            _CASE_BY_NAME[case], project_root, spark, work_root, catalog_target
+        )
 
     if spark is not None or work_root is not None:
         raise ValueError("spark and work_root must be provided together")
@@ -279,7 +285,11 @@ def bronze_golden(
         )
         try:
             return _capture_bronze_case(
-                _CASE_BY_NAME[case], project_root, session, temporary_root / case
+                _CASE_BY_NAME[case],
+                project_root,
+                session,
+                temporary_root / case,
+                sqlite_catalog_target(temporary_root / "catalog"),
             )
         finally:
             session.stop()
@@ -309,6 +319,7 @@ def capture_baseline(project_root: Path, output_dir: Path) -> None:
                     case,
                     project_root,
                     spark=session,
+                    catalog_target=sqlite_catalog_target(work_root / "catalog"),
                     work_root=work_root / "cases" / case,
                 )
                 _write_json(bronze_dir / f"{case}.json", captured)
@@ -321,6 +332,7 @@ def _capture_bronze_case(
     project_root: Path,
     spark: Any,
     work_root: Path,
+    catalog_target: CatalogTarget,
 ) -> dict[str, Any]:
     case_root = work_root.resolve()
     _prepare_case_project(case, project_root.resolve(), case_root)
@@ -350,8 +362,8 @@ def _capture_bronze_case(
     with mock.patch.dict(os.environ, token_environment, clear=False):
         executed = SourceExecutor().execute(
             planned,
-            SparkSessionProvider.wrapping(spark),
-            _ENVIRONMENT_CONFIG,
+            SparkSessionProvider.wrapping(spark, resolved_paths=catalog_target.resolved_paths),
+            {**_ENVIRONMENT_CONFIG, **catalog_target.environment_config()},
         )
     if executed.status != "succeeded":
         raise AssertionError(

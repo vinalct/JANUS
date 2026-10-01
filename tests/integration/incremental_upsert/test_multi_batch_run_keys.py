@@ -67,11 +67,13 @@ def spark():
 
 @dataclass(slots=True)
 class FakeReader:
+    frames: list[Any]
+
     def read_extraction_result(
         self, spark, extraction_result, format_name=None, schema=None, options=None
     ):
         del spark, extraction_result, format_name, schema, options
-        return object()
+        return self.frames.pop(0)
 
 
 @dataclass(slots=True)
@@ -108,7 +110,7 @@ def test_run_keys_span_every_batch(spark, tmp_path):
     frames = [spark.createDataFrame(rows) for rows in BATCH_KEY_ROWS]
 
     materializer = BronzeMaterializer(
-        reader=FakeReader(),
+        reader=FakeReader(frames=list(frames)),
         normalizer=QueueNormalizer(frames=frames),
         writer_factory=lambda storage_layout: NoopWriter(plan.bronze_output.path),
     )

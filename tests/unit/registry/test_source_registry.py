@@ -330,7 +330,7 @@ quality: {}
         "extraction.checkpoint_field: is required when extraction.mode is "
         "'incremental'" in message
     )
-    assert "schema.mode: is no longer supported (order-19)" in message
+    assert "schema.mode: is no longer supported: declare schema.contract:" in message
     assert "outputs.raw.path: is required" in message
 
 

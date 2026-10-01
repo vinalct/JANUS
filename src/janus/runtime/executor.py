@@ -23,11 +23,10 @@ from janus.quality import (
 )
 from janus.readers import SparkDatasetReader
 from janus.runtime.contract_preflight import (
-    PREFLIGHT_ATTRIBUTE,
     LiveTable,
     enforce_preflight,
     load_live_table,
-    run_contract_preflight,
+    start_observed_preflight,
 )
 from janus.runtime.materialize import (
     BronzeMaterializer,
@@ -188,11 +187,9 @@ class SourceExecutor:
                     metadata_output_path=plan.metadata_output.path,
                 )
 
-                observer.start_run(plan)
-                _log_info(logger, "run_observation_started")
-
-                preflight = run_contract_preflight(
-                    plan,
+                runtime_planned_run, preflight = start_observed_preflight(
+                    runtime_planned_run,
+                    observer,
                     environment_config,
                     spark_provider.resolved_paths,
                     identifier=bronze_table_identifier(
@@ -204,20 +201,7 @@ class SourceExecutor:
                     logger=logger,
                     loader=self.preflight_loader,
                 )
-                plan = replace(
-                    plan,
-                    run_context=plan.run_context.with_attribute(
-                        PREFLIGHT_ATTRIBUTE, preflight.outcome
-                    ),
-                )
-                runtime_planned_run = replace(runtime_planned_run, plan=plan)
-                _log_info(
-                    logger,
-                    "contract_preflight_finished",
-                    outcome=preflight.outcome,
-                    reason=preflight.reason,
-                    duration_seconds=preflight.duration_seconds,
-                )
+                plan = runtime_planned_run.plan
                 enforce_preflight(
                     preflight,
                     enforcement=(

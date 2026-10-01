@@ -419,7 +419,7 @@ def test_a_config_with_problems_in_four_blocks_still_reports_all_four():
         "extraction.checkpoint_field: is required when extraction.mode is 'incremental'"
         in message
     )
-    assert "schema.mode: is no longer supported (order-19)" in message
+    assert "schema.mode: is no longer supported: declare schema.contract:" in message
 
 
 def test_importing_a_builder_by_its_new_path_works():

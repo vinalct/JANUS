@@ -11,7 +11,11 @@ from tests.support.contract_baseline import (
     bronze_golden,
     spark_schema_golden,
 )
-from tests.support.spark_sessions import build_iceberg_session, require_iceberg_runtime
+from tests.support.spark_sessions import (
+    build_iceberg_session,
+    require_iceberg_runtime,
+    sqlite_catalog_target,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 BASELINE_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "baseline"
@@ -29,6 +33,7 @@ def bronze_captures(tmp_path_factory):
                 case,
                 PROJECT_ROOT,
                 spark=spark,
+                catalog_target=sqlite_catalog_target(root / "catalog"),
                 work_root=root / "cases" / case,
             )
             for case in BRONZE_CASES

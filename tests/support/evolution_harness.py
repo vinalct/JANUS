@@ -220,7 +220,9 @@ def _value(name: str, type_: str, row_id: str) -> Any:
         value = f"{name}-{row_id}"
     elif type_.startswith("decimal"):
         value = Decimal("1.25") if old else Decimal("2.50")
-    elif type_ in {"int", "bigint", "float", "double"}:
+    elif type_ in {"float", "double"}:
+        value = 1.0 if old else 2.0
+    elif type_ in {"int", "bigint"}:
         value = 1 if old else 2
     else:
         value = "1" if old else "2"

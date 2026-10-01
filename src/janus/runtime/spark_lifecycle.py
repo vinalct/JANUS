@@ -43,16 +43,19 @@ class SparkSessionProvider:
         cls,
         session: SparkSession,
         logger: StructuredLogger | None = None,
+        *,
+        resolved_paths: Mapping[str, RuntimeLocation] | None = None,
     ) -> SparkSessionProvider:
         """Adapt an externally-owned live session.
 
         ``get()`` hands back the wrapped session and ``stop()`` never stops it —
         the caller that built it keeps ownership. Because the provider never
         started this session, it reports neither ``was_started`` nor
-        ``session_info``.
+        ``session_info``. Pass the resolved catalog paths so preflight and
+        observability can access the same catalog without acquiring the session.
         """
 
-        provider = cls({}, {}, logger, session_factory=_reject_rebuild)
+        provider = cls({}, resolved_paths or {}, logger, session_factory=_reject_rebuild)
         provider._session = session
         provider._owns_session = False
         return provider

@@ -7,8 +7,8 @@ import re
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any
 
 from janus.models import ExecutionPlan, resolve_bronze_write_intent
 from janus.models.data_contracts import DataContract, physical_type_from_iceberg_name
@@ -20,6 +20,11 @@ from janus.utils.catalog_properties import (
 from janus.utils.environment import RuntimeLocation
 from janus.utils.logging import StructuredLogger
 from janus.writers.evolution import EvolutionPlan, LiveColumn, plan_schema_evolution
+
+if TYPE_CHECKING:
+    from janus.lineage import RunObserver
+    from janus.planner import PlannedRun
+
 
 PREFLIGHT_OUTCOMES = frozenset(
     {"ok", "will_evolve", "refused", "table_missing", "catalog_unavailable"}
@@ -110,19 +115,43 @@ def load_live_table(
     """Read one Iceberg table without starting Spark or importing PyIceberg at module import."""
     properties = derive_pyiceberg_catalog_properties(dict(config), resolved_paths)
     catalog_name = derive_pyiceberg_catalog_name(dict(config))
+
+    if properties.get("type") == "sql":
+        properties["init_catalog_tables"] = "false"
     dependencies = engine or _engine_dependencies()
     catalog = dependencies.load_catalog(catalog_name, **properties)
     try:
-        table = catalog.load_table(identifier)
-    except (dependencies.no_such_table, dependencies.no_such_namespace):
-        return None
-    return LiveTable(
-        columns=tuple(
-            LiveColumn(field.name, _iceberg_physical_type(field.field_type), field.required)
-            for field in table.schema().fields
-        ),
-        recorded_contract_version=table.properties.get("janus.contract_version"),
-    )
+        if not _catalog_initialized(catalog):
+            return None
+        try:
+            table = catalog.load_table(identifier)
+        except (dependencies.no_such_table, dependencies.no_such_namespace):
+            return None
+        return LiveTable(
+            columns=tuple(
+                LiveColumn(field.name, _iceberg_physical_type(field.field_type), field.required)
+                for field in table.schema().fields
+            ),
+            recorded_contract_version=table.properties.get("janus.contract_version"),
+        )
+    finally:
+        close = getattr(catalog, "close", None)
+        if callable(close):
+            close()
+
+
+def _catalog_initialized(catalog: Any) -> bool:
+    """A reachable SQL catalog without its metadata table is a first write.
+
+    REST catalogs have no SQL engine. Inspection errors propagate so an
+    inaccessible database still fails closed, rather than looking empty.
+    """
+    sql_engine = getattr(catalog, "engine", None)
+    if sql_engine is None:
+        return True
+    from sqlalchemy import inspect
+
+    return bool(inspect(sql_engine).has_table("iceberg_tables"))
 
 
 def _iceberg_physical_type(field_type: Any) -> str:
@@ -202,6 +231,41 @@ def run_contract_preflight(
         contract.id,
         contract.version,
     )
+
+
+def start_observed_preflight(
+    planned_run: PlannedRun,
+    observer: RunObserver,
+    config: Mapping[str, Any],
+    resolved_paths: Mapping[str, RuntimeLocation],
+    *,
+    identifier: str,
+    logger: StructuredLogger | None,
+    loader: Callable[..., LiveTable | None] = load_live_table,
+) -> tuple[PlannedRun, PreflightResult]:
+    """Start observation and record preflight before the caller enforces its result.
+
+    The caller retains the annotated plan on refusal so terminal metadata carries
+    the preflight outcome even when extraction never starts.
+    """
+    plan = planned_run.plan
+    observer.start_run(plan)
+    if logger is not None:
+        logger.info("run_observation_started")
+    result = run_contract_preflight(
+        plan, config, resolved_paths, identifier=identifier, logger=logger, loader=loader
+    )
+    plan = replace(
+        plan, run_context=plan.run_context.with_attribute(PREFLIGHT_ATTRIBUTE, result.outcome)
+    )
+    if logger is not None:
+        logger.info(
+            "contract_preflight_finished",
+            outcome=result.outcome,
+            reason=result.reason,
+            duration_seconds=result.duration_seconds,
+        )
+    return replace(planned_run, plan=plan), result
 
 
 class ContractPreflightError(ContractEnforcementError):

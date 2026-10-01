@@ -28,6 +28,7 @@ from janus.registry import load_registry
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SparkDatasetWriter
+from tests.support.contracts import with_registry_contract
 from tests.support.spark_sessions import build_iceberg_session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -516,7 +517,7 @@ def _extract_with_fixture(
     )
     hook = IbgeSidraFlatHook()
 
-    plan = strategy.plan(source_config, run_context, hook=hook)
+    plan = with_registry_contract(strategy.plan(source_config, run_context, hook=hook))
     CheckpointStore().save(plan, previous_checkpoint)
     extraction_result = strategy.extract(plan, hook=hook)
     handoff = strategy.build_normalization_handoff(plan, extraction_result, hook=hook)

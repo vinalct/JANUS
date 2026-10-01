@@ -26,6 +26,12 @@ from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SparkDatasetWriter, quote_identifier
+from tests.support.spark_sessions import (
+    CatalogTarget,
+    require_iceberg_runtime,
+    sqlite_catalog_target,
+    start_session,
+)
 
 ENVIRONMENT_CONFIG: Mapping[str, Any] = {
     "storage": {
@@ -353,6 +359,8 @@ def execute_case_with_pages(
     logger: StructuredLogger | None = None,
 ) -> ExecutedRun:
     """Run one planned case through ``SourceExecutor`` with a private provider."""
+    if isinstance(session_factory, IcebergSessionFactory):
+        environment_config = {**environment_config, **session_factory.target.environment_config()}
     served = transport if transport is not None else FixtureTransport()
     served.payloads.extend(pages)
     storage_layout = StorageLayout.from_environment_config(
@@ -369,7 +377,13 @@ def execute_case_with_pages(
     spark_provider = (
         provider
         if provider is not None
-        else SparkSessionProvider({}, {}, session_factory=session_factory)
+        else SparkSessionProvider(
+            environment_config,
+            session_factory.target.resolved_paths
+            if isinstance(session_factory, IcebergSessionFactory)
+            else {},
+            session_factory=session_factory,
+        )
     )
     return SourceExecutor(logger=logger).execute(
         replace(planned_run, strategy=strategy), spark_provider, environment_config
@@ -398,16 +412,23 @@ def write_parquet(
     return path
 
 
-def iceberg_session_factory(root: Path, app_name: str = "janus-order19") -> Callable[[], Any]:
-    """A factory building a fresh Iceberg session over one warehouse, per call."""
-    from tests.support.spark_sessions import build_iceberg_session, require_iceberg_runtime
+@dataclass(frozen=True)
+class IcebergSessionFactory:
+    """Keep the catalog available to preflight before a session is acquired."""
 
+    target: CatalogTarget
+    app_name: str
+
+    def __call__(self) -> Any:
+        return start_session(self.app_name, self.target.session_options())
+
+
+def iceberg_session_factory(root: Path, app_name: str = "janus-order19") -> IcebergSessionFactory:
+    """A lazy session factory and the exact catalog both engines must use."""
     require_iceberg_runtime()
-
-    def build() -> Any:
-        return build_iceberg_session(app_name, root)
-
-    return build
+    target = sqlite_catalog_target(root)
+    target.prepare()
+    return IcebergSessionFactory(target, app_name)
 
 
 @contextmanager

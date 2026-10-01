@@ -97,6 +97,10 @@ class StandInCatalog:
     table: StandInTable | None = None
     error: Exception | None = None
     loaded: list[str] = field(default_factory=list)
+    closed: bool = False
+
+    def close(self) -> None:
+        self.closed = True
 
     def load_table(self, identifier: str) -> StandInTable:
         self.loaded.append(identifier)
@@ -298,10 +302,14 @@ def test_the_loader_derives_the_catalog_once_and_maps_every_scalar(monkeypatch, 
     assert calls == [
         (
             derive_pyiceberg_catalog_name(config),
-            derive_pyiceberg_catalog_properties(config, resolved_paths),
+            {
+                **derive_pyiceberg_catalog_properties(config, resolved_paths),
+                "init_catalog_tables": "false",
+            },
         )
     ]
     assert catalog.loaded == [IDENTIFIER]
+    assert catalog.closed is True
     assert [column.physical_type for column in live.columns] == [
         "decimal(18,2)" if name == "decimal(p,s)" else name for name in ICEBERG_SPELLINGS
     ]
@@ -313,10 +321,40 @@ def test_the_loader_derives_the_catalog_once_and_maps_every_scalar(monkeypatch, 
 def test_a_missing_table_or_namespace_is_no_table(monkeypatch, tmp_path, missing):
     from janus.runtime.contract_preflight import load_live_table
 
-    _install_pyiceberg(monkeypatch, StandInCatalog(error=missing(IDENTIFIER)))
+    catalog = StandInCatalog(error=missing(IDENTIFIER))
+    _install_pyiceberg(monkeypatch, catalog)
     config, resolved_paths = _catalog_config(tmp_path)
 
     assert load_live_table(config, resolved_paths, IDENTIFIER) is None
+    assert catalog.closed is True
+
+
+@pytest.mark.parametrize("failure_at", ["inspection", "table_load"])
+def test_catalog_failures_close_connections_and_remain_unavailable(
+    monkeypatch, tmp_path, failure_at
+):
+    from janus.runtime import contract_preflight
+
+    def unavailable(_catalog):
+        raise OSError("catalog inaccessible")
+
+    catalog = StandInCatalog(error=OSError("catalog inaccessible"))
+    _install_pyiceberg(monkeypatch, catalog)
+    if failure_at == "inspection":
+        monkeypatch.setattr(contract_preflight, "_catalog_initialized", unavailable)
+    config, resolved_paths = _catalog_config(tmp_path)
+
+    result = contract_preflight.run_contract_preflight(
+        _plan(tmp_path, _contract("base")),
+        config,
+        resolved_paths,
+        identifier=IDENTIFIER,
+        logger=None,
+    )
+
+    assert result.outcome == "catalog_unavailable"
+    assert result.reason == "OSError"
+    assert catalog.closed is True
 
 
 def test_an_unstamped_table_records_no_version(monkeypatch, tmp_path):
@@ -610,7 +648,7 @@ def test_importing_the_preflight_module_loads_no_engine():
         "import sys; "
         f"sys.path[:0] = {import_paths!r}; "
         "import janus.runtime.contract_preflight; "
-        "assert not {'pyspark', 'pyiceberg', 'pyarrow'} & sys.modules.keys()"
+        "assert not {'pyspark', 'pyiceberg', 'pyarrow', 'sqlalchemy'} & sys.modules.keys()"
     )
 
     result = subprocess.run(
