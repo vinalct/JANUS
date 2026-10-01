@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from janus.models import BronzeWriteIntent, ExecutionPlan, RunContext
+from janus.models import BronzeWriteIntent, ExecutionPlan, RunContext, resolve_bronze_write_intent
 from janus.normalizers import BaseNormalizer
 from janus.registry import load_registry
 from janus.utils.storage import StorageLayout
@@ -17,13 +17,6 @@ from tests.support.spark_sessions import build_iceberg_session
 from tests.support.writer_contracts import contract_for_columns
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-
-MERGE_INTENT = BronzeWriteIntent(
-    strategy="merge_on_keys",
-    configured_mode="append",
-    merge_keys=("id",),
-)
-
 
 @pytest.fixture(scope="module")
 def spark(tmp_path_factory):
@@ -67,8 +60,17 @@ def _plan(
             declared_fields,
             source_id=source_config.source_id,
             compatibility=compatibility,
+            primary_key=("id",),
         )
     )
+
+
+def _merge_intent(plan: ExecutionPlan) -> BronzeWriteIntent:
+    """The intent the materializer resolves: the example source upserts on the contract's key."""
+    intent = resolve_bronze_write_intent(plan)
+    assert intent.strategy == "merge_on_keys"
+    assert intent.merge_keys == plan.data_contract.primary_key == ("id",)
+    return intent
 
 
 def _storage_layout(tmp_path: Path) -> StorageLayout:
@@ -94,7 +96,7 @@ def test_merge_first_run_degrades_to_create_and_is_key_unique(spark, tmp_path):
         spark.createDataFrame([{"id": "1", "name": "a"}, {"id": "2", "name": "b"}]),
         plan,
     )
-    result = writer.write(frame, plan, "bronze", intent=MERGE_INTENT, count_records=True)
+    result = writer.write(frame, plan, "bronze", intent=_merge_intent(plan), count_records=True)
 
     assert result.metadata_as_dict()["write_strategy"] == "create"
     assert result.metadata_as_dict()["requested_strategy"] == "merge_on_keys"
@@ -119,7 +121,7 @@ def test_merge_deduplicates_repeated_key_within_one_batch(spark, tmp_path):
         ),
         plan,
     )
-    result = writer.write(frame, plan, "bronze", intent=MERGE_INTENT, count_records=True)
+    result = writer.write(frame, plan, "bronze", intent=_merge_intent(plan), count_records=True)
 
     assert result.metadata_as_dict()["in_batch_duplicates_dropped"] == "1"
     persisted = spark.table(result.path)
@@ -141,7 +143,7 @@ def test_merge_updates_matched_rows_last_seen_wins(spark, tmp_path):
         spark.createDataFrame([{"id": "1", "amount": 10}, {"id": "2", "amount": 10}]),
         plan_one,
     )
-    writer.write(frame_one, plan_one, "bronze", intent=MERGE_INTENT, count_records=True)
+    writer.write(frame_one, plan_one, "bronze", intent=_merge_intent(plan_one), count_records=True)
 
     plan_two = _plan(
         tmp_path,
@@ -153,7 +155,9 @@ def test_merge_updates_matched_rows_last_seen_wins(spark, tmp_path):
         spark.createDataFrame([{"id": "2", "amount": 11}, {"id": "3", "amount": 12}]),
         plan_two,
     )
-    result = writer.write(frame_two, plan_two, "bronze", intent=MERGE_INTENT, count_records=True)
+    result = writer.write(
+        frame_two, plan_two, "bronze", intent=_merge_intent(plan_two), count_records=True
+    )
 
     persisted = {row["id"]: row for row in spark.table(result.path).collect()}
     assert set(persisted) == {"1", "2", "3"}
@@ -172,7 +176,7 @@ def test_merge_empty_batch_is_skipped_without_a_commit(spark, tmp_path):
         spark.createDataFrame([{"id": "1", "name": "a"}]).where("id = 'absent'"),
         plan,
     )
-    result = writer.write(frame, plan, "bronze", intent=MERGE_INTENT, count_records=True)
+    result = writer.write(frame, plan, "bronze", intent=_merge_intent(plan), count_records=True)
 
     assert result.records_written == 0
     assert result.metadata_as_dict()["write_skipped"] == "empty_batch"
@@ -185,7 +189,7 @@ def test_merge_evolves_schema_when_a_new_column_appears(spark, tmp_path):
 
     plan_one = _plan(tmp_path, run_id="run-merge-evo-001", table_name="evolve")
     frame_one = normalizer.normalize(spark.createDataFrame([{"id": "1", "name": "a"}]), plan_one)
-    writer.write(frame_one, plan_one, "bronze", intent=MERGE_INTENT, count_records=True)
+    writer.write(frame_one, plan_one, "bronze", intent=_merge_intent(plan_one), count_records=True)
 
     plan_two = _plan(
         tmp_path,
@@ -196,7 +200,9 @@ def test_merge_evolves_schema_when_a_new_column_appears(spark, tmp_path):
     frame_two = normalizer.normalize(
         spark.createDataFrame([{"id": "2", "name": "b", "extra": "x"}]), plan_two
     )
-    result = writer.write(frame_two, plan_two, "bronze", intent=MERGE_INTENT, count_records=True)
+    result = writer.write(
+        frame_two, plan_two, "bronze", intent=_merge_intent(plan_two), count_records=True
+    )
 
     assert result.metadata_as_dict()["schema_evolution"] == "added:extra"
     persisted = spark.table(result.path)
@@ -215,7 +221,7 @@ def test_merge_raises_when_schema_drifts_without_evolution_allowed(spark, tmp_pa
         compatibility="frozen",
     )
     frame_one = normalizer.normalize(spark.createDataFrame([{"id": "1", "name": "a"}]), plan_one)
-    writer.write(frame_one, plan_one, "bronze", intent=MERGE_INTENT, count_records=True)
+    writer.write(frame_one, plan_one, "bronze", intent=_merge_intent(plan_one), count_records=True)
 
     plan_two = _plan(
         tmp_path,
@@ -228,7 +234,9 @@ def test_merge_raises_when_schema_drifts_without_evolution_allowed(spark, tmp_pa
         spark.createDataFrame([{"id": "2", "name": "b", "extra": "x"}]), plan_two
     )
     with pytest.raises(SchemaEvolutionRefusedError, match="extra"):
-        writer.write(frame_two, plan_two, "bronze", intent=MERGE_INTENT, count_records=True)
+        writer.write(
+            frame_two, plan_two, "bronze", intent=_merge_intent(plan_two), count_records=True
+        )
 
 
 def test_merge_does_not_duplicate_a_null_key_across_runs(spark, tmp_path):
@@ -240,14 +248,16 @@ def test_merge_does_not_duplicate_a_null_key_across_runs(spark, tmp_path):
         spark.createDataFrame([{"id": None, "name": "a"}], "id string, name string"),
         plan_one,
     )
-    writer.write(frame_one, plan_one, "bronze", intent=MERGE_INTENT, count_records=True)
+    writer.write(frame_one, plan_one, "bronze", intent=_merge_intent(plan_one), count_records=True)
 
     plan_two = _plan(tmp_path, run_id="run-merge-null-002", table_name="nullkey")
     frame_two = normalizer.normalize(
         spark.createDataFrame([{"id": None, "name": "b"}], "id string, name string"),
         plan_two,
     )
-    result = writer.write(frame_two, plan_two, "bronze", intent=MERGE_INTENT, count_records=True)
+    result = writer.write(
+        frame_two, plan_two, "bronze", intent=_merge_intent(plan_two), count_records=True
+    )
 
     # <=> matches null-to-null, so the null-keyed row is updated, not duplicated.
     persisted = spark.table(result.path)

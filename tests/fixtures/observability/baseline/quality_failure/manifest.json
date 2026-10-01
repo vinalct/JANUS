@@ -119,9 +119,9 @@
     },
     "planned_run": {
       "contract": {
-        "id": "example.minimal",
-        "path": "conf/contracts/test/minimal_contract.yaml",
-        "schema_version": "36b064711c0849a241baa4eb3a5af56c7b8c40c1bb394413797146324b996583",
+        "id": "example.keyed",
+        "path": "conf/contracts/test/keyed_contract.yaml",
+        "schema_version": "6a216edc9756a7f268d629acf4d151fb56bdfc18780cc21e2f1a9087872cd821",
         "status": "active",
         "version": "1.0.0"
       },

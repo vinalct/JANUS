@@ -28,6 +28,8 @@ SOURCE_ID = "lazy_spark_date_window_source"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 # The contract the materializer checks every batch against; the pages' own shape.
 CONTRACT_PATH = "tests/fixtures/contracts/lifecycle/execute_lifecycle_evidence.yaml"
+
+KEYED_CONTRACT_PATH = "tests/fixtures/contracts/lifecycle/execute_lifecycle_evidence_keyed.yaml"
 ENVIRONMENT_CONFIG = {
     "storage": {
         "root_dir": "data",
@@ -249,10 +251,10 @@ def test_the_run_summary_reports_the_session_it_actually_paid_for(tmp_path, sess
 def test_a_quality_failure_still_releases_the_session(tmp_path, session_factory):
     """FR-4: a run failing `unique_fields` stops Spark and still persists metadata.
 
-    `janus_source_id` is written identically onto every bronze row, so configuring it
-    as a unique field is a genuine duplicate-key violation rather than a missing column.
-    Session release must not depend on the run succeeding — a failed overnight job would
-    otherwise leave a cluster allocated.
+    Every window serves the same page and the contract declares the `records` envelope as
+    its primaryKey, so the check finds a genuine duplicate-key violation rather than a
+    missing column. Session release must not depend on the run succeeding — a failed
+    overnight job would otherwise leave a cluster allocated.
     """
 
     from pyspark.sql import SparkSession
@@ -263,7 +265,8 @@ def test_a_quality_failure_still_releases_the_session(tmp_path, session_factory)
         tmp_path,
         session_factory,
         logger=logger,
-        unique_fields=["janus_source_id"],
+        payloads=[{"records": [GOLDEN_RECORDS[0]]}] * len(GOLDEN_WINDOWS),
+        contract_path=KEYED_CONTRACT_PATH,
     )
 
     assert executed.status == "failed"
@@ -294,11 +297,12 @@ def _run_source(
     *,
     logger=None,
     hook=None,
-    unique_fields: list[str] | None = None,
+    payloads: list[dict[str, Any]] | None = None,
+    contract_path: str = CONTRACT_PATH,
     provider_holder: list[SparkSessionProvider] | None = None,
 ):
     transport = FixtureTransport(
-        payloads=[{"records": [record]} for record in GOLDEN_RECORDS],
+        payloads=payloads or [{"records": [record]} for record in GOLDEN_RECORDS],
         events=[],
     )
     storage_layout = StorageLayout.from_environment_config(ENVIRONMENT_CONFIG, tmp_path)
@@ -314,9 +318,9 @@ def _run_source(
         project_root=tmp_path,
         started_at=datetime(2026, 7, 6, 11, 0, tzinfo=UTC),
     )
-    source_config = _source_config(tmp_path, unique_fields=unique_fields)
+    source_config = _source_config(tmp_path, contract_path=contract_path)
     plan = strategy.plan(source_config, run_context, hook=hook).with_data_contract(
-        load_data_contract(PROJECT_ROOT / CONTRACT_PATH)
+        load_data_contract(PROJECT_ROOT / contract_path)
     )
     planned_run = PlannedRun(plan=plan, strategy=strategy, hook=hook)
 
@@ -360,19 +364,15 @@ def _golden_content_hash() -> str:
     return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
 
 
-def _source_config(tmp_path: Path, *, unique_fields: list[str] | None = None) -> SourceConfig:
-    payload = _source_config_payload(unique_fields=unique_fields)
+def _source_config(tmp_path: Path, *, contract_path: str = CONTRACT_PATH) -> SourceConfig:
+    payload = _source_config_payload(contract_path=contract_path)
     config_path = tmp_path / "conf" / "sources" / f"{SOURCE_ID}.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return SourceConfig.from_mapping(payload, config_path)
 
 
-def _source_config_payload(*, unique_fields: list[str] | None = None) -> dict[str, Any]:
-    quality: dict[str, Any] = {}
-    if unique_fields:
-        quality["unique_fields"] = unique_fields
-
+def _source_config_payload(*, contract_path: str = CONTRACT_PATH) -> dict[str, Any]:
     return {
         "source_id": SOURCE_ID,
         "name": SOURCE_ID,
@@ -423,7 +423,7 @@ def _source_config_payload(*, unique_fields: list[str] | None = None) -> dict[st
                 "backoff_seconds": 1,
             },
         },
-        "schema": {"contract": CONTRACT_PATH},
+        "schema": {"contract": contract_path},
         "spark": {
             "input_format": "json",
             "write_mode": "append",
@@ -433,5 +433,5 @@ def _source_config_payload(*, unique_fields: list[str] | None = None) -> dict[st
             "bronze": {"path": f"data/bronze/example/{SOURCE_ID}", "format": "iceberg"},
             "metadata": {"path": f"data/metadata/example/{SOURCE_ID}", "format": "json"},
         },
-        "quality": quality,
+        "quality": {},
     }

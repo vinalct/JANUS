@@ -8,27 +8,7 @@ from __future__ import annotations
 
 from janus.models.config.constants import CONCURRENT_PAGINATION_TYPES
 from janus.models.config.issues import ValidationIssue
-from janus.models.config.types import AccessConfig, ExtractionConfig, QualityConfig
-
-
-def _validate_incremental_contract(
-    extraction: ExtractionConfig,
-    quality: QualityConfig,
-    issues: list[ValidationIssue],
-) -> None:
-    """Require idempotency keys for incremental sources.
-
-    Incremental writes are upserted on ``quality.unique_fields``; without a key there is
-    no definable "same row", so the loader could only duplicate silently.
-    """
-    if extraction.mode == "incremental" and not quality.unique_fields:
-        issues.append(
-            ValidationIssue(
-                "quality.unique_fields",
-                "is required when extraction.mode is 'incremental' — incremental writes are "
-                "upserted on these keys and have no defined idempotency without them",
-            )
-        )
+from janus.models.config.types import AccessConfig, ExtractionConfig
 
 
 def _validate_concurrency_contract(

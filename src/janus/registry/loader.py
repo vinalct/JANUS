@@ -229,12 +229,20 @@ def _load_declared_contracts(
     project_root: Path,
     sources_dir: Path,
 ) -> dict[str, DataContract]:
-    """Load contracts and enforce active status as a structural write precondition."""
+    """Load contracts and apply the structural rules that need them to be known.
+
+    An enabled source needs an active contract, an incremental source needs a ``primaryKey``,
+    and any ``quality.required_fields``/``unique_fields`` still declared must agree with the
+    contract. All three are collected into the one load error.
+    """
     entries_by_source = {location.source_id: location.entry for location in locations}
 
     def validate(source: SourceConfig, contract: DataContract | None) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
         _require_active_contract(source, contract, issues)
+        if contract is not None:
+            _require_primary_key_for_incremental(source, contract, issues)
+            _check_quality_agreement(source, contract, issues)
         entry = entries_by_source[source.source_id]
         if entry is None:
             return issues
@@ -263,6 +271,64 @@ def _require_active_contract(
                 + (f" (found {contract.status!r})" if contract is not None else ""),
             )
         )
+
+
+def _require_primary_key_for_incremental(
+    config: SourceConfig, contract: DataContract, issues: list[ValidationIssue]
+) -> None:
+    """An incremental source is upserted on its contract's ``primaryKey``; none, no idempotency."""
+    if config.extraction.mode == "incremental" and not contract.primary_key:
+        issues.append(
+            ValidationIssue(
+                "schema.contract",
+                "an incremental source needs a primaryKey in its contract to derive an "
+                "idempotent bronze write.",
+            )
+        )
+
+
+def _check_quality_agreement(
+    config: SourceConfig, contract: DataContract, issues: list[ValidationIssue]
+) -> None:
+    """The quality keys are cross-checks now: when declared, they must equal the contract's."""
+    _check_key_agreement(
+        "required_fields",
+        config.quality.required_fields,
+        contract.required_columns,
+        "required columns",
+        issues,
+    )
+    _check_key_agreement(
+        "unique_fields",
+        config.quality.unique_fields,
+        contract.primary_key,
+        "primaryKey",
+        issues,
+    )
+
+
+def _check_key_agreement(
+    field_name: str,
+    declared: tuple[str, ...],
+    contract_columns: tuple[str, ...],
+    description: str,
+    issues: list[ValidationIssue],
+) -> None:
+    """Compare as sets: order matters for neither side, and an empty key is silent."""
+    if not declared or set(declared) == set(contract_columns):
+        return
+    issues.append(
+        ValidationIssue(
+            f"quality.{field_name}",
+            f"disagrees with the contract's {description}: config has "
+            f"{_render_columns(declared)}, contract has {_render_columns(contract_columns)}; "
+            "drop the key or fix the contract — the contract is the declaration.",
+        )
+    )
+
+
+def _render_columns(columns: Iterable[str]) -> str:
+    return "{" + ", ".join(sorted(set(columns))) + "}"
 
 
 def _discover_source_config_paths(sources_dir: Path, file_pattern: str) -> tuple[Path, ...]:

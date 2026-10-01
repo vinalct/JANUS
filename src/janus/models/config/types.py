@@ -274,5 +274,7 @@ class OutputsConfig:
 
 @dataclass(frozen=True, slots=True)
 class QualityConfig:
+    """Deprecated cross-checks: the loader requires them to equal the contract when declared."""
+
     required_fields: tuple[str, ...] = ()
     unique_fields: tuple[str, ...] = ()

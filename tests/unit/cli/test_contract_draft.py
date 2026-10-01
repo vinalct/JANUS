@@ -15,10 +15,11 @@ import yaml
 
 import janus.cli.contract as contract_cli
 import janus.runtime.spark_lifecycle as spark_lifecycle
-from janus.cli.contract_drafting import _DataProfile
+from janus.cli.contract_drafting import _DataProfile, _draft_properties
 from janus.main import main
-from janus.models import load_data_contract
+from janus.models import QualityConfig, load_data_contract
 from janus.planner import Planner, PlanningRequest
+from janus.registry import load_registry
 from tests.support.observability_baseline import capture_case
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -307,6 +308,26 @@ def test_draft_uses_one_session_and_releases_it_before_writing(
     )
     validator_class = jsonschema.validators.validator_for(schema)
     assert list(validator_class(schema).iter_errors(yaml.safe_load(output.read_text()))) == []
+
+
+def test_a_draft_reproduces_the_quality_keys_its_source_still_declares(tmp_path):
+    """The loader refuses quality keys that disagree with the contract, so a draft copies them."""
+    _write_project(tmp_path)
+    source = load_registry(tmp_path).get_source("draft_source", include_disabled=True)
+    profile = _DataProfile(schema=_FakeSchema(), row_count=3, null_counts=(0, 0))
+    keyed = replace(source, quality=QualityConfig(required_fields=("id",), unique_fields=("id",)))
+
+    declared = _draft_properties(profile, keyed)
+    inferred = _draft_properties(profile, source)
+
+    assert [(prop.name, prop.required, prop.primary_key) for prop in declared] == [
+        ("id", True, True),
+        ("name", False, False),
+    ]
+    assert [(prop.name, prop.required, prop.primary_key) for prop in inferred] == [
+        ("id", True, False),
+        ("name", True, False),
+    ]
 
 
 def test_main_dispatches_contract_lazily(monkeypatch):

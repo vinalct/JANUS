@@ -2,7 +2,7 @@
   "artifacts": [],
   "checkpoint_field": "updated_at",
   "checkpoint_strategy": "max_value",
-  "config_version": "00faea7dd655f7af70b94d50cae7ff6d0196d9215d7a47c28d4bac458ee893b2",
+  "config_version": "b3bd4301a0f00011d63f5fb49144753b5cbf2dbcf1adb62ae5102d27da2fe2b8",
   "configured_outputs": [
     {
       "format": "json",
@@ -20,7 +20,7 @@
       "zone": "metadata"
     }
   ],
-  "contract_id": "example.minimal",
+  "contract_id": "example.keyed",
   "contract_version": "1.0.0",
   "emitted_at": "2026-07-04T12:00:05+00:00",
   "environment": "local",
@@ -44,7 +44,7 @@
     "trigger": "baseline"
   },
   "run_id": "order15-extraction_failure",
-  "schema_version": "36b064711c0849a241baa4eb3a5af56c7b8c40c1bb394413797146324b996583",
+  "schema_version": "7531305ae748d87770d496ce14be356423ae36bfae50532322dfc22d228226e0",
   "source_config_path": "<PROJECT>/conf/sources/sources.yaml",
   "source_id": "baseline_api",
   "source_name": "Baseline api source",

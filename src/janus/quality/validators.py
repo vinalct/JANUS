@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from janus.models import (
+    DataContract,
     ExecutionPlan,
-    QualityConfig,
     WriteResult,
     resolve_bronze_write_intent,
 )
@@ -56,7 +56,7 @@ class QualityGate:
         schema_expectation = resolve_schema_expectation(plan)
         reported = _pre_write_report(plan, pre_write_evidence)
         checks = (
-            validate_quality_contract(plan.source_config.quality),
+            validate_quality_contract(plan.data_contract),
             validate_schema_contract_mode(plan, schema_expectation),
             reported.get("required_fields") or validate_required_fields(plan, dataframe),
             validate_unique_fields(plan, dataframe),
@@ -123,44 +123,33 @@ def _report_metadata(plan: ExecutionPlan, expectation: SchemaExpectation) -> dic
     return metadata
 
 
-def validate_quality_contract(quality_config: QualityConfig) -> ValidationCheck:
-    issues: list[str] = []
-    duplicate_required = _duplicate_fields(quality_config.required_fields)
-    duplicate_unique = _duplicate_fields(quality_config.unique_fields)
-    if duplicate_required:
-        issues.append("required_fields contains duplicates: " + ", ".join(duplicate_required))
-    if duplicate_unique:
-        issues.append("unique_fields contains duplicates: " + ", ".join(duplicate_unique))
+def validate_quality_contract(contract: DataContract | None) -> ValidationCheck:
+    """Every ``primaryKey`` column must also be ``required``: a null merge key is a failure.
 
-    missing_from_required = [
-        field
-        for field in quality_config.unique_fields
-        if field not in quality_config.required_fields
-    ]
+    Duplicates cannot occur here, because the contract loader rejects a repeated property name.
+    The details keep their ``required_fields``/``unique_fields`` keys, now carrying the
+    contract's ``required`` and ``primaryKey`` columns.
+    """
+    required_fields = _required_columns(contract)
+    unique_fields = _primary_key(contract)
+    details = {
+        "required_fields": ",".join(required_fields),
+        "unique_fields": ",".join(unique_fields),
+    }
+    missing_from_required = [field for field in unique_fields if field not in required_fields]
     if missing_from_required:
-        issues.append(
-            "unique_fields must also appear in required_fields: " + ", ".join(missing_from_required)
-        )
-
-    if issues:
         return ValidationCheck.failed(
             "config",
             "quality_contract",
-            "; ".join(issues),
-            details={
-                "required_fields": ",".join(quality_config.required_fields),
-                "unique_fields": ",".join(quality_config.unique_fields),
-            },
+            "primaryKey columns must also be required: " + ", ".join(missing_from_required),
+            details=details,
         )
 
     return ValidationCheck.passed(
         "config",
         "quality_contract",
         "Quality rules are internally consistent.",
-        details={
-            "required_fields": ",".join(quality_config.required_fields),
-            "unique_fields": ",".join(quality_config.unique_fields),
-        },
+        details=details,
     )
 
 
@@ -196,7 +185,7 @@ def validate_required_fields(
     dataframe: DataFrame | None,
 ) -> ValidationCheck:
     """The post-write count; a ``strict`` run's gate renders the pre-write count instead."""
-    required_fields = plan.source_config.quality.required_fields
+    required_fields = _required_columns(plan.data_contract)
     if not required_fields:
         return ValidationCheck.skipped(
             "data",
@@ -226,7 +215,7 @@ def validate_unique_fields(
     plan: ExecutionPlan,
     dataframe: DataFrame | None,
 ) -> ValidationCheck:
-    unique_fields = plan.source_config.quality.unique_fields
+    unique_fields = _primary_key(plan.data_contract)
     if not unique_fields:
         return ValidationCheck.skipped(
             "data",
@@ -277,7 +266,7 @@ def validate_bronze_key_uniqueness(
 ) -> ValidationCheck:
     """Assert the committed bronze table holds one row per key this run wrote."""
 
-    unique_fields = plan.source_config.quality.unique_fields
+    unique_fields = _primary_key(plan.data_contract)
     if not unique_fields:
         return ValidationCheck.skipped(
             "output",
@@ -516,14 +505,14 @@ def _bronze_duplicate_key_groups(
     return duplicate_groups, sample_duplicates, keys_checked
 
 
-def _duplicate_fields(fields: Sequence[str]) -> list[str]:
-    seen: set[str] = set()
-    duplicates: list[str] = []
-    for field in fields:
-        if field in seen and field not in duplicates:
-            duplicates.append(field)
-        seen.add(field)
-    return duplicates
+def _required_columns(contract: DataContract | None) -> tuple[str, ...]:
+    """The contract's ``required`` columns; none without a contract, which cannot be written."""
+    return () if contract is None else contract.required_columns
+
+
+def _primary_key(contract: DataContract | None) -> tuple[str, ...]:
+    """The contract's ``primaryKey`` columns; none without a contract, which cannot be written."""
+    return () if contract is None else contract.primary_key
 
 
 def _expected_zone_path(plan: ExecutionPlan, zone: str) -> str:

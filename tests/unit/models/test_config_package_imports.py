@@ -111,7 +111,6 @@ PRIVATE_NAMES: tuple[str, ...] = (
     "_resolve_past_end_status_codes",
     "_validate_concurrency_contract",
     "_validate_dotted_path",
-    "_validate_incremental_contract",
     "_validate_parameter_binding_source",
 )
 

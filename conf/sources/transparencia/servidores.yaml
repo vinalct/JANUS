@@ -145,8 +145,4 @@ sources:
         path: data/metadata/transparencia/poder_executivo_federal__servidores
         format: json
 
-    quality:
-      required_fields:
-        - qntPessoas
-        - qntVinculos
-        - codOrgaoExercicioSiape
+    quality: {}

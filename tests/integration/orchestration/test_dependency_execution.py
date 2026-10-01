@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from collections.abc import Callable, Mapping
@@ -38,6 +39,9 @@ from tests.support.spark_sessions import (
 
 PLANNED_AT = datetime(2026, 9, 15, 12, tzinfo=UTC)
 A_ROWS = ({"id": "a-2", "value": 20}, {"id": "a-1", "value": 10})
+# The shared declaration keyed on ``id`` without requiring it: the quality gate's config
+# check refuses that after the commit, which is the quality failure form below.
+UNREQUIRED_KEY_CONTRACT_PATH = "conf/contracts/test/unrequired_key.yaml"
 C_ROWS = ({"id": "c-1", "value": 30},)
 
 
@@ -368,10 +372,7 @@ def test_all_failure_forms_block_descendants_while_independent_source_commits(
     documents = source_documents(GraphCase(specs))
     if failure_mode == "quality":
         producer = next(document for document in documents if document["source_id"] == "A")
-        producer["quality"] = {
-            "required_fields": ["janus_source_id"],
-            "unique_fields": ["janus_source_id"],
-        }
+        producer["schema"] = {"contract": UNREQUIRED_KEY_CONTRACT_PATH}
 
     def session_factory():
         return build_iceberg_session(
@@ -412,6 +413,9 @@ def test_all_failure_forms_block_descendants_while_independent_source_commits(
     assert _table_rows(session_factory, result.tables["C"], "id", "value") == [("c-1", 30)]
     if failure_mode == "quality":
         assert sources["A"].attempts[0].evidence["validation"]["is_successful"] is False
+        assert sources["A"].attempts[0].evidence["validation"]["failed_checks"] == (
+            "config.quality_contract",
+        )
         assert _table_count(session_factory, result.tables["A"]) == len(A_ROWS)
     assert not any(source_id in {"B", "D"} for source_id, _params in result.transport.requests)
 
@@ -601,6 +605,13 @@ def _execute_graph(
             if item["property"] == "janus.enforcement"
         )["value"] = contract_enforcement
     contract_path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
+    unrequired_key = copy.deepcopy(contract)
+    next(
+        prop for prop in unrequired_key["schema"][0]["properties"] if prop["name"] == "id"
+    )["primaryKey"] = True
+    (root / UNREQUIRED_KEY_CONTRACT_PATH).write_text(
+        yaml.safe_dump(unrequired_key, sort_keys=False), encoding="utf-8"
+    )
     environment_config = {
         "name": "local",
         "storage": {

@@ -222,7 +222,9 @@ def test_spark_dataset_writer_persists_bronze_output_with_normalization_columns(
     )
     normalized = normalizer.normalize(dataframe, plan)
 
-    plan = plan.with_data_contract(contract_for_frame(normalized, source_id=plan.source.source_id))
+    plan = plan.with_data_contract(
+        contract_for_frame(normalized, source_id=plan.source.source_id, primary_key=("id",))
+    )
     result = writer.write(normalized, plan, "bronze", count_records=True)
 
     assert result.zone == "bronze"
@@ -333,7 +335,9 @@ def test_spark_dataset_writer_uses_configured_bronze_iceberg_namespace_and_table
     )
     normalized = normalizer.normalize(dataframe, plan)
 
-    plan = plan.with_data_contract(contract_for_frame(normalized, source_id=plan.source.source_id))
+    plan = plan.with_data_contract(
+        contract_for_frame(normalized, source_id=plan.source.source_id, primary_key=("id",))
+    )
     result = writer.write(normalized, plan, "bronze", count_records=True)
 
     assert result.zone == "bronze"

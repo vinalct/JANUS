@@ -93,6 +93,7 @@ def test_quality_gate_raises_with_actionable_dataset_errors(spark: SparkSession,
         tmp_path,
         run_id="run-quality-002",
         started_at=datetime(2026, 4, 9, 13, 15, tzinfo=UTC),
+        data_contract=_example_contract(),
     )
     dataframe = BaseNormalizer().normalize(
         spark.createDataFrame(
@@ -114,26 +115,59 @@ def test_quality_gate_raises_with_actionable_dataset_errors(spark: SparkSession,
 
 
 def test_quality_gate_detects_conflicting_quality_contract(tmp_path):
-    source_config = _base_source_config()
+    """A ``primaryKey`` column the contract does not also mark ``required`` fails the config."""
     plan = _build_plan(
         tmp_path,
         run_id="run-quality-003",
         started_at=datetime(2026, 4, 9, 13, 30, tzinfo=UTC),
-        source_config=replace(
-            source_config,
-            quality=replace(
-                source_config.quality,
-                required_fields=("updated_at",),
-                unique_fields=("id",),
-            ),
-        ),
+        data_contract=_with_columns(_example_contract(), id={"required": False}),
     )
 
     report = QualityGate().validate(plan)
 
     assert report.is_successful is False
     assert report.failed_checks[0].name == "quality_contract"
-    assert "unique_fields must also appear in required_fields" in report.failed_checks[0].message
+    assert report.failed_checks[0].message == "primaryKey columns must also be required: id"
+    assert report.failed_checks[0].details_as_dict() == {
+        "required_fields": "updated_at",
+        "unique_fields": "id",
+    }
+
+
+def test_the_data_checks_read_the_contract_not_the_quality_keys(spark: SparkSession, tmp_path):
+    """FR-7: with the config's quality keys empty, the contract still drives both checks."""
+    source_config = _base_source_config()
+    plan = _build_plan(
+        tmp_path,
+        run_id="run-quality-003-contract",
+        started_at=datetime(2026, 4, 9, 13, 35, tzinfo=UTC),
+        source_config=replace(
+            source_config,
+            quality=replace(source_config.quality, required_fields=(), unique_fields=()),
+        ),
+        data_contract=_example_contract(),
+    )
+    dataframe = BaseNormalizer().normalize(
+        spark.createDataFrame(
+            [
+                {"id": "1", "updated_at": "2026-04-09T13:00:00Z"},
+                {"id": "1", "updated_at": ""},
+            ]
+        ),
+        plan,
+    )
+
+    report = QualityGate().validate(plan, dataframe=dataframe)
+
+    checks = {check.name: check for check in report.checks}
+    assert checks["quality_contract"].details_as_dict() == {
+        "required_fields": "id,updated_at",
+        "unique_fields": "id",
+    }
+    assert checks["required_fields"].outcome == "failed"
+    assert checks["required_fields"].details_as_dict() == {"updated_at": "1"}
+    assert checks["unique_fields"].outcome == "failed"
+    assert checks["unique_fields"].message == "Duplicate keys were found for unique_fields."
 
 
 def test_quality_gate_reports_an_undeclared_column_whatever_the_compatibility(
@@ -241,16 +275,12 @@ def test_a_plan_without_a_contract_expects_nothing(tmp_path):
     assert expectation.source is None
 
 
-def test_bronze_key_uniqueness_skips_without_unique_fields(tmp_path):
-    source_config = _base_source_config()
+def test_bronze_key_uniqueness_skips_without_a_primary_key(tmp_path):
     plan = _build_plan(
         tmp_path,
         run_id="run-bronze-uniqueness-001",
         started_at=datetime(2026, 4, 9, 15, 0, tzinfo=UTC),
-        source_config=replace(
-            source_config,
-            quality=replace(source_config.quality, unique_fields=()),
-        ),
+        data_contract=_with_columns(_example_contract(), id={"primary_key": False}),
     )
 
     check = validate_bronze_key_uniqueness(plan, None, None)
@@ -268,6 +298,7 @@ def test_bronze_key_uniqueness_skips_without_a_bronze_frame(tmp_path):
         tmp_path,
         run_id="run-bronze-uniqueness-002",
         started_at=datetime(2026, 4, 9, 15, 15, tzinfo=UTC),
+        data_contract=_example_contract(),
     )
 
     check = validate_bronze_key_uniqueness(plan, None, None)
@@ -286,6 +317,7 @@ def test_bronze_key_uniqueness_skips_for_a_non_upsert_run(tmp_path):
             source_config,
             extraction=replace(source_config.extraction, mode="full_refresh"),
         ),
+        data_contract=_example_contract(),
     )
 
     check = validate_bronze_key_uniqueness(plan, None, None)
@@ -385,6 +417,15 @@ def _base_source_config() -> SourceConfig:
 
 def _example_contract() -> DataContract:
     return load_data_contract(PROJECT_ROOT / _base_source_config().schema.contract)
+
+
+def _with_columns(contract: DataContract, **changes: dict[str, bool]) -> DataContract:
+    """The contract with the named properties' flags replaced, e.g. ``id={"required": False}``."""
+    properties = tuple(
+        replace(prop, **changes[prop.name]) if prop.name in changes else prop
+        for prop in contract.schema.properties
+    )
+    return replace(contract, schema=replace(contract.schema, properties=properties))
 
 
 def _build_plan(

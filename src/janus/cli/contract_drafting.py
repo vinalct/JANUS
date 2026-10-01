@@ -53,13 +53,24 @@ def _profile_dataframe(dataframe: Any) -> _DataProfile:
 def _draft_properties(
     profile: _DataProfile, source: SourceConfig
 ) -> tuple[ContractProperty, ...]:
+    """Infer the columns; the source's quality keys, when declared, set required and primaryKey.
+
+    The registry loader refuses quality keys that disagree with the contract, so a draft for a
+    source that still declares them must reproduce them exactly. Without ``required_fields``,
+    a column is required when the profiled rows hold no null in it.
+    """
     inferred = contract_properties_from_spark_schema(profile.schema)
+    required_fields = frozenset(source.quality.required_fields)
     unique_fields = frozenset(source.quality.unique_fields)
     return tuple(
         _decorate_property(
             prop,
             source_format=source.spark.input_format,
-            required=(profile.row_count > 0 and profile.null_counts[index] == 0),
+            required=(
+                prop.name in required_fields
+                if required_fields
+                else profile.row_count > 0 and profile.null_counts[index] == 0
+            ),
             unique=prop.name in unique_fields,
         )
         for index, prop in enumerate(inferred)

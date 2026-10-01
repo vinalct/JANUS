@@ -76,7 +76,6 @@ from janus.models.config.constants import (
 )
 from janus.models.config.contracts import (
     _validate_concurrency_contract,
-    _validate_incremental_contract,
     _validate_retry_status_contract,
 )
 from janus.models.config.extraction import (
@@ -208,7 +207,6 @@ __all__ = [
     "_resolve_retryable_status_codes",
     "_validate_concurrency_contract",
     "_validate_dotted_path",
-    "_validate_incremental_contract",
     "_validate_parameter_binding_source",
     "_validate_retry_status_contract",
 ]
@@ -295,7 +293,6 @@ class SourceConfig:
         outputs = _build_outputs_config(data.get("outputs"), issues)
         quality = _build_quality_config(data.get("quality"), issues)
 
-        _validate_incremental_contract(extraction, quality, issues)
         _validate_concurrency_contract(source_type, access, issues)
         _validate_retry_status_contract(access, extraction, issues)
 

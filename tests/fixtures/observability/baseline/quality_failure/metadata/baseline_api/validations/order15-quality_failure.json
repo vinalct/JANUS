@@ -5,7 +5,7 @@
         "required_fields": "",
         "unique_fields": "id"
       },
-      "message": "unique_fields must also appear in required_fields: id",
+      "message": "primaryKey columns must also be required: id",
       "name": "quality_contract",
       "outcome": "failed",
       "phase": "config"
@@ -15,7 +15,7 @@
         "compatibility": "additive",
         "enforcement": "lenient",
         "expected_field_count": "1",
-        "schema_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
+        "schema_source": "<PROJECT>/conf/contracts/test/keyed_contract.yaml"
       },
       "message": "Schema validation will use an explicit field contract.",
       "name": "schema_contract_mode",
@@ -74,7 +74,7 @@
   "metadata": {
     "compatibility": "additive",
     "enforcement": "lenient",
-    "schema_expectation_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
+    "schema_expectation_source": "<PROJECT>/conf/contracts/test/keyed_contract.yaml"
   },
   "run_id": "order15-quality_failure",
   "source_id": "baseline_api",

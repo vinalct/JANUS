@@ -138,7 +138,7 @@ class BronzeMaterializer:
         run_intent = resolve_bronze_write_intent(plan)
         # Keys the run wrote, accumulated across every batch so the bronze uniqueness
         # oracle covers rows from batches 1..n-1, not only the last one it validates.
-        unique_fields = plan.source_config.quality.unique_fields
+        primary_key = contract.primary_key
         writer = self.writer_factory(storage_layout)
         bronze_results: list[WriteResult] = []
         evidence: list[PreWriteEvidence] = []
@@ -192,7 +192,7 @@ class BronzeMaterializer:
                 normalized_dataframe = self.normalizer.normalize(checked_dataframe, plan)
                 _log_info(logger, "normalization_finished", **batch_metadata)
 
-                run_keys = _accumulate_run_keys(run_keys, normalized_dataframe, unique_fields)
+                run_keys = _accumulate_run_keys(run_keys, normalized_dataframe, primary_key)
 
                 batch_intent = run_intent.for_batch(batch_index)
                 intent_fields = _intent_log_fields(batch_intent)
@@ -356,16 +356,16 @@ def _normalization_handoff_batches(
 def _accumulate_run_keys(
     run_keys: Any | None,
     normalized_dataframe: Any,
-    unique_fields: tuple[str, ...],
+    primary_key: tuple[str, ...],
 ) -> Any | None:
-    """Union this batch's distinct key frame into the run-level key set."""
+    """Union this batch's distinct primary-key frame into the run-level key set."""
 
-    if not unique_fields:
+    if not primary_key:
         return run_keys
     columns = getattr(normalized_dataframe, "columns", ())
-    if any(field not in columns for field in unique_fields):
+    if any(field not in columns for field in primary_key):
         return run_keys
-    batch_keys = normalized_dataframe.select(*unique_fields).distinct()
+    batch_keys = normalized_dataframe.select(*primary_key).distinct()
     if run_keys is None:
         return batch_keys
     return run_keys.unionByName(batch_keys)

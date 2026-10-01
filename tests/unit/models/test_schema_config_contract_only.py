@@ -131,7 +131,6 @@ def test_every_retired_key_is_reported_in_one_error():
     assert {"schema.mode", "quality.allow_schema_evolution"} <= set(issues)
 
 
-@pytest.mark.xfail(strict=True, reason="TASK-15 moves incremental keys to the contract")
 def test_incremental_no_longer_needs_unique_fields_to_parse():
     """The order-07 key rule moved to the loader, where the contract's primaryKey is known."""
     payload = _payload({"contract": DECLARED_CONTRACT_PATH})

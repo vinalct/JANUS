@@ -15,7 +15,7 @@
         "compatibility": "additive",
         "enforcement": "lenient",
         "expected_field_count": "1",
-        "schema_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
+        "schema_source": "<PROJECT>/conf/contracts/test/keyed_contract.yaml"
       },
       "message": "Schema validation will use an explicit field contract.",
       "name": "schema_contract_mode",
@@ -74,7 +74,7 @@
   "metadata": {
     "compatibility": "additive",
     "enforcement": "lenient",
-    "schema_expectation_source": "<PROJECT>/conf/contracts/test/minimal_contract.yaml"
+    "schema_expectation_source": "<PROJECT>/conf/contracts/test/keyed_contract.yaml"
   },
   "run_id": "order15-catalog_success",
   "source_id": "baseline_catalog",

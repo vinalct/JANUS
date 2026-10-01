@@ -32,7 +32,9 @@ from janus.utils.storage import StorageLayout
 from tests.support.contract_frames import read_frame
 from tests.support.contracts import (
     CONTRACT_SCHEMA_BLOCK,
+    KEYED_CONTRACT_PATH,
     with_registry_contract,
+    write_keyed_contract,
     write_minimal_contract,
 )
 
@@ -139,7 +141,7 @@ def test_incremental_with_keys_merges_every_batch_without_downgrade(tmp_path):
         tmp_path,
         mode="incremental",
         write_mode="append",
-        unique_fields=["event_id"],
+        primary_key=("event_id",),
         strategy_family="file",
     )
     handoff = _handoff(plan, artifact_count=11)
@@ -201,11 +203,11 @@ def _plan(
     *,
     mode: str,
     write_mode: str,
-    unique_fields: list[str] | None = None,
+    primary_key: tuple[str, ...] = (),
     strategy_family: str = "api",
 ) -> tuple[ExecutionPlan, PlannedRun]:
     source_config = _source_config(
-        tmp_path, mode=mode, write_mode=write_mode, unique_fields=unique_fields
+        tmp_path, mode=mode, write_mode=write_mode, primary_key=primary_key
     )
     run_context = RunContext.create(
         run_id="run-materializer-intent-001",
@@ -227,10 +229,10 @@ def _source_config(
     *,
     mode: str,
     write_mode: str,
-    unique_fields: list[str] | None,
+    primary_key: tuple[str, ...],
 ) -> SourceConfig:
+    """The merge keys are the contract's ``primaryKey``; a keyless run keeps the minimal one."""
     source_id = "materializer_intent_fixture"
-    unique = unique_fields or []
     extraction: dict[str, Any] = {
         "mode": mode,
         "dead_letter_max_items": 0,
@@ -266,7 +268,7 @@ def _source_config(
             "rate_limit": {"requests_per_minute": None, "concurrency": 1, "backoff_seconds": 5},
         },
         "extraction": extraction,
-        "schema": dict(CONTRACT_SCHEMA_BLOCK),
+        "schema": {"contract": KEYED_CONTRACT_PATH} if primary_key else dict(CONTRACT_SCHEMA_BLOCK),
         "spark": {
             "input_format": "json",
             "write_mode": write_mode,
@@ -285,10 +287,12 @@ def _source_config(
         },
         "quality": {
             "required_fields": ["event_id", "event_date"],
-            "unique_fields": unique,
         },
     }
-    write_minimal_contract(tmp_path)
+    if primary_key:
+        write_keyed_contract(tmp_path, primary_key)
+    else:
+        write_minimal_contract(tmp_path)
     config_path = tmp_path / "conf" / "sources" / f"{source_id}.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")

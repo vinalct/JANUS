@@ -16,8 +16,6 @@ from janus.models.source_config import SourceConfigValidationError
 from janus.registry import load_registry
 from tests.support.contracts import DECLARED_CONTRACT_PATH
 
-RED_TASK = pytest.mark.xfail(strict=True, reason="red until implementation finishes")
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HOSTILE = PROJECT_ROOT / "tests" / "fixtures" / "contracts" / "hostile"
 SOURCE_ID = "quality_agreement_example"
@@ -116,7 +114,6 @@ def test_agreeing_or_absent_quality_keys_load(tmp_path, quality):
 # ── disagreement is an issue at the key's own path ───────────────────────────
 
 
-@RED_TASK
 def test_required_fields_naming_more_than_the_contract_is_an_issue(tmp_path):
     issues = _issues(
         _project(tmp_path, contract="base", quality={"required_fields": ["id", "label"]})
@@ -126,7 +123,6 @@ def test_required_fields_naming_more_than_the_contract_is_an_issue(tmp_path):
     assert "contract" in issues["quality.required_fields"]
 
 
-@RED_TASK
 def test_required_fields_naming_less_than_the_contract_is_an_issue(tmp_path):
     issues = _issues(
         _project(tmp_path, contract="base_plus_required", quality={"required_fields": ["id"]})
@@ -135,7 +131,6 @@ def test_required_fields_naming_less_than_the_contract_is_an_issue(tmp_path):
     assert "code" in issues["quality.required_fields"]
 
 
-@RED_TASK
 def test_unique_fields_must_equal_the_primary_key(tmp_path):
     quality = {"required_fields": ["id"], "unique_fields": ["id", "label"]}
 
@@ -145,7 +140,6 @@ def test_unique_fields_must_equal_the_primary_key(tmp_path):
     assert "label" in issues["quality.unique_fields"]
 
 
-@RED_TASK
 def test_each_disagreement_is_its_own_issue(tmp_path):
     quality = {"required_fields": ["label"], "unique_fields": ["label"]}
 
@@ -172,7 +166,6 @@ def _plan(payload: dict[str, Any], contract: str) -> ExecutionPlan:
     )
 
 
-@RED_TASK
 def test_merge_keys_come_from_the_primary_key_when_unique_fields_is_absent():
     plan = _plan(_payload(quality={}, incremental=True), "base")
 
