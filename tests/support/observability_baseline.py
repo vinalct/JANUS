@@ -15,8 +15,8 @@ from typing import Any
 import yaml
 
 from janus.checkpoints import DeadLetterStore
+from janus.cli.run import record_spark_session
 from janus.lineage import RunObserver
-from janus.main import record_spark_session
 from janus.models import WriteResult
 from janus.planner import HookCatalog, Planner, PlanningRequest, StrategyBinding, StrategyCatalog
 from janus.quality import PersistedValidationReport, QualityGate, ValidationReportStore

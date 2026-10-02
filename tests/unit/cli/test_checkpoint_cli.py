@@ -187,11 +187,15 @@ def test_set_refuses_a_value_of_another_kind(root: Path) -> None:
 
 @pytest.mark.parametrize("value", ["", "   "], ids=["empty", "blank"])
 def test_set_refuses_an_empty_value(root: Path, value: str) -> None:
-    _seed(root)
+    plan = _seed(root)
+    before = tree_snapshot(root)
 
     result = _checkpoint(root, "set", "--to", value, "--reason", "empty")
 
     assert result.exit_code == 2
+    assert "--to" in result.stderr
+    assert tree_snapshot(root) == before
+    assert _current_value(plan) == LATEST
 
 
 def test_set_prints_the_backwards_transition_and_records_a_reset(root: Path) -> None:

@@ -1,7 +1,8 @@
 from pathlib import Path
 
 import janus.utils.environment as environment_utils
-from janus.main import default_project_root, main
+from janus.cli.common import default_project_root
+from janus.main import main
 from janus.utils.environment import (
     ICEBERG_CATALOG_IMPL,
     ICEBERG_SESSION_EXTENSIONS,
@@ -163,14 +164,14 @@ def test_main_reports_runtime_permission_error_cleanly(monkeypatch, capsys):
     }
 
     monkeypatch.setattr(
-        "janus.main.load_environment_config",
+        "janus.cli.run.load_environment_config",
         lambda environment, project_root: config,
     )
 
     def raise_permission_error(config, project_root):
         raise PermissionError(13, "Permission denied", "/workspace/data/metadata/ivy")
 
-    monkeypatch.setattr("janus.main.prepare_runtime", raise_permission_error)
+    monkeypatch.setattr("janus.cli.run.prepare_runtime", raise_permission_error)
 
     exit_code = main(["--environment", "local"])
 

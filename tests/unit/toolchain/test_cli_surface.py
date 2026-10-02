@@ -39,11 +39,6 @@ FORBIDDEN_MODULE_SCOPE_IMPORTS = ("pyspark", "pyiceberg", "pyarrow", "dagster")
 
 CLI_TIME_BUDGET_SECONDS = 2.0
 
-RED_DISPATCHER = pytest.mark.xfail(
-    strict=True,
-    reason="janus.cli.dispatch does not exist yet, and janus.main still "
-    "routes `run-all` and `contract` by comparing argv[0]",
-)
 RED_SURFACE = pytest.mark.xfail(
     strict=True,
     reason="the surface is complete only once the dispatcher and "
@@ -170,9 +165,9 @@ def test_every_verb_is_registered_in_the_dispatcher() -> None:
     assert {verb.name for verb in verbs()} == EXPECTED_VERBS
 
 
-@RED_DISPATCHER
 def test_every_registered_verb_answers_help_under_its_own_name() -> None:
-    """`run` is skipped: its usage line is the implicit form, pinned by the `run_help` golden."""
+    """`run` is skipped: its usage line is the implicit form, pinned by the `run_verb_help`
+    golden."""
     from janus.cli.dispatch import verbs
 
     for verb in sorted(verbs(), key=lambda candidate: candidate.name):
@@ -183,7 +178,6 @@ def test_every_registered_verb_answers_help_under_its_own_name() -> None:
         assert result.stdout.startswith(f"usage: janus {verb.name}"), verb.name
 
 
-@RED_DISPATCHER
 def test_an_unknown_verb_exits_2_and_lists_the_verbs() -> None:
     from janus.cli.dispatch import verbs
 
@@ -194,7 +188,6 @@ def test_an_unknown_verb_exits_2_and_lists_the_verbs() -> None:
     assert all(verb.name in result.stderr for verb in verbs())
 
 
-@RED_DISPATCHER
 def test_main_delegates_to_the_dispatcher_and_holds_no_parser() -> None:
     import janus.cli.dispatch as dispatch
     import janus.main as main
@@ -217,7 +210,6 @@ def test_main_delegates_to_the_dispatcher_and_holds_no_parser() -> None:
     assert defined == []
 
 
-@RED_DISPATCHER
 def test_no_module_but_the_dispatcher_decides_a_verb_from_argv() -> None:
     violations = {
         name: literals

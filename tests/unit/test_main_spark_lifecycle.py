@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-import janus.main as main_module
+import janus.cli.run as main_module
 import janus.runtime.spark_lifecycle as spark_lifecycle
 from janus.main import main
 from janus.runtime import SparkSessionProvider

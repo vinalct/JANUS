@@ -23,7 +23,6 @@ from janus.main import main as janus_main
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOLDENS_DIR = REPO_ROOT / "tests" / "fixtures" / "cli_goldens"
 GOLDEN_SUFFIXES = (".out", ".err", ".code")
-REGENERATE_ENV = "JANUS_REGENERATE_CLI_GOLDENS"
 
 ENGINE_MODULES = ("pyspark", "pyiceberg", "pyarrow")
 
@@ -75,6 +74,12 @@ INVOCATIONS: tuple[Invocation, ...] = (
         documented_at=".github/workflows/ci.yml:44",
     ),
     Invocation(
+        "run_verb_help",
+        ("run", "--help"),
+        "repository",
+        documented_at="docs/tasks/dispatcher.md:113",
+    ),
+    Invocation(
         "run_all_help",
         ("run-all", "--help"),
         "repository",
@@ -91,6 +96,12 @@ INVOCATIONS: tuple[Invocation, ...] = (
         ("contract", "draft", "--help"),
         "repository",
         documented_at="docs/data-contracts.md:99-100",
+    ),
+    Invocation(
+        "no_arguments",
+        (),
+        "repository",
+        documented_at="docs/tasks/dispatcher.md:136",
     ),
     Invocation(
         "profile_local",
@@ -211,6 +222,12 @@ INVOCATIONS: tuple[Invocation, ...] = (
         documented_at="src/janus/main.py:116-117",
     ),
     Invocation(
+        "error_unknown_verb",
+        ("frobnicate",),
+        "repository",
+        documented_at="docs/operator_command_surface.md:77",
+    ),
+    Invocation(
         "run_all_checked_in_registry",
         ("run-all", "--environment", "local"),
         "repository",
@@ -329,10 +346,6 @@ def capture(invocation: Invocation, workspace: Path) -> CapturedInvocation:
 
 def engines_importable() -> tuple[str, ...]:
     return tuple(name for name in ENGINE_MODULES if importlib.util.find_spec(name) is not None)
-
-
-def regenerate_requested() -> bool:
-    return os.environ.get(REGENERATE_ENV, "") == "1"
 
 
 def golden_paths(name: str, directory: Path = GOLDENS_DIR) -> tuple[Path, Path, Path]:

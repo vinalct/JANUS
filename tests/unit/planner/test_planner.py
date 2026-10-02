@@ -427,7 +427,7 @@ def test_main_executes_source_through_framework_runtime(tmp_path, capsys, monkey
         return FakeSparkSession()
 
     monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _build_session)
-    monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
+    monkeypatch.setattr("janus.cli.run.SourceExecutor", FakeSourceExecutor)
 
     exit_code = main(
         [
@@ -495,7 +495,7 @@ def test_main_execute_omits_the_spark_summary_when_no_session_was_started(
         raise AssertionError("a run with nothing to materialize must not start Spark")
 
     monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _refuse_to_build)
-    monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
+    monkeypatch.setattr("janus.cli.run.SourceExecutor", FakeSourceExecutor)
 
     exit_code = main(
         [
@@ -554,7 +554,7 @@ def test_main_execute_reports_a_failed_run_without_bypassing_observability(
         raise RuntimeError("spark session build failed")
 
     monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _failing_build)
-    monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
+    monkeypatch.setattr("janus.cli.run.SourceExecutor", FakeSourceExecutor)
 
     exit_code = main(
         [
@@ -603,7 +603,7 @@ def test_main_execute_stops_the_session_when_the_run_raises(tmp_path, monkeypatc
         "janus.runtime.spark_lifecycle.build_spark_session",
         lambda config, paths: FakeSparkSession(),
     )
-    monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
+    monkeypatch.setattr("janus.cli.run.SourceExecutor", FakeSourceExecutor)
 
     with pytest.raises(RuntimeError, match="escaped the executor guard"):
         main(
@@ -670,7 +670,7 @@ def test_main_ingests_existing_raw_artifacts_into_requested_bronze_table(
         return FakeSparkSession()
 
     monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _build_session)
-    monkeypatch.setattr("janus.main.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
+    monkeypatch.setattr("janus.cli.run.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
 
     exit_code = main(
         [
@@ -738,7 +738,7 @@ def test_main_raw_to_bronze_omits_the_spark_summary_when_no_session_was_started(
         raise AssertionError("replaying an empty raw zone must not start Spark")
 
     monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _refuse_to_build)
-    monkeypatch.setattr("janus.main.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
+    monkeypatch.setattr("janus.cli.run.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
 
     exit_code = main(
         [
@@ -785,7 +785,7 @@ def test_main_raw_to_bronze_stops_the_session_when_the_run_raises(tmp_path, monk
         "janus.runtime.spark_lifecycle.build_spark_session",
         lambda config, paths: FakeSparkSession(),
     )
-    monkeypatch.setattr("janus.main.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
+    monkeypatch.setattr("janus.cli.run.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
 
     with pytest.raises(RuntimeError, match="escaped the loader guard"):
         main(

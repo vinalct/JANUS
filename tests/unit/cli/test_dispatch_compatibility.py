@@ -20,8 +20,6 @@ from tests.support.cli_golden import (
     engines_importable,
     normalize,
     read_golden,
-    regenerate_requested,
-    write_golden,
 )
 
 HELP_INVOCATIONS = tuple(invocation for invocation in INVOCATIONS if "--help" in invocation.argv)
@@ -38,10 +36,11 @@ def test_documented_invocation_matches_its_golden(invocation: Invocation, tmp_pa
 
     captured = capture(invocation, tmp_path / "capture")
     golden = read_golden(invocation)
-    if golden is None or regenerate_requested():
-        write_golden(captured)
-        golden = read_golden(invocation)
 
+    assert golden is not None, (
+        f"no golden for {invocation.name}: capture with `python -m tests.support.cli_golden "
+        "<dir>` and review the diff before copying it into tests/fixtures/cli_goldens"
+    )
     assert captured == golden
     assert capture(invocation, tmp_path / "recapture") == golden
 
@@ -99,6 +98,68 @@ def test_help_goldens_list_every_declared_option(
     assert declared, f"{invocation.name} printed no parser help"
     assert golden is not None
     assert sorted(option for option in declared if option not in golden.stdout) == []
+
+
+def _shared_options(parser: argparse.ArgumentParser) -> dict[str, tuple[object, ...]]:
+    return {
+        action.dest: (tuple(action.option_strings), action.default, action.type, action.help)
+        for action in parser._actions
+        if action.dest in {"environment", "project_root"}
+    }
+
+
+def test_the_parent_options_read_exactly_as_runs_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FR-1: a new verb takes --environment and --project-root the way `run` does."""
+    from janus.cli.dispatch import build_parent_parser
+    from janus.cli.run import parse_run_args
+
+    built: list[argparse.ArgumentParser] = []
+    parse_args = argparse.ArgumentParser.parse_args
+
+    def recording_parse_args(parser: argparse.ArgumentParser, *args, **kwargs):
+        built.append(parser)
+        return parse_args(parser, *args, **kwargs)
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", recording_parse_args)
+    parse_run_args([])
+    (run_parser,) = built
+    parent = _shared_options(build_parent_parser())
+
+    assert parent.keys() == {"environment", "project_root"}
+    assert parent == _shared_options(run_parser)
+
+
+def test_a_configured_verb_parses_its_own_options_over_the_parent(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The registration path every new verb takes: `configure` plus a namespace handler."""
+    from janus.cli import dispatch
+
+    received: list[argparse.Namespace] = []
+
+    def configure(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--format", choices=("text", "json"), default="text")
+
+    def handler(args: argparse.Namespace) -> int:
+        received.append(args)
+        return 0
+
+    probe = dispatch.Verb("probe", "Registered the way a new verb is.", configure, handler)
+    registered = dispatch.verbs()
+    monkeypatch.setattr(dispatch, "verbs", lambda: (*registered, probe))
+
+    assert dispatch.main(["probe", "--environment", "cluster", "--format", "json"]) == 0
+    (args,) = received
+    assert (args.environment, args.format) == ("cluster", "json")
+    assert isinstance(args.project_root, Path)
+
+    with pytest.raises(SystemExit) as exc_info:
+        dispatch.main(["probe", "--help"])
+    usage = capsys.readouterr().out
+
+    assert exc_info.value.code == 0
+    assert usage.startswith("usage: janus probe")
+    assert all(option in usage for option in ("--environment", "--project-root", "--format"))
 
 
 def test_the_normalizer_replaces_clock_reads_and_keeps_what_the_argv_pinned(

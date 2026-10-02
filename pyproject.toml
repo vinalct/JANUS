@@ -97,9 +97,9 @@ max-args = 8
 # Collapsing them into accumulator variables would trade a flat, auditable list of
 # cases for nested state, which is the opposite of what the rule is protecting.
 # ---------------------------------------------------------------------------
-# main() returns a distinct process exit code per failure class, and its statement
+# run_command() returns a distinct process exit code per failure class, and its statement
 # count is argument parsing plus the two CLI entry paths held side by side.
-"src/janus/main.py" = ["PLR0911", "PLR0915"]
+"src/janus/cli/run.py" = ["PLR0911", "PLR0915"]
 # Suffix-to-format dispatch tables.
 "src/janus/scripts/checksums.py" = ["PLR0911"]
 "src/janus/strategies/files/formats.py" = ["PLR0911"]
