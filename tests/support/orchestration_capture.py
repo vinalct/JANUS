@@ -22,6 +22,7 @@ from janus.lineage import RunObserver
 from janus.models import WriteResult
 from janus.planner import HookCatalog, Planner, PlanningRequest, StrategyBinding, StrategyCatalog
 from janus.quality import PersistedValidationReport, QualityGate, ValidationReportStore
+from janus.registry import load_registry
 from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.scripts.raw_to_bronze import RawToBronzeLoader
 from janus.strategies.api import ApiHook, ApiResponse, ApiStrategy
@@ -189,7 +190,8 @@ def capture_case(root: Path, case: str) -> dict[str, Any]:
             run_id=f"order14-{case}",
             started_at=STARTED_AT,
             attributes={"trigger": "baseline"},
-        )
+        ),
+        registry=load_registry(root, hook_ids=frozenset({"order14.empty"})),
     )
     tables = {"bronze.a": [{"id": "1"}]} if upstreams else {}
     provider = SparkSessionProvider({}, {}, session_factory=lambda: MemorySession(tables, events))

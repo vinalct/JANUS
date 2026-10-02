@@ -34,19 +34,9 @@ from tests.support.semantics_fixtures import (
 SEMANTICS_MODULE = REPO_ROOT / "src" / "janus" / "registry" / "semantics.py"
 CHECKED_IN_ENTRIES = 31
 
-RED_WIRING = pytest.mark.xfail(
-    strict=True,
-    reason="load_registry does not run the semantic pass, and "
-    "janus.registry.SourceSemanticsValidationError does not exist yet",
-)
 RED_VALIDATE = pytest.mark.xfail(
     strict=True,
     reason="janus.cli.dispatch registers no `validate` verb yet",
-)
-RED_F1 = pytest.mark.xfail(
-    strict=True,
-    reason="conf/sources still maps `catalog_payload.id` from a producer "
-    "whose contract has no such column (evidence F-1).",
 )
 
 
@@ -310,7 +300,6 @@ def test_rule_c_quotes_a_dotted_column_as_the_consumer_maps_it() -> None:
     ]
 
 
-@RED_F1
 def test_the_checked_in_registry_reports_no_semantic_issue() -> None:
     assert _semantic_issues(REPO_ROOT) == []
 
@@ -388,7 +377,6 @@ def test_the_import_detector_does_not_flag_clean_code() -> None:
 # One raise site, every issue at once
 
 
-@RED_WIRING
 def test_every_issue_is_collected_before_the_single_raise() -> None:
     from janus.registry import SourceSemanticsValidationError
 
@@ -400,7 +388,6 @@ def test_every_issue_is_collected_before_the_single_raise() -> None:
     ]
 
 
-@RED_WIRING
 def test_issue_paths_are_prefixed_with_the_source_id() -> None:
     """`- <source_id>: <field path>: <message>` under `Invalid source registry: <sources_dir>`."""
     from janus.registry import SourceSemanticsValidationError
@@ -415,6 +402,86 @@ def test_issue_paths_are_prefixed_with_the_source_id() -> None:
         f"Invalid source registry: {root / 'conf' / 'sources'}",
         case.rendered,
     ]
+
+
+def test_an_except_for_the_per_file_error_still_catches_the_registry_error() -> None:
+    """D-6: every existing ``except SourceConfigValidationError`` keeps working, and
+    ``.issues`` keeps its shape."""
+    from janus.models.config.issues import ValidationIssue
+    from janus.registry import SourceSemanticsValidationError
+
+    case = RULE_CASES["b"]
+    try:
+        load_registry(fixture_root(case.fixture))
+    except SourceConfigValidationError as error:
+        caught = error
+    else:
+        pytest.fail("the semantic pass did not reject the rule (b) registry")
+
+    assert type(caught) is SourceSemanticsValidationError
+    assert caught.issues == (
+        ValidationIssue(f"{case.source_id}: {case.path}", case.message),
+    )
+
+
+def test_a_directly_constructed_registry_meets_the_same_pass() -> None:
+    """D-5: ``__post_init__`` is the one place a registry becomes valid, so the pass has no
+    unchecked door — a batch building a registry by hand is refused exactly as a load is."""
+    from janus.registry import SourceRegistry, SourceSemanticsValidationError, load_app_config
+
+    case = RULE_CASES["c"]
+    root = fixture_root(case.fixture).resolve()
+    sources, contracts = load_semantic_inputs(root)
+
+    with pytest.raises(SourceSemanticsValidationError) as caught:
+        SourceRegistry(
+            project_root=root,
+            app_config=load_app_config(root),
+            sources=sources,
+            contracts=contracts,
+        )
+
+    assert _issue_lines(str(caught.value)) == [case.rendered]
+
+
+def test_load_registry_resolves_hooks_against_an_injected_catalog() -> None:
+    """F-3: a caller whose planner holds another hook catalog validates against that one."""
+    case = RULE_CASES["e"]
+
+    registry = load_registry(
+        fixture_root(case.fixture), hook_ids=frozenset({"semantics.unregistered_hook"})
+    )
+
+    assert registry.get_source(case.source_id, include_disabled=True).source_hook == (
+        "semantics.unregistered_hook"
+    )
+
+
+def test_an_injected_hook_catalog_replaces_the_built_in_one() -> None:
+    """The injected catalog is the whole catalog: a built-in hook it lacks is refused."""
+    from janus.registry import SourceSemanticsValidationError
+
+    with pytest.raises(SourceSemanticsValidationError) as caught:
+        load_registry(fixture_root(CLEAN), hook_ids=frozenset({"semantics.unregistered_hook"}))
+
+    assert _issue_lines(str(caught.value)) == [
+        f"- {CLEAN_CONSUMER}: source_hook: is not a registered hook; "
+        "known hooks: semantics.unregistered_hook"
+    ]
+
+
+def test_the_hook_catalog_is_a_load_input_not_registry_state() -> None:
+    """Like ``policy``: which catalog validated a load is lineage, never a registry field."""
+    from dataclasses import fields
+
+    from janus.registry import SourceRegistry
+
+    plain = load_registry(fixture_root(CLEAN))
+    injected = load_registry(fixture_root(CLEAN), hook_ids=frozenset({"ibge.sidra_flat"}))
+
+    assert "hook_ids" not in {field.name for field in fields(SourceRegistry)}
+    assert injected == plain
+    assert repr(injected) == repr(plain)
 
 
 # ---------------------------------------------------------------------------------------
@@ -436,7 +503,6 @@ def _run_all(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     return exit_code, capsys.readouterr()
 
 
-@RED_WIRING
 def test_ac3_load_registry_rejects_it() -> None:
     """The registry sweep test's call site; still a `SourceConfigValidationError` (D-6)."""
     from janus.registry import SourceSemanticsValidationError
@@ -448,7 +514,6 @@ def test_ac3_load_registry_rejects_it() -> None:
     assert _issue_lines(str(caught.value)) == [PARITY_CASE.rendered]
 
 
-@RED_WIRING
 def test_ac3_planner_plan_rejects_it() -> None:
     """`Planner.plan` loads the registry itself when no snapshot is injected."""
     from janus.registry import SourceSemanticsValidationError
@@ -466,7 +531,6 @@ def test_ac3_planner_plan_rejects_it() -> None:
     assert _issue_lines(str(caught.value)) == [PARITY_CASE.rendered]
 
 
-@RED_WIRING
 def test_ac3_run_all_rejects_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

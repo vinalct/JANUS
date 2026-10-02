@@ -18,6 +18,7 @@ from janus.planner import (
     StrategyCatalog,
     StrategyResolutionError,
 )
+from janus.registry import load_registry
 from janus.strategies.base import BaseStrategy, SourceHook
 from tests.support.contracts import write_minimal_contract
 
@@ -237,7 +238,8 @@ def test_planner_resolves_registered_source_hook(tmp_path):
             project_root=project_root,
             run_id="run-hook-001",
             started_at=datetime(2026, 4, 8, 13, 30, tzinfo=UTC),
-        )
+        ),
+        registry=load_registry(project_root, hook_ids=frozenset({"example.hook"})),
     )
 
     assert planned_run.plan.notes == (
@@ -250,6 +252,12 @@ def test_planner_resolves_registered_source_hook(tmp_path):
 
 
 def test_planner_reports_missing_hook_binding(tmp_path):
+    """The planner still refuses a hook its own catalog lacks.
+
+    Loading refuses an unregistered hook first (the registry's semantic rule (e)), so this
+    plans against a snapshot validated with a catalog that does hold ``example.hook``: the
+    planner's resolution is the guard left for a snapshot validated against another catalog.
+    """
     project_root = _create_project(
         tmp_path,
         _source_yaml(
@@ -278,7 +286,8 @@ def test_planner_reports_missing_hook_binding(tmp_path):
                 project_root=project_root,
                 run_id="run-hook-002",
                 started_at=datetime(2026, 4, 8, 14, 0, tzinfo=UTC),
-            )
+            ),
+            registry=load_registry(project_root, hook_ids=frozenset({"example.hook"})),
         )
 
 

@@ -102,11 +102,7 @@ def _planned_case(root: Path, case: str, source_id: str, config: dict[str, Any])
         document["quality"]["unique_fields"] = ["entity_id"]
     for zone in ("raw", "bronze", "metadata"):
         document["outputs"][zone]["path"] = f"data/{zone}/{source_id}"
-    contract = (
-        keyed_contract_yaml(("entity_id",))
-        if document["strategy"] == "catalog"
-        else baseline.contract_yaml(case)
-    )
+    contract = keyed_contract_yaml(("entity_id",)) if document["strategy"] == "catalog" else None
     baseline.write_project(root, document, contract=contract)
 
     transport = baseline.OfflineTransport(case, [])
@@ -124,7 +120,8 @@ def _planned_case(root: Path, case: str, source_id: str, config: dict[str, Any])
         hook_catalog=HookCatalog((("order15.empty", baseline.EmptyHandoffHook()),)),
     )
     run_id = f"task10-{case}-{uuid4().hex}"
-    planned = planner.plan(
+    planned = baseline.plan_case(
+        planner,
         PlanningRequest.create(
             source_id=source_id,
             environment="local",
@@ -132,7 +129,8 @@ def _planned_case(root: Path, case: str, source_id: str, config: dict[str, Any])
             run_id=run_id,
             started_at=STARTED_AT,
             attributes={"trigger": "task10"},
-        )
+        ),
+        case,
     )
     return planned, strategy
 

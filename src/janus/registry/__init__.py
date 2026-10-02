@@ -29,6 +29,7 @@ from janus.registry.loader import (
     RegistrySettings,
     SourceNotFoundError,
     SourceRegistry,
+    SourceSemanticsValidationError,
     load_app_config,
     load_registry,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "SourceLocation",
     "SourceNotFoundError",
     "SourceRegistry",
+    "SourceSemanticsValidationError",
     "bronze_output_table_identifier",
     "build_source_dependency_graph",
     "collect_semantic_issues",

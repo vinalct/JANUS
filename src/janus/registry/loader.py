@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Self
@@ -24,6 +24,7 @@ from janus.registry.dependencies import (
     SourceLocation,
     build_source_dependency_graph,
 )
+from janus.registry.semantics import collect_semantic_issues
 
 
 class AppConfigValidationError(ValueError):
@@ -34,6 +35,17 @@ class AppConfigValidationError(ValueError):
         message_lines = [f"Invalid app config: {config_path}"]
         message_lines.extend(f"- {issue.render()}" for issue in self.issues)
         super().__init__("\n".join(message_lines))
+
+
+class SourceSemanticsValidationError(SourceConfigValidationError):
+    """Registry-wide semantic failures, reported together."""
+
+    def __init__(self, sources_dir: Path, issues: list[ValidationIssue]) -> None:
+        super().__init__(sources_dir, issues)
+        self.sources_dir = sources_dir
+        message_lines = [f"Invalid source registry: {sources_dir}"]
+        message_lines.extend(f"- {issue.render()}" for issue in self.issues)
+        self.args = ("\n".join(message_lines),)
 
 
 class SourceNotFoundError(LookupError):
@@ -67,26 +79,37 @@ class SourceRegistry:
     sources: tuple[SourceConfig, ...]
     locations: tuple[SourceLocation, ...] = ()
     contracts: Mapping[str, DataContract] = field(default_factory=dict)
+    hook_ids: InitVar[frozenset[str] | None] = None
     _sources_by_id: dict[str, SourceConfig] = field(init=False, repr=False)
     graph: SourceDependencyGraph = field(init=False, repr=False)
 
-    def __post_init__(self) -> None:
-        """Index the sources by id, then resolve and validate their dependency graph."""
+    def __post_init__(self, hook_ids: frozenset[str] | None) -> None:
+        """Index the sources by id, resolve and validate their graph, then their meaning."""
         object.__setattr__(
             self,
             "_sources_by_id",
             {source.source_id: source for source in self.sources},
         )
         object.__setattr__(self, "contracts", MappingProxyType(dict(self.contracts)))
+        sources_dir = self.app_config.registry.resolve_sources_dir(self.project_root)
         object.__setattr__(
             self,
             "graph",
             build_source_dependency_graph(
                 self.sources,
                 locations=self.locations,
-                sources_dir=self.app_config.registry.resolve_sources_dir(self.project_root),
+                sources_dir=sources_dir,
             ),
         )
+        issues = collect_semantic_issues(self.sources, contracts=self.contracts, hook_ids=hook_ids)
+        if issues:
+            raise SourceSemanticsValidationError(
+                sources_dir,
+                [
+                    ValidationIssue(f"{source_id}: {issue.path}", issue.message)
+                    for source_id, issue in issues
+                ],
+            )
 
     @classmethod
     def load(
@@ -95,18 +118,21 @@ class SourceRegistry:
         *,
         policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
         strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
+        hook_ids: frozenset[str] | None = None,
     ) -> Self:
         """Load app settings, discover sources, and return one validated registry snapshot.
 
         ``policy`` and ``strategy_registry`` are load-time inputs, forwarded untouched to
         every ``SourceConfig.from_mapping`` call. The policy also checks each loaded contract
-        after the snapshot is read. Neither input is stored on the returned registry: which
+        after the snapshot is read. ``hook_ids`` is the third: the hook catalog the semantic
+        pass resolves ``source_hook`` against, for a caller whose planner was given a catalog
+        other than the built-in one. None of them is stored on the returned registry: which
         policy validated a load is lineage, not registry state, and a field would change
         ``__eq__`` and ``repr`` for every consumer to record something nobody reads afterwards.
 
-        Graph validation happens last, in ``__post_init__``: after every individual config
-        is typed and after duplicate ids are rejected, because a graph over configs that do
-        not parse would report the same problem twice under a worse name.
+        Graph validation, then the semantic pass, happen last, in ``__post_init__``: after
+        every individual config is typed and after duplicate ids are rejected, because a graph
+        over configs that do not parse would report the same problem twice under a worse name.
         """
         resolved_project_root = project_root.resolve()
         app_config = load_app_config(resolved_project_root)
@@ -154,6 +180,7 @@ class SourceRegistry:
                 project_root=resolved_project_root,
                 sources_dir=sources_dir,
             ),
+            hook_ids=hook_ids,
         )
 
     def list_sources(self, *, enabled_only: bool = True) -> tuple[SourceConfig, ...]:
@@ -213,12 +240,14 @@ def load_registry(
     *,
     policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
     strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
+    hook_ids: frozenset[str] | None = None,
 ) -> SourceRegistry:
     """Public convenience wrapper that loads the full source registry."""
     return SourceRegistry.load(
         project_root,
         policy=policy,
         strategy_registry=strategy_registry,
+        hook_ids=hook_ids,
     )
 
 
