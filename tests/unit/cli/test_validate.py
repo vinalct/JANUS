@@ -26,10 +26,6 @@ from tests.support.semantics_fixtures import (
     tree_snapshot,
 )
 
-RED_REGISTRY = pytest.mark.xfail(
-    strict=True,
-    reason="janus.cli.dispatch registers no `validate` verb yet",
-)
 RED_ENVIRONMENT = pytest.mark.xfail(
     strict=True,
     reason="`janus validate --environment/--prepare` does not exist yet",
@@ -37,6 +33,9 @@ RED_ENVIRONMENT = pytest.mark.xfail(
 
 REST_OVERLAY = REPO_ROOT / "conf" / "environments" / "cluster-rest.env.example"
 SECRET = "do-not-print-me"
+# Both report formats name the profile they read. Every verb parses --environment through
+# the parent parser, so without this a profile-half claim also holds for the registry half.
+LOCAL_PROFILE = "conf/environments/local.yaml"
 
 
 def _project(tmp_path: Path, name: str = CLEAN) -> Path:
@@ -61,7 +60,6 @@ def _overlay(path: Path) -> dict[str, str]:
 # The registry half
 
 
-@RED_REGISTRY
 def test_validate_exits_zero_on_the_clean_registry(tmp_path: Path) -> None:
     result = _validate(_project(tmp_path))
 
@@ -70,7 +68,6 @@ def test_validate_exits_zero_on_the_clean_registry(tmp_path: Path) -> None:
     assert CLEAN_PRODUCER in result.stdout and CLEAN_CONSUMER in result.stdout
 
 
-@RED_REGISTRY
 @pytest.mark.parametrize("rule", sorted(RULE_CASES), ids=lambda rule: f"rule_{rule}")
 def test_validate_names_the_entry_and_the_rule_for_each_semantic_violation(
     rule: str, tmp_path: Path
@@ -83,7 +80,6 @@ def test_validate_names_the_entry_and_the_rule_for_each_semantic_violation(
     assert case.rendered in result.stderr.splitlines()
 
 
-@RED_REGISTRY
 @pytest.mark.parametrize("name", sorted(REFUSED_AT_LOAD))
 def test_validate_prints_the_existing_load_refusal_verbatim(name: str, tmp_path: Path) -> None:
     root = _project(tmp_path, name)
@@ -97,7 +93,6 @@ def test_validate_prints_the_existing_load_refusal_verbatim(name: str, tmp_path:
     assert str(refused.value) in result.stderr
 
 
-@RED_REGISTRY
 def test_validate_json_report_has_the_documented_shape(tmp_path: Path) -> None:
     result = _validate(_project(tmp_path), "--format", "json")
     payload = json.loads(result.stdout)
@@ -115,7 +110,6 @@ def test_validate_json_report_has_the_documented_shape(tmp_path: Path) -> None:
     assert result.stdout == json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
-@RED_REGISTRY
 @pytest.mark.parametrize("output_format", ["text", "json"])
 def test_validate_is_byte_identical_across_runs(output_format: str, tmp_path: Path) -> None:
     """D-18: no run id, timestamp or duration, so a golden can hold it."""
@@ -128,7 +122,6 @@ def test_validate_is_byte_identical_across_runs(output_format: str, tmp_path: Pa
     assert first == second
 
 
-@RED_REGISTRY
 def test_source_id_narrows_the_plan_step_but_never_the_semantic_pass(tmp_path: Path) -> None:
     """FR-3: the bystander plans clean, and its neighbour's rule (c) issue still exits 2."""
     case = RULE_CASES["c"]
@@ -141,7 +134,6 @@ def test_source_id_narrows_the_plan_step_but_never_the_semantic_pass(tmp_path: P
     assert case.rendered in result.stderr.splitlines()
 
 
-@RED_REGISTRY
 def test_validate_never_acquires_a_spark_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -154,8 +146,221 @@ def test_validate_never_acquires_a_spark_session(
     assert engine_modules_loaded() == before
 
 
+def test_the_text_report_lists_every_source_with_its_dispatch_path(tmp_path: Path) -> None:
+    lines = _validate(_project(tmp_path)).stdout.splitlines()
+
+    assert lines[:3] == [
+        "JANUS registry validation - conf/sources",
+        "2 sources (1 enabled, 1 disabled), 2 nodes, 1 edges",
+        "",
+    ]
+    assert [line.split() for line in lines if line.startswith("  ok")] == [
+        ["ok", CLEAN_CONSUMER, "api.page_number_api"],
+        ["ok", CLEAN_PRODUCER, "api.page_number_api"],
+    ]
+    assert lines[-1] == "0 issue(s) in 0 source(s); 0 unverified required-field declaration(s)"
+
+
+def test_a_disabled_source_is_planned_and_its_hook_resolved(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+
+    payload = json.loads(_validate(root, "--format", "json").stdout)
+    consumer = {source["source_id"]: source for source in payload["sources"]}[CLEAN_CONSUMER]
+
+    assert consumer == {
+        "source_id": CLEAN_CONSUMER,
+        "family": "api",
+        "variant": "page_number_api",
+        "dispatch_path": "api.page_number_api",
+        "enabled": False,
+        "hook": "ibge.sidra_flat",
+        "hook_implementation": "IbgeSidraFlatHook",
+        "planned": True,
+        "issues": [],
+    }
+    assert payload["project_root"] == str(root.resolve())
+    assert payload["sources_dir"] == "conf/sources"
+    assert payload["counts"] == {
+        "sources": 2,
+        "enabled": 1,
+        "disabled": 1,
+        "nodes": 2,
+        "edges": 1,
+        "issues": 0,
+        "unverified_required_fields": 0,
+    }
+
+
+def test_validate_loads_once_and_plans_through_one_planner_and_one_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from janus.cli import validate
+    from janus.planner import Planner
+
+    loaded: list[object] = []
+    planners: list[object] = []
+    calls: list[tuple[object, object]] = []
+
+    def counting_load(project_root: Path):
+        loaded.append(load_registry(project_root))
+        return loaded[-1]
+
+    class RecordingPlanner:
+        def __init__(self) -> None:
+            self._planner = Planner()
+            planners.append(self)
+
+        def plan(self, request, *, registry=None):
+            calls.append((request, registry))
+            return self._planner.plan(request, registry=registry)
+
+    monkeypatch.setattr(validate, "load_registry", counting_load)
+    monkeypatch.setattr(validate, "_build_planner", RecordingPlanner)
+
+    result = _validate(_project(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert (len(loaded), len(planners), len(calls)) == (1, 1, 2)
+    assert all(snapshot is loaded[0] for _request, snapshot in calls)
+    requests = [request for request, _snapshot in calls]
+    assert all(request.include_disabled for request in requests)
+    assert {request.started_at for request in requests} == {validate.VALIDATE_INSTANT}
+    assert all(("trigger", "validate") in request.attributes for request in requests)
+
+
+def test_a_source_the_planner_refuses_is_one_issue_and_its_peers_still_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A planner whose hook catalog lacks the consumer's hook: the producer still plans."""
+    from janus.cli import validate
+    from janus.planner import HookCatalog, HookResolutionError, Planner
+
+    with pytest.raises(HookResolutionError) as refused:
+        HookCatalog().resolve("ibge.sidra_flat", source_id=CLEAN_CONSUMER)
+    monkeypatch.setattr(validate, "_build_planner", lambda: Planner(hook_catalog=HookCatalog()))
+    root = _project(tmp_path)
+
+    data = _validate(root, "--format", "json")
+    text = _validate(root)
+    payload = json.loads(data.stdout)
+    by_id = {source["source_id"]: source for source in payload["sources"]}
+    issue = {"source_id": CLEAN_CONSUMER, "path": "plan", "message": str(refused.value)}
+
+    assert (data.exit_code, text.exit_code) == (2, 2)
+    assert data.stderr == text.stderr == ""
+    assert payload["issues"] == by_id[CLEAN_CONSUMER]["issues"] == [issue]
+    assert (by_id[CLEAN_CONSUMER]["planned"], by_id[CLEAN_CONSUMER]["dispatch_path"]) == (
+        False,
+        None,
+    )
+    assert by_id[CLEAN_PRODUCER]["planned"] is True
+    assert by_id[CLEAN_PRODUCER]["issues"] == []
+    lines = text.stdout.splitlines()
+    failing = next(index for index, line in enumerate(lines) if line.startswith("  FAIL"))
+    assert lines[failing + 1] == f"          plan: {refused.value}"
+    assert [line.split() for line in lines if line.startswith(("  FAIL", "  ok"))] == [
+        ["FAIL", CLEAN_CONSUMER, "(not", "planned)"],
+        ["ok", CLEAN_PRODUCER, "api.page_number_api"],
+    ]
+    assert lines[-1] == "1 issue(s) in 1 source(s); 0 unverified required-field declaration(s)"
+
+
+def test_a_strategy_refusal_the_loader_accepts_is_reported_on_its_source(tmp_path: Path) -> None:
+    """A cursor variant paging by number parses and loads; only the strategy's plan refuses it,
+    with the plain `ValueError` `janus run` already reports as exit 2."""
+    root = _project(tmp_path)
+    producer = root / "conf" / "sources" / "01_producer.yaml"
+    producer.write_text(
+        producer.read_text(encoding="utf-8").replace(
+            "strategy_variant: page_number_api", "strategy_variant: cursor_api"
+        ),
+        encoding="utf-8",
+    )
+    load_registry(root)
+
+    result = _validate(root, "--format", "json")
+    payload = json.loads(result.stdout)
+
+    assert result.exit_code == 2
+    assert payload["issues"] == [
+        {
+            "source_id": CLEAN_PRODUCER,
+            "path": "plan",
+            "message": "cursor_api requires access.pagination.type='cursor'",
+        }
+    ]
+    assert [source["planned"] for source in payload["sources"]] == [True, False]
+
+
+def test_an_unknown_source_id_exits_2_with_the_registry_message(tmp_path: Path) -> None:
+    result = _validate(_project(tmp_path), "--source-id", "not_a_source")
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert result.stderr == "Source 'not_a_source' was not found in the registry\n"
+
+
+def test_source_id_lists_only_that_source_and_counts_the_whole_registry(tmp_path: Path) -> None:
+    result = _validate(_project(tmp_path), "--source-id", CLEAN_CONSUMER, "--format", "json")
+    payload = json.loads(result.stdout)
+
+    assert result.exit_code == 0, result.output
+    assert [source["source_id"] for source in payload["sources"]] == [CLEAN_CONSUMER]
+    assert payload["counts"]["sources"] == 2
+
+
+def test_unverified_required_fields_are_notes_that_never_change_the_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-3. Every source of a loaded registry has a contract since order-18, so the
+    population is empty for any registry that loads; the engine's answer is injected."""
+    from janus.cli import validate
+
+    monkeypatch.setattr(
+        validate,
+        "unverified_required_fields",
+        lambda sources, *, contracts: ((CLEAN_CONSUMER, ("detail_id", "code")),),
+    )
+    root = _project(tmp_path)
+
+    text = _validate(root)
+    data = _validate(root, "--format", "json")
+    payload = json.loads(data.stdout)
+
+    assert (text.exit_code, data.exit_code) == (0, 0)
+    assert text.stdout.splitlines()[-6:] == [
+        "",
+        "notes",
+        f"  note  {CLEAN_CONSUMER}: required_fields declared with no contract to verify "
+        "them against",
+        "          (detail_id, code)",
+        "",
+        "0 issue(s) in 0 source(s); 1 unverified required-field declaration(s)",
+    ]
+    assert payload["notes"] == [
+        {
+            "kind": "unverified_required_fields",
+            "source_id": CLEAN_CONSUMER,
+            "fields": ["detail_id", "code"],
+        }
+    ]
+    assert (payload["counts"]["unverified_required_fields"], payload["issues"]) == (1, [])
+
+
+def test_the_registry_half_reads_no_profile_and_writes_nothing(tmp_path: Path) -> None:
+    """It is about conf/sources: a checkout with no conf/environments validates."""
+    root = _project(tmp_path)
+    assert not (root / "conf" / "environments").exists()
+    before = tree_snapshot(root)
+
+    result = _validate(root)
+
+    assert result.exit_code == 0, result.output
+    assert tree_snapshot(root) == before
+
+
 # ---------------------------------------------------------------------------------------
-# The profile half 
+# The profile half
 
 
 @RED_ENVIRONMENT
@@ -238,6 +443,7 @@ def test_validate_creates_no_directory_without_prepare(tmp_path: Path) -> None:
     result = _validate(root, "--environment", "local")
 
     assert result.exit_code == 0, result.output
+    assert LOCAL_PROFILE in result.stdout
     assert tree_snapshot(root) == before
 
 
@@ -270,6 +476,7 @@ def test_no_credential_value_reaches_either_output_format(
     result = _validate(root, "--environment", "local", "--format", output_format, env=secrets)
 
     assert result.exit_code == 0, result.output
+    assert LOCAL_PROFILE in result.stdout
     assert SECRET not in result.output
 
 
@@ -284,3 +491,4 @@ def test_validate_with_environment_never_acquires_a_spark_session(
     result = _validate(root, "--environment", "local")
 
     assert result.exit_code == 0, result.output
+    assert LOCAL_PROFILE in result.stdout

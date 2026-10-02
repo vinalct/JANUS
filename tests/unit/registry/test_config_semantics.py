@@ -34,11 +34,6 @@ from tests.support.semantics_fixtures import (
 SEMANTICS_MODULE = REPO_ROOT / "src" / "janus" / "registry" / "semantics.py"
 CHECKED_IN_ENTRIES = 31
 
-RED_VALIDATE = pytest.mark.xfail(
-    strict=True,
-    reason="janus.cli.dispatch registers no `validate` verb yet",
-)
-
 
 def _semantic_issues(
     root: Path | str,
@@ -546,7 +541,6 @@ def test_ac3_run_all_rejects_it(
     assert not (root / "data").exists()
 
 
-@RED_VALIDATE
 def test_ac3_validate_rejects_it(tmp_path: Path) -> None:
     root = materialize(PARITY_CASE.fixture, tmp_path / "project")
 
@@ -556,7 +550,6 @@ def test_ac3_validate_rejects_it(tmp_path: Path) -> None:
     assert _issue_lines(result.stderr) == [PARITY_CASE.rendered]
 
 
-@RED_VALIDATE
 def test_ac3_all_four_render_the_same_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

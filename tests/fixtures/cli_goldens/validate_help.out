@@ -1,0 +1,18 @@
+usage: janus validate [-h] [--environment ENVIRONMENT]
+                      [--project-root PROJECT_ROOT] [--source-id SOURCE_ID]
+                      [--format {text,json}]
+
+Load the source registry, resolve its graph, and plan every source, without
+running any.
+
+options:
+  -h, --help            show this help message and exit
+  --environment ENVIRONMENT
+                        Environment profile name under conf/environments
+                        without the .yaml suffix.
+  --project-root PROJECT_ROOT
+                        Project root used to resolve conf/ and data/ paths.
+  --source-id SOURCE_ID
+                        Plan only this source; the semantic pass still covers
+                        the whole registry.
+  --format {text,json}  Report format. Defaults to text.

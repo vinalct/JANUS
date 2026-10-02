@@ -316,14 +316,13 @@ def test_the_engine_detector_does_not_flag_a_lazy_or_type_only_import() -> None:
 # 4. Session-free verbs (NFR-2): `dead-letters replay --execute` and `--verify-checksums`
 #    are absent on purpose — they inherit the executor's lifecycle unchanged.
 
-_VALIDATE = _red("the `validate` verb")
 _ENVIRONMENT = _red("`validate --environment`")
 _LIST = _red("the `list` verb")
 _DEAD_LETTERS = _red("the `dead-letters` verb")
 _CHECKPOINT = _red("the `checkpoint` verb")
 
 SESSION_FREE_FORMS = (
-    pytest.param(("validate",), marks=_VALIDATE, id="validate"),
+    pytest.param(("validate",), id="validate"),
     pytest.param(("list", "--graph"), marks=_LIST, id="list"),
     pytest.param(
         ("dead-letters", "list", "--source-id", CLEAN_PRODUCER),
@@ -396,7 +395,7 @@ def test_the_verb_never_acquires_a_spark_session(
 @pytest.mark.parametrize(
     "argv",
     [
-        pytest.param(("validate",), marks=_VALIDATE, id="validate"),
+        pytest.param(("validate",), id="validate"),
         pytest.param(
             ("validate", "--environment", "local"), marks=_ENVIRONMENT, id="validate --environment"
         ),
@@ -425,4 +424,9 @@ def test_the_verb_completes_within_the_budget(argv: tuple[str, ...], tmp_path: P
     elapsed = time.perf_counter() - started
 
     assert result.exit_code == 0, result.output
+    if "--environment" in argv:
+        # Every verb parses --environment through the parent parser; a form that times a
+        # profile has to have read one, or it timed the registry half twice.
+        profile = argv[argv.index("--environment") + 1]
+        assert f"conf/environments/{profile}.yaml" in result.stdout
     assert elapsed < CLI_TIME_BUDGET_SECONDS, f"{' '.join(argv)} took {elapsed:.2f}s"

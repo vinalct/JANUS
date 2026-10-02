@@ -294,6 +294,18 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "repository",
         documented_at="docs/data-contracts.md:99",
     ),
+    Invocation(
+        "validate_help",
+        ("validate", "--help"),
+        "repository",
+        documented_at="docs/tasks/operator-command-surface/validate_registry_half.md:45-48",
+    ),
+    Invocation(
+        "validate_checked_in_registry",
+        ("validate", "--format", "json"),
+        "repository",
+        documented_at="docs/operator_command_surface_.md:79",
+    ),
 )
 
 

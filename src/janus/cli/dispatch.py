@@ -8,7 +8,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from janus.cli import run, run_all
+from janus.cli import run, run_all, validate
 from janus.cli.common import default_project_root
 
 PROG = "janus"
@@ -97,6 +97,13 @@ def verbs() -> tuple[Verb, ...]:
             "Inspect and author versioned data contract files.",
             None,
             _contract,
+        ),
+        Verb(
+            "validate",
+            "Load the source registry, resolve its graph, and plan every source, "
+            "without running any.",
+            validate.configure,
+            validate.validate_command,
         ),
     )
 
