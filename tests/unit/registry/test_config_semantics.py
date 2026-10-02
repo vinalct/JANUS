@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import ast
+import errno
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -32,11 +34,6 @@ from tests.support.semantics_fixtures import (
 SEMANTICS_MODULE = REPO_ROOT / "src" / "janus" / "registry" / "semantics.py"
 CHECKED_IN_ENTRIES = 31
 
-RED_ENGINE = pytest.mark.xfail(
-    strict=True,
-    reason="janus.registry.semantics (collect_semantic_issues, "
-    "expected_fields, unverified_required_fields) does not exist yet",
-)
 RED_WIRING = pytest.mark.xfail(
     strict=True,
     reason="load_registry does not run the semantic pass, and "
@@ -117,11 +114,60 @@ def test_rules_a_and_d_do_not_fire_on_the_clean_registry() -> None:
     assert set(registry.contracts) == {CLEAN_PRODUCER, CLEAN_CONSUMER}
 
 
+def _remove(path: Path) -> None:
+    path.unlink()
+
+
+def _replace_with_a_directory(path: Path) -> None:
+    path.unlink()
+    path.mkdir()
+
+
+def _empty(path: Path) -> None:
+    path.write_text("", encoding="utf-8")
+
+
+def _not_yaml(path: Path) -> None:
+    path.write_text("{ not: [yaml", encoding="utf-8")
+
+
+MISSING_CONTRACT = "the file does not exist"
+
+
+@pytest.mark.parametrize(
+    ("damage", "says"),
+    [
+        (_remove, MISSING_CONTRACT),
+        (_replace_with_a_directory, os.strerror(errno.EISDIR)),
+        (_empty, "is required"),
+        (_not_yaml, "must be valid YAML"),
+    ],
+    ids=["missing", "directory", "empty", "not_yaml"],
+)
+def test_rule_d_tells_a_missing_contract_from_an_unreadable_one(
+    tmp_path: Path, damage: Callable[[Path], None], says: str
+) -> None:
+    """Rule (d) belongs to the contract snapshot (TD-1): one collected issue per damaged file.
+
+    Only a missing file says it does not exist, so "fix the path" and "fix the file" read
+    differently. The consumer is disabled, so no active-contract issue joins this one.
+    """
+    root = materialize(CLEAN, tmp_path / "project")
+    damage(root / "conf" / "contracts" / "semantics" / "clean_consumer.yaml")
+
+    with pytest.raises(SourceConfigValidationError) as caught:
+        load_registry(root)
+
+    (issue,) = caught.value.issues
+    assert issue.path == f"{CLEAN_CONSUMER}.schema.contract"
+    assert says in issue.message
+    assert (MISSING_CONTRACT in issue.message) is (says == MISSING_CONTRACT)
+
+
 # ---------------------------------------------------------------------------------------
 # The engine: each rule fires on its tree and is silent on the clean control
 
 
-@RED_ENGINE
 @pytest.mark.parametrize("rule", sorted(RULE_CASES), ids=lambda rule: f"rule_{rule}")
 def test_rule_fires_on_its_violating_fixture(rule: str) -> None:
     """Exactly one issue, on the right source, with the contracted path and message."""
@@ -130,7 +176,6 @@ def test_rule_fires_on_its_violating_fixture(rule: str) -> None:
     assert _semantic_issues(case.fixture) == [case.triple]
 
 
-@RED_ENGINE
 @pytest.mark.parametrize("rule", sorted(RULE_CASES), ids=lambda rule: f"rule_{rule}")
 def test_rule_does_not_fire_on_the_clean_registry(rule: str) -> None:
     case = RULE_CASES[rule]
@@ -138,17 +183,14 @@ def test_rule_does_not_fire_on_the_clean_registry(rule: str) -> None:
     assert [issue for issue in _semantic_issues(CLEAN) if issue[1] == case.path] == []
 
 
-@RED_ENGINE
 def test_the_clean_registry_reports_nothing_at_all() -> None:
     assert _semantic_issues(CLEAN) == []
 
 
-@RED_ENGINE
 def test_rule_c_checks_only_the_top_level_segment_of_a_mapped_column() -> None:
     assert [issue for issue in _semantic_issues(CLEAN) if issue[0] == CLEAN_CONSUMER] == []
 
 
-@RED_ENGINE
 def test_rule_c_is_silent_when_the_producer_declares_no_contract() -> None:
     case = RULE_CASES["c"]
     _sources, contracts = load_semantic_inputs(fixture_root(case.fixture))
@@ -157,27 +199,23 @@ def test_rule_c_is_silent_when_the_producer_declares_no_contract() -> None:
     assert _semantic_issues(case.fixture, contracts=contracts) == []
 
 
-@RED_ENGINE
 def test_rule_e_honours_an_injected_hook_catalog() -> None:
     case = RULE_CASES["e"]
 
     assert _semantic_issues(case.fixture, hook_ids=frozenset({"semantics.unregistered_hook"})) == []
 
 
-@RED_ENGINE
 def test_rules_b_c_and_f_are_silent_for_a_source_without_a_contract() -> None:
     """With no declared schema there is nothing to check (b), (c) and (f) against; only the
     hook rule, which needs no contract, still reports."""
     assert _semantic_issues(MULTI_ISSUE, contracts={}) == [MULTI_ISSUE_EXPECTED[-1]]
 
 
-@RED_ENGINE
 def test_issues_come_back_in_rule_order_within_a_source_and_by_source_id_across_sources() -> None:
     """`01_zulu.yaml` is discovered first and sorts last: discovery order is never the order."""
     assert _semantic_issues(MULTI_ISSUE) == list(MULTI_ISSUE_EXPECTED)
 
 
-@RED_ENGINE
 def test_a_required_fields_declaration_without_a_contract_is_reported_not_failed() -> None:
     """D-3: no issue — an unverifiable declaration is a `validate` note, never an error."""
     from janus.registry.semantics import unverified_required_fields
@@ -190,7 +228,6 @@ def test_a_required_fields_declaration_without_a_contract_is_reported_not_failed
     )
 
 
-@RED_ENGINE
 def test_no_checked_in_source_declares_required_fields_without_a_contract() -> None:
     """README §5.3, number 2: D-3's population is empty since every entry has a contract."""
     from janus.registry.semantics import unverified_required_fields
@@ -200,7 +237,6 @@ def test_no_checked_in_source_declares_required_fields_without_a_contract() -> N
     assert unverified_required_fields(sources, contracts=contracts) == ()
 
 
-@RED_ENGINE
 def test_expected_fields_reads_the_contract_for_every_checked_in_source() -> None:
     from janus.registry.semantics import expected_fields
 
@@ -210,18 +246,68 @@ def test_expected_fields_reads_the_contract_for_every_checked_in_source() -> Non
     }
 
     assert len(declared) == CHECKED_IN_ENTRIES
+    assert all(declared.values()), "every checked-in contract declares at least one column"
     assert declared == {
         source_id: contract.column_names for source_id, contract in contracts.items()
     }
 
 
-@RED_ENGINE
 def test_expected_fields_is_none_without_a_contract() -> None:
     from janus.registry.semantics import expected_fields
 
     sources, _contracts = load_semantic_inputs(fixture_root(CLEAN))
 
     assert [expected_fields(source, contracts={}) for source in sources] == [None, None]
+
+
+def test_rule_ids_name_the_engine_rules_in_evaluation_order() -> None:
+    from janus.registry import RULE_IDS
+
+    assert RULE_IDS == (
+        "primary_key_in_required",
+        "iceberg_columns_in_producer_contract",
+        "source_hook_resolves",
+        "partition_columns_known",
+    )
+    assert len(RULE_IDS) == len(RULE_CASES)
+
+
+def test_rule_b_says_what_the_run_time_quality_check_says() -> None:
+    from janus.quality.validators import validate_quality_contract
+
+    case = RULE_CASES["b"]
+    _sources, contracts = load_semantic_inputs(fixture_root(case.fixture))
+    run_time = validate_quality_contract(contracts[case.source_id])
+
+    assert run_time.outcome == "failed"
+    assert _semantic_issues(case.fixture) == [(case.source_id, case.path, run_time.message)]
+
+
+def test_rule_c_is_silent_when_the_producer_is_missing_from_the_registry() -> None:
+    """`registry/dependencies.py` refuses a missing producer, with the AC-2 text."""
+    from janus.registry.semantics import collect_semantic_issues
+
+    case = RULE_CASES["c"]
+    sources, contracts = load_semantic_inputs(fixture_root(case.fixture))
+    orphaned = tuple(
+        source for source in sources if source.source_id != "semantics_rule_c_producer"
+    )
+
+    assert collect_semantic_issues(orphaned, contracts=contracts) == []
+
+
+def test_rule_c_quotes_a_dotted_column_as_the_consumer_maps_it() -> None:
+    """The verdict is the top-level segment's; the message names the mapping as written."""
+    _sources, contracts = load_semantic_inputs(fixture_root(CLEAN))
+    contracts[CLEAN_PRODUCER] = contracts[CLEAN_CONSUMER] 
+
+    assert _semantic_issues(CLEAN, contracts=contracts) == [
+        (
+            CLEAN_CONSUMER,
+            "access.request_inputs.columns",
+            f"reads column(s) the producer {CLEAN_PRODUCER} does not declare: payload.label",
+        )
+    ]
 
 
 @RED_F1
@@ -261,7 +347,6 @@ def _forbidden_imports(source: str, roots: tuple[str, ...] = _FORBIDDEN_PASS_IMP
     return found
 
 
-@RED_ENGINE
 def test_the_semantic_pass_imports_no_engine_and_no_upper_layer() -> None:
     """`janus.planner` imports `janus.registry`: importing it back would be an immediate cycle."""
     assert _forbidden_imports(SEMANTICS_MODULE.read_text(encoding="utf-8")) == []
