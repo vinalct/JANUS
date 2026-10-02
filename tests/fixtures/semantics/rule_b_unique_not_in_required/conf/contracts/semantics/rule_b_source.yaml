@@ -1,0 +1,30 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: semantics.rule_b_source
+name: Semantics rule (b) source
+version: 1.0.0
+status: active
+domain: semantics_rules
+description:
+  purpose: The primaryKey `code` is deliberately not required; a null merge key would pass.
+tags: [semantics]
+team:
+  - username: janus-tests
+    role: owner
+schema:
+  - name: semantics.rule_b_source
+    physicalType: table
+    properties:
+      - name: code
+        logicalType: string
+        physicalType: string
+        primaryKey: true
+      - name: label
+        logicalType: string
+        physicalType: string
+        required: true
+customProperties:
+  - property: janus.compatibility
+    value: additive
+  - property: janus.enforcement
+    value: lenient

@@ -1,0 +1,58 @@
+
+source_id: semantics_rule_d_source
+name: Semantics rule (d) source
+owner: janus-tests
+enabled: false
+source_type: api
+strategy: api
+strategy_variant: page_number_api
+federation_level: federal
+domain: semantics_rules
+public_access: true
+tags: [semantics, rule_d]
+
+access:
+  base_url: https://example.invalid
+  path: /records
+  method: GET
+  format: json
+  timeout_seconds: 5
+  auth:
+    type: none
+  pagination:
+    type: page_number
+    page_param: page
+    size_param: page_size
+    page_size: 100
+  rate_limit:
+    concurrency: 1
+
+extraction:
+  mode: full_refresh
+  retry:
+    max_attempts: 1
+    backoff_strategy: fixed
+    backoff_seconds: 1
+
+schema:
+  contract: conf/contracts/semantics/does_not_exist.yaml
+
+spark:
+  input_format: json
+  write_mode: overwrite
+  partition_by: [ingestion_date]
+
+outputs:
+  raw:
+    path: data/raw/semantics/rule_d_source
+    format: json
+  bronze:
+    path: data/bronze/semantics/rule_d_source
+    format: iceberg
+    namespace: semantics
+    table_name: rule_d_source
+  metadata:
+    path: data/metadata/semantics/rule_d_source
+    format: json
+
+quality: {}

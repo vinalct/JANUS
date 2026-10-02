@@ -1,0 +1,30 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: semantics.multi_alpha
+name: Semantics multi_alpha
+version: 1.0.0
+status: active
+domain: semantics_rules
+description:
+  purpose: The primaryKey code is not required; partition_by names an unknown column.
+tags: [semantics]
+team:
+  - username: janus-tests
+    role: owner
+schema:
+  - name: semantics.multi_alpha
+    physicalType: table
+    properties:
+      - name: code
+        logicalType: string
+        physicalType: string
+        primaryKey: true
+      - name: label
+        logicalType: string
+        physicalType: string
+        required: true
+customProperties:
+  - property: janus.compatibility
+    value: additive
+  - property: janus.enforcement
+    value: lenient

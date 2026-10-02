@@ -1,0 +1,34 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: semantics.clean_consumer
+name: Semantics clean consumer
+version: 1.0.0
+status: active
+domain: semantics_reporting
+description:
+  purpose: Detail rows requested once per producer code; violates no order-20 semantic rule.
+tags: [semantics]
+team:
+  - username: janus-tests
+    role: owner
+schema:
+  - name: semantics.clean_consumer
+    physicalType: table
+    properties:
+      - name: detail_id
+        logicalType: string
+        physicalType: string
+        required: true
+        primaryKey: true
+      - name: code
+        logicalType: string
+        physicalType: string
+        required: true
+      - name: region
+        logicalType: string
+        physicalType: string
+customProperties:
+  - property: janus.compatibility
+    value: additive
+  - property: janus.enforcement
+    value: lenient

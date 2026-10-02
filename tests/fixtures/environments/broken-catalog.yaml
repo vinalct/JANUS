@@ -1,0 +1,46 @@
+name: broken-catalog
+
+runtime:
+  log_level: ${JANUS_LOG_LEVEL:-INFO}
+
+spark:
+  app_name: ${JANUS_SPARK_APP_NAME:-janus-local}
+  master: ${JANUS_SPARK_MASTER:-local[*]}
+  warehouse_dir: ${JANUS_SPARK_WAREHOUSE_DIR:-data/metadata/spark-warehouse}
+  ivy_dir: ${JANUS_SPARK_IVY_DIR:-data/metadata/ivy}
+  iceberg:
+    catalog_name: ${JANUS_ICEBERG_CATALOG_NAME:-janus}
+    warehouse_dir: ${JANUS_ICEBERG_WAREHOUSE_DIR:-data/bronze/iceberg}
+    runtime_package: ${JANUS_ICEBERG_RUNTIME_PACKAGE:-org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1}
+    default_namespace: ${JANUS_ICEBERG_DEFAULT_NAMESPACE:-bronze}
+    uri: ${JANUS_ICEBERG_CATALOG_URI:-jdbc:sqlite:data/metadata/iceberg-catalog/catalog.sqlite?journal_mode=WAL&busy_timeout=30000}
+    driver_package: ${JANUS_ICEBERG_JDBC_DRIVER_PACKAGE:-org.xerial:sqlite-jdbc:3.53.2.1}
+    credentials:
+      user: ${JANUS_ICEBERG_CATALOG_USER:-}
+      password: ${JANUS_ICEBERG_CATALOG_PASSWORD:-}
+  config:
+    spark.driver.bindAddress: ${JANUS_SPARK_DRIVER_BIND_ADDRESS:-127.0.0.1}
+    spark.driver.host: ${JANUS_SPARK_DRIVER_HOST:-127.0.0.1}
+    spark.driver.memory: ${JANUS_SPARK_DRIVER_MEMORY:-8g}
+    spark.driver.maxResultSize: ${JANUS_SPARK_DRIVER_MAX_RESULT_SIZE:-2g}
+    spark.sql.session.timeZone: UTC
+    spark.sql.shuffle.partitions: ${JANUS_SPARK_SQL_SHUFFLE_PARTITIONS:-256}
+    spark.sql.files.maxPartitionBytes: ${JANUS_SPARK_SQL_FILES_MAX_PARTITION_BYTES:-134217728}
+    spark.sql.adaptive.enabled: "true"
+    spark.ui.enabled: "false"
+
+storage:
+  root_dir: ${JANUS_DATA_ROOT:-data}
+  raw_dir: ${JANUS_RAW_DIR:-data/raw}
+  bronze_dir: ${JANUS_BRONZE_DIR:-data/bronze}
+  metadata_dir: ${JANUS_METADATA_DIR:-data/metadata}
+
+observability:
+  openlineage:
+    transport: ${JANUS_OPENLINEAGE_TRANSPORT:-file}
+    path: ${JANUS_OPENLINEAGE_EVENTS_DIR:-lineage/openlineage}
+    url: ${JANUS_OPENLINEAGE_URL:-}
+    endpoint: ${JANUS_OPENLINEAGE_ENDPOINT:-}
+    timeout_seconds: ${JANUS_OPENLINEAGE_TIMEOUT_SECONDS:-}
+    auth:
+      token: ${JANUS_OPENLINEAGE_API_KEY:-}

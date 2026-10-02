@@ -1,0 +1,69 @@
+
+source_id: semantics_cycle_a
+name: Semantics cycle_a
+owner: janus-tests
+enabled: false
+source_type: api
+strategy: api
+strategy_variant: page_number_api
+federation_level: federal
+domain: semantics_rules
+public_access: true
+tags: [semantics]
+
+access:
+  base_url: https://example.invalid
+  path: /records
+  method: GET
+  format: json
+  timeout_seconds: 5
+  auth:
+    type: none
+  pagination:
+    type: page_number
+    page_param: page
+    size_param: page_size
+    page_size: 100
+  request_inputs:
+    type: iceberg_rows
+    upstream_source_id: semantics_cycle_b
+    namespace: semantics
+    table_name: cycle_b
+    columns:
+      code: code
+    distinct: true
+  parameter_bindings:
+    code:
+      from: request_input.code
+  rate_limit:
+    concurrency: 1
+
+extraction:
+  mode: full_refresh
+  retry:
+    max_attempts: 1
+    backoff_strategy: fixed
+    backoff_seconds: 1
+
+schema:
+  contract: conf/contracts/semantics/cycle_a.yaml
+
+spark:
+  input_format: json
+  write_mode: overwrite
+  partition_by: [ingestion_date]
+
+outputs:
+  raw:
+    path: data/raw/semantics/cycle_a
+    format: json
+  bronze:
+    path: data/bronze/semantics/cycle_a
+    format: iceberg
+    namespace: semantics
+    table_name: cycle_a
+  metadata:
+    path: data/metadata/semantics/cycle_a
+    format: json
+
+quality: {}

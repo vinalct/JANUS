@@ -1,0 +1,60 @@
+
+source_id: semantics_rule_b_source
+name: Semantics rule (b) source
+owner: janus-tests
+enabled: false
+source_type: api
+strategy: api
+strategy_variant: page_number_api
+federation_level: federal
+domain: semantics_rules
+public_access: true
+tags: [semantics, rule_b]
+
+access:
+  base_url: https://example.invalid
+  path: /records
+  method: GET
+  format: json
+  timeout_seconds: 5
+  auth:
+    type: none
+  pagination:
+    type: page_number
+    page_param: page
+    size_param: page_size
+    page_size: 100
+  rate_limit:
+    concurrency: 1
+
+extraction:
+  mode: full_refresh
+  retry:
+    max_attempts: 1
+    backoff_strategy: fixed
+    backoff_seconds: 1
+
+schema:
+  contract: conf/contracts/semantics/rule_b_source.yaml
+
+spark:
+  input_format: json
+  write_mode: overwrite
+  partition_by: [ingestion_date]
+
+outputs:
+  raw:
+    path: data/raw/semantics/rule_b_source
+    format: json
+  bronze:
+    path: data/bronze/semantics/rule_b_source
+    format: iceberg
+    namespace: semantics
+    table_name: rule_b_source
+  metadata:
+    path: data/metadata/semantics/rule_b_source
+    format: json
+
+quality:
+  required_fields: [label]
+  unique_fields: [code]
