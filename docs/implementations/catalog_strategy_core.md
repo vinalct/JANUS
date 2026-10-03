@@ -98,7 +98,7 @@ For each extracted entity, the strategy now emits a consistent record shape that
 - the collection path inside the payload;
 - the originating request URL and page details;
 - the raw artifact path and checksum;
-- the original entity payload under `catalog_payload`.
+- the original entity payload under `payload`, serialized as a JSON string.
 
 That shape is intentionally practical.
 

@@ -36,6 +36,16 @@ graph cannot drift away from the data.
 Edges come only from Iceberg leaves, including every leaf inside a `combined` input. A
 `date_window` sub-input creates no edge, because no other source produces a calendar.
 
+To see the graph the registry resolved, without running anything:
+
+```bash
+janus list --graph
+```
+
+It prints the topological order `run-all` uses, then every edge with the table and the input
+path that create it. `janus list` prints one row per source with its upstream ids, and
+`janus validate` loads the registry and plans every source.
+
 ## Running a batch
 
 ```bash
@@ -208,7 +218,9 @@ attempt identity — `…-a2-…` — while keeping the pipeline correlation.
 
 **`--resume`** lets each source consume its own existing extraction progress. It does not
 mark an earlier pipeline successful, and it does not suppress a required upstream: a resumed
-consumer still waits for its producer to succeed in *this* batch.
+consumer still waits for its producer to succeed in *this* batch. Under `--resume`, an item a
+previous run dead-lettered stays skipped until it is released with `janus dead-letters release`.
+A run without `--resume` starts over: it clears the dead-letter state and retries every item.
 
 ### Backfills
 
@@ -270,8 +282,9 @@ ships one `ScheduleDefinition` with an explicit timezone and
 
 ## Troubleshooting
 
-Every diagnostic below is actual output, with the project root replaced by `<PROJECT>`. All
-of them exit `2` and execute nothing.
+Every diagnostic below is actual output, with the project root replaced by `<PROJECT>`. The
+graph, selection and flag refusals exit `2` and execute nothing. The entries from
+[a failed quality gate](#a-failed-quality-gate) on start from a batch that ran.
 
 ### Dependency cycle
 
@@ -333,7 +346,12 @@ janus run-all: error: --include-disabled cannot be used with run-all; use the ex
 ```
 
 `--source-id`, `--execute`, `--run-id`, `--bronze-table`, `--ingest-raw-to-bronze`, and
-`--with-spark` are rejected the same way, by name.
+`--with-spark` are rejected the same way, by name. `--verify-checksums` belongs to single-source
+replay too, and `run-all` refuses it as an unknown option:
+
+```
+janus run-all: error: unrecognized arguments: --verify-checksums
+```
 
 ### A failed quality gate
 
@@ -375,6 +393,103 @@ scrubbed `samples`. A refused batch commits no bronze snapshot. JSON pages read 
 can flag every row when one record drifts; JSONL and CSV identify individual lines. A CSV header
 mismatch can flag every data row. In a batch, the source fails and its descendants are skipped
 with `reason_code: "upstream_failed"`.
+
+### A source failed and its dependents were skipped
+
+The summary shows the source `failed` and each dependent `skipped` with
+`reason_code: "upstream_failed"`. When one item exhausted its retries — a request input, or a file
+candidate — the run recorded it as a dead letter before it gave up. Start there:
+
+```
+$ janus dead-letters list --source-id semantics_clean_producer
+semantics_clean_producer - 1 dead letter(s), recorded by run local-20260918-060000-semantics_clean_producer
+  state    data/metadata/semantics/clean_producer/dead_letters/current.json
+  updated  2026-09-18T06:04:11+00:00
+
+  item_key                                       type           recorded_at
+  window_end=2026-09-02|window_start=2026-09-02  request_input  2026-09-18T06:04:11+00:00
+      error                RuntimeError: API request failed with status 503 for https://example.invalid/reference?page=1&window_start=2026-09-02: {"message": "upstream maintenance"}
+      request_input_count  2
+      request_input_index  2
+      request_url          https://example.invalid/reference?window_start=2026-09-02
+```
+
+If it reports `no dead letters recorded`, the failure was not an item's: read the source's
+`failure` in the summary and the entries above.
+
+Once the cause is gone upstream — a token renewed, an endpoint back, a window republished —
+release the entries with a reason, then resume:
+
+```
+$ janus dead-letters release --source-id semantics_clean_producer --item-key 'window_end=2026-09-02|window_start=2026-09-02' --reason 'upstream maintenance over'
+semantics_clean_producer - released 1 dead letter(s); 0 remain
+  released       window_end=2026-09-02|window_start=2026-09-02  (request_input, RuntimeError)
+  remaining      -
+  operator       ops-tester
+  reason         upstream maintenance over
+  history        data/metadata/semantics/clean_producer/dead_letters/history/20261003T102235Z-local-20260918-060000-semantics-clean-producer.json
+  state          data/metadata/semantics/clean_producer/dead_letters/current.json (deleted: nothing remains)
+
+The next resuming run retries the released item(s) and keeps skipping the rest:
+  janus --environment local --source-id semantics_clean_producer --execute --resume
+```
+
+Then re-run. `janus run-all --environment local --resume` resumes the failed source and runs the
+dependents it skipped, in order. `janus dead-letters replay … --reason R` without `--execute`
+prints what that resume would retry and writes nothing; with `--execute` it releases and runs the
+one source in a single step.
+
+What these do **not** do:
+
+- `release` re-runs nothing. It removes the named entries from the state and writes the history
+  record; the next `--resume` run is what retries them.
+- A release does not fix the cause. An item that fails again is dead-lettered again.
+- Only a `--resume` run honours the state. A run without `--resume` clears it and retries every
+  item, with no history record.
+
+### A run started from the wrong position
+
+An incremental source starts where its checkpoint says. If a run skipped rows it should have
+read, or the checkpoint was pushed too far by a bad value, inspect it and its history:
+
+```
+$ janus checkpoint show --source-id semantics_clean_producer --history 10
+semantics_clean_producer - checkpoint
+  field     updated_at            strategy  max_value
+  value     2026-09-30T00:00:00Z  updated   2026-09-17T06:00:00+00:00
+  run       local-20260917-060000-semantics_clean_producer
+  state     data/metadata/semantics/clean_producer/checkpoints/current.json
+
+history (last 3 of 3, newest first)
+  recorded_at                decision  advanced  previous              stored                run
+  2026-09-17T06:00:00+00:00  advanced  no        2026-09-15T23:40:00Z  2026-09-30T00:00:00Z  local-20260917-060000-semantics_clean_producer
+  2026-09-16T06:00:00+00:00  advanced  no        2026-09-14T23:10:00Z  2026-09-15T23:40:00Z  local-20260916-060000-semantics_clean_producer
+  2026-09-15T06:00:00+00:00  advanced  yes       -                     2026-09-14T23:10:00Z  local-20260915-060000-semantics_clean_producer
+```
+
+Read the `decision` column. The `advanced` flag is currently `no` for every advancing run after a
+source's first, a known defect in what the store records. Then move the checkpoint, with a reason:
+
+```
+$ janus checkpoint set --source-id semantics_clean_producer --to 2026-09-15T23:40:00Z --reason 'run of 2026-09-17 read a future-dated row'
+semantics_clean_producer: updated_at 2026-09-30T00:00:00Z -> 2026-09-15T23:40:00Z (max_value; this moves the checkpoint backwards)
+  history   data/metadata/semantics/clean_producer/checkpoints/history/manual-20261003T102223Z-ops-tester.json
+  state     data/metadata/semantics/clean_producer/checkpoints/current.json
+  operator  ops-tester
+  reason    run of 2026-09-17 read a future-dated row
+```
+
+The next run advances from the value set. `janus checkpoint clear --source-id S --reason R`
+forgets the checkpoint instead, and the next run starts with none.
+
+What `set` does **not** do:
+
+- It does not check that the value corresponds to real upstream data. It checks only that the
+  next run can compare it with what it extracts: the value must be the same kind as the stored one
+  (a timestamp, a number or text). Moving a `max_value` checkpoint *forward* past rows that were
+  never extracted makes every later run skip them. The history entry records who did it and why;
+  it does not make the move right.
+- It runs nothing and does not touch bronze. The next run does the extraction.
 
 ### Summary write failure
 

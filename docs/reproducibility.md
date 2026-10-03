@@ -168,6 +168,29 @@ python -m janus.main --environment local
 
 The command loads the local environment profile, prepares runtime paths, and prints a JSON summary of resolved settings. This validates the *environment profile* only; `make validate` validates the source registry.
 
+### Validate the source registry
+
+```bash
+make validate
+```
+
+This runs:
+
+```bash
+python -m janus.main validate --environment local
+```
+
+It loads every source, disabled ones included, resolves the dependency graph, applies the
+registry's semantic rules and plans every source. Then it checks the profile: its catalog type,
+its OpenLineage transport, the Spark options it renders and the runtime paths it resolves. It
+starts no Spark session and creates no directory; `--prepare` creates the runtime directories.
+It exits `0` when everything resolves and `2` otherwise, with the loader's or the profile's
+refusal printed verbatim on stderr. The rules are listed in
+[source onboarding](source-onboarding.md#what-the-registry-checks-across-sources).
+
+`make ci` runs the same command last. CI's fast job runs `python -m janus.main validate
+--project-root .` on the host, with no engine installed.
+
 ### Validate the local profile and start Spark
 
 ```bash
@@ -368,23 +391,68 @@ Rebuild, from inside the container (`make shell`):
 ```bash
 rm -rf data/bronze/iceberg data/metadata/iceberg-catalog     # 1. drop bronze and the catalog db
 python -m janus.main --environment local --source-id <id> \
-  --include-disabled --ingest-raw-to-bronze --with-spark      # 2. replay the raw zone
+  --include-disabled --ingest-raw-to-bronze \
+  --bronze-table <namespace.table>                            # 2. replay the raw zone
 ```
 
 Step 2 rehydrates the existing raw artifacts and re-materializes bronze through exactly the same
-`BronzeMaterializer` a live run uses — no re-extraction, no network. If the raw zone is empty too,
-replace it with a full run (`--execute` instead of `--ingest-raw-to-bronze`).
+`BronzeMaterializer` a live run uses — no re-extraction, no network. `--bronze-table` is required;
+to rebuild the table a live run writes, pass the `bronze_table` that
+`python -m janus.main list --format json` prints for the source. If the raw zone is empty too,
+replace step 2 with a full run (`--execute` instead of `--ingest-raw-to-bronze --bronze-table …`).
 
 Deleting `data/metadata/iceberg-catalog` is safe because the catalog holds only pointers: table
 identifiers and the current metadata location. The data and the Iceberg metadata itself live under
 the warehouse. Deleting it without also deleting the warehouse leaves orphaned files that the next
 run ignores, which is why step 1 removes both.
 
+### Verifying the raw zone before a replay
+
+Extraction writes a `<path>.sha256` sidecar beside every raw artifact, holding the digest of the
+bytes it just persisted. A replay trusts those sidecars by default: it reads the digest instead of
+re-hashing the file, which keeps replaying a multi-GB zone cheap. Add `--verify-checksums` to
+re-hash every artifact and compare it with its sidecar before anything is materialized:
+
+```bash
+python -m janus.main --environment local --source-id <id> \
+  --include-disabled --ingest-raw-to-bronze \
+  --bronze-table <namespace.table> --verify-checksums
+```
+
+- **A mismatch fails the run** with `RawArtifactIntegrityError`. The message names the first
+  mismatching artifact in sorted order, the sidecar digest and the computed digest, and ends
+  `The raw zone has changed since extraction; bronze was not written.` Verification happens
+  while the raw zone is rediscovered, before materialization, so no bronze snapshot is committed
+  and the run is recorded as failed like any other rehydration error. One case is weaker: a
+  catalog source whose request inputs are `iceberg_rows` opens its scoped request-input Spark
+  session before rediscovery, so for that source "before Spark" means before materialization.
+- **A verified replay says so.** On success, `checksums_verified: "true"` appears in the printed
+  `raw_to_bronze_run` summary, in the run-metadata JSON's `run_attributes`, and in the lineage
+  JSON's `extraction_metadata`. Without the flag the key is absent everywhere, and replay behaves
+  exactly as it did before the flag existed.
+- **All three families honour it.** API, file and catalog rediscovery read a digest through the
+  same resolver.
+- **A zone written before sidecars existed still replays.** An artifact with no sidecar has no
+  recorded digest to compare against, so it is hashed and loaded as it always was. Verification
+  can only prove what extraction recorded.
+- **It belongs to replay.** `--verify-checksums` without `--ingest-raw-to-bronze` is an argument
+  error (exit `2`), and `run-all` rejects it as an unrecognized argument.
+
+The cost is one full read of the raw zone. Measured on 2026-10-02 over a Portal da Transparência
+zone of 35,812 artifacts and 1,158.7 MiB, on a 16-core machine with NVMe storage: 16.95 s with a
+mostly cold page cache (about 15 s per GiB) and 1.28 s warm, against 0.4–0.5 s to read the
+sidecars alone. That is why the flag is opt-in. Use it when the raw zone may have changed since
+extraction: copied between machines, restored from a backup, or edited by hand.
+
 ## What the current CLI does and does not do
 
 Be explicit about the current project state.
 
-Today `src/janus/main.py` is a reproducible runtime entry point for:
+`janus` is one command with seven verbs. `src/janus/main.py` only delegates to the verb table in
+`src/janus/cli/dispatch.py`, and a command line that starts with an option is the `run` verb, so
+every form in this guide works as it did before the other verbs existed.
+
+`janus run` is a reproducible runtime entry point for:
 
 - loading environment profiles;
 - materializing runtime paths;
@@ -392,7 +460,9 @@ Today `src/janus/main.py` is a reproducible runtime entry point for:
 - planning one configured source;
 - executing one configured source end to end with `--execute`;
 - resuming interrupted extraction state with `--resume`;
-- loading already-preserved raw artifacts into a requested bronze table with `--ingest-raw-to-bronze --bronze-table ...`.
+- loading already-preserved raw artifacts into a requested bronze table with `--ingest-raw-to-bronze --bronze-table ...`;
+- re-hashing every raw artifact against its extraction-time checksum before that load, with
+  `--verify-checksums` ([above](#verifying-the-raw-zone-before-a-replay)).
 
 For example, a live framework run looks like:
 
@@ -415,7 +485,88 @@ python -m janus.main \
   --bronze-table bronze_inep.censo_escolar_microdados
 ```
 
-The CLI still runs one selected source at a time. Cross-source scheduling, dependency orchestration, and production job control belong outside this entry point for now.
+The other six verbs:
+
+| Verb | What it is for | Runs a source? |
+|---|---|---|
+| `janus run-all` | executing the enabled sources once, in dependency order ([batch orchestration](orchestration.md)) | yes |
+| `janus contract draft` | drafting a data contract from a raw run or a fixture ([data contracts](data-contracts.md)) | no |
+| `janus validate` | checking that the registry loads, means something executable, and plans; with `--environment`, the profile too | no |
+| `janus list` | listing sources, their dispatch, their state and the dependency graph | no |
+| `janus dead-letters` | inspecting, releasing or replaying the items a run gave up on | only `replay --execute` |
+| `janus checkpoint` | showing, setting or clearing where a source's next run starts | no |
+
+Cross-source scheduling is `janus run-all`: it runs one batch in dependency order and
+exits. Inspecting and correcting what a run leaves behind is the operator verbs below.
+Calendars, triggers and whole-run retries stay outside JANUS: use cron, or the optional Dagster
+adapter.
+
+### Operator commands
+
+`validate`, `list`, `dead-letters` and `checkpoint` start no Spark session, open no catalog and
+send no request; `dead-letters replay --execute` is the exception, because it runs the source.
+Each plans or lists disabled sources too, since state exists whether or not a source is enabled.
+A refusal or an argument error exits `2` before anything is written. A `--format json` option,
+where offered, prints one JSON document with sorted keys.
+
+**`janus validate [--source-id S] [--format text|json] [--environment E [--prepare]]`** loads the
+registry, resolves the graph, applies the
+[semantic rules](source-onboarding.md#what-the-registry-checks-across-sources) and plans every
+source with one planner against one registry snapshot. A registry the loader refuses prints the
+loader's error on stderr and nothing on stdout. A source the planner refuses is reported on its
+own line, and its peers are still planned. `--source-id` narrows the planning step, never the
+semantic pass. The report holds no run id and no timestamp, so two runs print the same bytes.
+Exit `0` with no issue.
+
+**`janus list [--tag T … | --domain D …] [--family F] [--enabled-only] [--graph] [--format table|json]`**
+prints one row per source, sorted by `source_id`: family, variant, extraction mode, enabled state,
+hook, upstream ids and tags. The JSON form adds the name, domain, downstream ids and the bronze table
+the source writes. Unlike `run-all`, a filter never adds upstreams; the `UPSTREAMS` column names
+them. `--graph` prints the graph's own topological order, then every edge with the table and input
+path that create it. An empty listing exits `0`. Only the registry is read.
+
+**`janus dead-letters list|release|replay --source-id S`** works on the state a run leaves at
+`<metadata>/dead_letters/current.json` when an item exhausts its retries.
+
+- `list [--item-key K …]` prints every entry with its error and metadata. No state exits `0`.
+- `release (--item-key K … | --all) --reason R` removes exactly those entries. It first writes a
+  history record at `dead_letters/history/<UTC timestamp>-<recording run>.json`, holding the
+  released entries whole, the remaining keys, the operator and the reason. Then it rewrites
+  `current.json` atomically, or deletes it when nothing remains. An unknown key refuses the whole
+  release. **Release runs nothing.** The next `janus --environment E --source-id S --execute
+  --resume` (plus `--include-disabled` for a disabled source) retries the released items and keeps
+  skipping the rest.
+- `replay (--item-key K … | --all) --reason R` without `--execute` is a dry run: what a resume
+  would retry, what stays skipped and where it would pick up, with nothing written. With
+  `--execute` it releases, records `replay: "true"` in the history record, and runs exactly what
+  `run --execute --resume` runs, returning that run's exit code. A disabled source needs
+  `--include-disabled`.
+
+**`janus checkpoint show|set|clear --source-id S`** works on `<metadata>/checkpoints/current.json`.
+
+- `show [--history N]` prints the stored value, its field and strategy, the run that wrote it, and
+  the last `N` history entries, newest first (default 5). A source with no checkpoint exits `0`.
+- `set --to V --reason R` moves the checkpoint to `V`, backwards or forwards. It prints the
+  previous value and the direction before it writes. `V` must be the same kind as the stored value
+  (timestamp, number or text), and comparable by the store's own comparator, or it is refused: the
+  next run compares the two to decide whether it advanced. The history entry is written first, with
+  decision `reset`, then `current.json`. The next run advances from `V`.
+- `clear --reason R` records the forgotten value in a `reset` history entry
+  (`metadata.cleared: "true"`), then deletes `current.json`, so the next run starts with no
+  checkpoint.
+
+Operator history entries are named `checkpoints/history/manual-<UTC timestamp>-<operator>.json`.
+`reset` is never a run's own decision, so the runs table's `checkpoint_decision` shows only what
+runs decided; the history entry is the record of the operator's change.
+
+Two known limits:
+
+- A stored checkpoint that no longer matches the plan, for example after the contract moved
+  `checkpoint_field`, is refused by `show`, `set` and `clear` alike, with the store's message.
+  Clearing it still means deleting `checkpoints/current.json` by hand, with no history entry.
+- On a **catalog** source, the resume after a release also re-extracts the inputs the first run
+  completed, because the catalog family clears its progress record at the end of every run. The
+  result is correct; the completed inputs cost a second extraction.
 
 ## Safe reruns and stable outputs
 
@@ -425,7 +576,8 @@ JANUS already enforces several pieces of that:
 
 - output roots come from checked-in environment profiles plus explicit env overrides;
 - raw, bronze, and metadata zones are resolved through `StorageLayout`;
-- checkpoints are persisted through a monotonic checkpoint store;
+- checkpoints are persisted through a monotonic checkpoint store, which only an operator's
+  recorded `janus checkpoint set|clear` can move backwards;
 - run metadata and lineage artifacts are written under the metadata zone;
 - logs are structured and redact secret-bearing fields by default.
 

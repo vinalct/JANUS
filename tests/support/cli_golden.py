@@ -65,9 +65,6 @@ class CapturedInvocation:
 
 
 _BRONZE_TABLE = "bronze_inep.censo_escolar_microdados"
-_LIST_TASK = "docs/tasks/operator-command-surface/list_command.md"
-_DEAD_LETTERS_TASK = "docs/tasks/operator-command-surface/dead_letters_command.md"
-_CHECKPOINT_TASK = "docs/tasks/operator-command-surface/checkpoint_command.md"
 
 INVOCATIONS: tuple[Invocation, ...] = (
     Invocation(
@@ -80,19 +77,19 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "run_verb_help",
         ("run", "--help"),
         "repository",
-        documented_at="docs/tasks/dispatcher.md:113",
+        documented_at="README.md:210; docs/reproducibility.md:455",
     ),
     Invocation(
         "run_all_help",
         ("run-all", "--help"),
         "repository",
-        documented_at="docs/orchestration.md:46-54",
+        documented_at="docs/orchestration.md:58-66",
     ),
     Invocation(
         "contract_help",
         ("contract", "--help"),
         "repository",
-        documented_at="README.md:118",
+        documented_at="README.md:123,212",
     ),
     Invocation(
         "contract_draft_help",
@@ -104,27 +101,27 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "no_arguments",
         (),
         "repository",
-        documented_at="docs/tasks/dispatcher.md:136",
+        documented_at="src/janus/cli/dispatch.py:124-125",
     ),
     Invocation(
         "profile_local",
         ("--environment", "local"),
         "repository",
-        documented_at="Makefile:292; docs/reproducibility.md:166,247",
+        documented_at="Makefile:292; docs/reproducibility.md:166,270",
     ),
     Invocation(
         "profile_local_with_spark",
         ("--environment", "local", "--with-spark"),
         "repository",
         requires_spark=True,
-        documented_at="Makefile:289; docs/reproducibility.md:180,248",
+        documented_at="Makefile:289; docs/reproducibility.md:203,271",
     ),
     Invocation(
         "profile_cluster",
         ("--environment", "cluster"),
         "repository",
         environment="cluster",
-        documented_at="docs/reproducibility.md:267",
+        documented_at="docs/reproducibility.md:290",
     ),
     Invocation(
         "profile_cluster_with_spark",
@@ -132,7 +129,7 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "repository",
         environment="cluster",
         requires_spark=True,
-        documented_at="docs/reproducibility.md:273",
+        documented_at="docs/reproducibility.md:296",
     ),
     Invocation(
         "plan_pinned",
@@ -147,20 +144,20 @@ INVOCATIONS: tuple[Invocation, ...] = (
             "2026-04-09T12:00:00+00:00",
         ),
         "repository",
-        documented_at="docs/reproducibility.md:213-217",
+        documented_at="docs/reproducibility.md:236-240",
     ),
     Invocation(
         "plan_disabled_source",
         ("--environment", "local", "--source-id", "ibge_pib_brasil", "--include-disabled"),
         "repository",
-        documented_at="README.md:110-114",
+        documented_at="README.md:115-118",
     ),
 
     Invocation(
         "execute_disabled_source_refused",
         ("--environment", "local", "--source-id", "ibge_pib_brasil", "--execute"),
         "repository",
-        documented_at="README.md:124-129; docs/reproducibility.md:400-405",
+        documented_at="README.md:129-133; docs/reproducibility.md:470-474",
     ),
     Invocation(
         "ingest_disabled_source_refused",
@@ -174,19 +171,19 @@ INVOCATIONS: tuple[Invocation, ...] = (
             _BRONZE_TABLE,
         ),
         "repository",
-        documented_at="docs/reproducibility.md:410-416",
+        documented_at="docs/reproducibility.md:480-485",
     ),
     Invocation(
         "error_execute_without_source_id",
         ("--environment", "local", "--execute"),
         "repository",
-        documented_at="src/janus/main.py:108-109",
+        documented_at="src/janus/cli/run.py:117-118",
     ),
     Invocation(
         "error_ingest_without_source_id",
         ("--environment", "local", "--ingest-raw-to-bronze", "--bronze-table", _BRONZE_TABLE),
         "repository",
-        documented_at="src/janus/main.py:110-111",
+        documented_at="src/janus/cli/run.py:119-120",
     ),
     Invocation(
         "error_ingest_without_bronze_table",
@@ -200,7 +197,7 @@ INVOCATIONS: tuple[Invocation, ...] = (
             "--with-spark",
         ),
         "repository",
-        documented_at="docs/reproducibility.md:370-371; src/janus/main.py:112-113",
+        documented_at="src/janus/cli/run.py:121-122",
     ),
     Invocation(
         "error_execute_with_ingest",
@@ -216,26 +213,26 @@ INVOCATIONS: tuple[Invocation, ...] = (
             _BRONZE_TABLE,
         ),
         "repository",
-        documented_at="src/janus/main.py:114-115",
+        documented_at="src/janus/cli/run.py:123-124",
     ),
     Invocation(
         "error_include_disabled_without_source_id",
         ("--environment", "local", "--include-disabled"),
         "repository",
-        documented_at="src/janus/main.py:116-117",
+        documented_at="src/janus/cli/run.py:125-126",
     ),
     Invocation(
         "error_unknown_verb",
         ("frobnicate",),
         "repository",
-        documented_at="docs/operator_command_surface.md:77",
+        documented_at="src/janus/cli/dispatch.py:127-131",
     ),
     Invocation(
         "run_all_checked_in_registry",
         ("run-all", "--environment", "local"),
         "repository",
         requires_spark=True,
-        documented_at="README.md:159; docs/orchestration.md:42",
+        documented_at="README.md:164; docs/orchestration.md:52",
     ),
     Invocation(
         "run_all_backfill_empty_selection",
@@ -249,19 +246,19 @@ INVOCATIONS: tuple[Invocation, ...] = (
             "backfill-2026-08-attempt-1",
         ),
         "repository",
-        documented_at="docs/orchestration.md:219-222",
+        documented_at="docs/orchestration.md:231-234",
     ),
     Invocation(
         "run_all_error_tag_with_domain",
         ("run-all", "--tag", "consumer", "--domain", "reporting"),
         "repository",
-        documented_at="docs/orchestration.md:57-58",
+        documented_at="docs/orchestration.md:68-69",
     ),
     Invocation(
         "run_all_rejects_include_disabled",
         ("run-all", "--include-disabled"),
         "repository",
-        documented_at="docs/orchestration.md:330-333",
+        documented_at="docs/orchestration.md:344-346",
     ),
     Invocation(
         "run_all_rejects_single_source_flags",
@@ -279,7 +276,7 @@ INVOCATIONS: tuple[Invocation, ...] = (
             "--with-spark",
         ),
         "repository",
-        documented_at="docs/orchestration.md:335-336; src/janus/cli/run_all.py:47-55",
+        documented_at="docs/orchestration.md:348-349; src/janus/cli/run_all.py:47-55",
     ),
     Invocation(
         "contract_draft_missing_raw_run",
@@ -301,79 +298,79 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "validate_help",
         ("validate", "--help"),
         "repository",
-        documented_at="docs/tasks/operator-command-surface/validate_registry_half.md:45-48",
+        documented_at="README.md:213; docs/reproducibility.md:512",
     ),
     Invocation(
         "validate_checked_in_registry",
         ("validate", "--format", "json"),
         "repository",
-        documented_at="docs/operator_command_surface_.md:79",
+        documented_at="docs/reproducibility.md:512-519",
     ),
     Invocation(
         "list_help",
         ("list", "--help"),
         "repository",
-        documented_at=f"{_LIST_TASK}:44-48",
+        documented_at="README.md:214; docs/reproducibility.md:521",
     ),
     Invocation(
         "list_table",
         ("list",),
         "repository",
-        documented_at=f"{_LIST_TASK}:60-73",
+        documented_at="docs/reproducibility.md:521-526",
     ),
     Invocation(
         "list_json",
         ("list", "--format", "json"),
         "repository",
-        documented_at=f"{_LIST_TASK}:75-90",
+        documented_at="docs/reproducibility.md:523-524",
     ),
     Invocation(
         "list_graph",
         ("list", "--graph"),
         "repository",
-        documented_at=f"{_LIST_TASK}:92-107",
+        documented_at="docs/orchestration.md:42",
     ),
     Invocation(
         "list_filtered_by_tag",
         ("list", "--tag", "ibge"),
         "repository",
-        documented_at=f"{_LIST_TASK}:154-155",
+        documented_at="docs/reproducibility.md:521,524",
     ),
     Invocation(
         "dead_letters_help",
         ("dead-letters", "--help"),
         "repository",
-        documented_at=f"{_DEAD_LETTERS_TASK}:42-50",
+        documented_at="README.md:215; docs/reproducibility.md:528",
     ),
     Invocation(
         "dead_letters_replay_help",
         ("dead-letters", "replay", "--help"),
         "repository",
-        documented_at=f"{_DEAD_LETTERS_TASK}:78-86,154-155",
+        documented_at="docs/reproducibility.md:539-543; docs/orchestration.md:438-440",
     ),
     Invocation(
         "dead_letters_list_no_state",
         ("dead-letters", "list", "--source-id", "ibge_pib_brasil"),
         "repository",
-        documented_at=f"{_DEAD_LETTERS_TASK}:69-70",
+        documented_at="docs/orchestration.md:404,417",
     ),
     Invocation(
         "checkpoint_help",
         ("checkpoint", "--help"),
         "repository",
-        documented_at=f"{_CHECKPOINT_TASK}:36-42",
+        documented_at="README.md:216; docs/reproducibility.md:545",
     ),
     Invocation(
         "checkpoint_set_help",
         ("checkpoint", "set", "--help"),
         "repository",
-        documented_at=f"{_CHECKPOINT_TASK}:70-86,137-141",
+        documented_at="docs/reproducibility.md:549-553; docs/orchestration.md:474",
     ),
     Invocation(
         "checkpoint_show_no_state",
         ("checkpoint", "show", "--source-id", "ibge_pib_brasil"),
         "repository",
-        documented_at=f"{_CHECKPOINT_TASK}:63",
+        documented_at="docs/reproducibility.md:547-548",
     ),
 )
 

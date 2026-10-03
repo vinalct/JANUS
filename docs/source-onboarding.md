@@ -400,9 +400,11 @@ For each `iceberg_rows` leaf in a source you already maintain:
 3. If the resolver reports that two sources write that table, decide whether the sharing is
    deliberate. If it is, declare it on both with `outputs.bronze.shared_with`; the consumer
    still names exactly one producer and waits only for that pipeline.
-4. Reload the registry (`janus --environment local --source-id <id> --include-disabled` is
-   enough) and read the diagnostics. They name the field path, the file and entry, and the
-   source that actually produces the referenced table.
+4. Reload the registry and read the diagnostics: `janus validate` loads it and plans every
+   source, and `janus --environment local --source-id <id> --include-disabled` plans only yours.
+   They name the field path, the file and entry, and the source that actually produces the
+   referenced table. The same load also checks that every column the leaf maps exists in the
+   producer's contract ([rule (c)](#what-the-registry-checks-across-sources)).
 
 Nothing else changes: ids, enabled flags, parameters, columns, output locations, and write
 modes all stay as they were. The config hash changes because the YAML changed, which is
@@ -607,6 +609,98 @@ incremental merge key. An incremental source must declare a `primaryKey` in its 
 
 If you are unsure whether a field belongs in config, check the example source and the typed contract before inventing a new key.
 
+### What the registry checks across sources
+
+Each rule above reads one block. A source can pass every one of them and still describe something
+JANUS cannot run: a merge key that may be null, or a consumer reading a column its producer never
+writes. So the registry also checks what the blocks mean together, across the whole registry,
+every time it loads. It fails closed. One source's violation refuses the load for every entry
+point — a single-source run, `janus run-all`, the planner, `janus validate` and the registry
+sweep test — and every violation is reported in one error.
+
+**`janus validate` is the first thing to run after editing a source or a contract.** It loads the
+registry under exactly these rules, plans every source, and exits `2` with the loader's message
+when something is wrong. It starts no Spark session and writes nothing.
+
+| Rule | What must hold | Checked |
+|---|---|---|
+| (a) | `quality.required_fields`, when declared, equals the contract's `required` columns | while contracts load |
+| (b) | every contract `primaryKey` column is also `required` | by the semantic pass |
+| (c) | every column an `iceberg_rows` input maps exists in its producer's contract | by the semantic pass |
+| (d) | `schema.contract` resolves to a readable contract file | while contracts load |
+| (e) | `source_hook` names a registered hook | by the semantic pass |
+| (f) | every `spark.partition_by` column is a normalization metadata column or a contract column | by the semantic pass |
+
+Rules (a) and (d) are refused while the contract snapshot loads, one config file at a time. The
+other four run once the graph is resolved, across sources. Both kinds stop the load. Each failure
+below is the loader's text, verbatim, with the checkout path replaced by `<PROJECT>`.
+
+**(a) Required fields agree with the contract.** The contract is the declaration; the
+`quality` key is only a cross-check. Drop the key, or fix the contract.
+
+```text
+Invalid source config: <PROJECT>/tests/fixtures/semantics/rule_a_required_not_in_schema/conf/sources/source.yaml
+- quality.required_fields: disagrees with the contract's required columns: config has {code, not_in_contract}, contract has {code}; drop the key or fix the contract — the contract is the declaration.
+```
+
+**(b) The primary key is required.** A `primaryKey` column that may be null cannot key the
+incremental merge. The run-time quality check says the same sentence.
+
+```text
+Invalid source registry: <PROJECT>/tests/fixtures/semantics/rule_b_unique_not_in_required/conf/sources
+- semantics_rule_b_source: schema.contract: primaryKey columns must also be required: code
+```
+
+**(c) A consumer reads only what its producer writes.** Only the top-level segment of a mapped
+column is compared, so `payload.label` is judged by `payload`. The rule found one real defect in the
+checked-in registry when it landed: a `dados_abertos` consumer mapped `catalog_payload.id`, a
+column its producer never wrote. That source would have failed the first time it read the table.
+
+```text
+Invalid source registry: <PROJECT>/tests/fixtures/semantics/rule_c_iceberg_column_absent/conf/sources
+- semantics_rule_c_consumer: access.request_inputs.columns: reads column(s) the producer semantics_rule_c_producer does not declare: column_that_is_not_there
+```
+
+**(d) The contract file exists.** A missing file says `the file does not exist`; a file that is
+present but unreadable, empty or not a mapping says so in its own words.
+
+```text
+Invalid source config: <PROJECT>/tests/fixtures/semantics/rule_d_schema_path_missing/conf/sources/source.yaml
+- semantics_rule_d_source.schema.contract: could not load conf/contracts/semantics/does_not_exist.yaml: <PROJECT>/tests/fixtures/semantics/rule_d_schema_path_missing/conf/contracts/semantics/does_not_exist.yaml: the file does not exist
+```
+
+**(e) The hook resolves.** A hook id the planner could not resolve is refused at load, against
+the built-in hook catalog, instead of at plan time.
+
+```text
+Invalid source registry: <PROJECT>/tests/fixtures/semantics/rule_e_unknown_hook/conf/sources
+- semantics_rule_e_source: source_hook: is not a registered hook; known hooks: ibge.pib_brasil, ibge.sidra_flat
+```
+
+**(f) Partition columns exist.** A bronze table can be partitioned only by a column it will
+have: one of the normalization metadata columns (`janus_run_id`, `janus_source_id`,
+`janus_source_name`, `janus_environment`, `janus_strategy_family`, `janus_strategy_variant`,
+`ingestion_timestamp`, `ingestion_date`) or a contract column.
+
+```text
+Invalid source registry: <PROJECT>/tests/fixtures/semantics/rule_f_partition_column_unknown/conf/sources
+- semantics_rule_f_source: spark.partition_by: names column(s) that are neither normalization metadata nor contract columns: not_a_column
+```
+
+None of these rules is a phase-scope choice. Relaxing any of them would let through a config the
+runtime would fail on, so they are not behind the `ValidationPolicy` and no policy can switch them
+off.
+
+**Required fields that cannot be checked are reported, not failed.** A source that declared
+`quality.required_fields` with no contract would have nothing to check them against. Failing it
+would punish a declaration JANUS cannot verify, and accepting it silently would hide one, so
+`janus validate` prints each such source as an `unverified_required_fields` note and keeps exit
+code `0`. Since every source must declare `schema.contract`, so a registry that loads has
+no such source and the count reads `0`. A list is verified by its contract instead: rule (a) holds
+it equal to the contract's `required` columns. The twelve Portal da Transparência sources whose
+contracts are still drafts declare `quality: {}` for that reason. Their required columns come back
+in the contract when each draft is reviewed.
+
 ## Step 3: prefer config reuse over code
 
 Before touching Python, ask:
@@ -754,7 +848,7 @@ Use this checklist before considering a source "added":
 
 - The source is federal, public, and in scope.
 - The family and variant are explicit.
-- The YAML contract is complete and validated.
+- The YAML contract is complete and validated: `janus validate` exits `0`.
 - Secrets are referenced by env var name only.
 - Output paths land in raw, bronze, and metadata zones.
 - If bronze uses Iceberg, any explicit `namespace` and `table_name` are intentional and documented.

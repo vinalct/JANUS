@@ -479,6 +479,33 @@ def test_the_hook_catalog_is_a_load_input_not_registry_state() -> None:
     assert repr(injected) == repr(plain)
 
 
+def test_no_load_input_can_switch_the_pass_off() -> None:
+    """No parameter skips or narrows the pass (CLAUDE.md, order-20 reject list).
+
+    The two loaders and the constructor ``__post_init__`` runs in take exactly these inputs.
+    ``hook_ids`` is the only one the pass reads, and it changes only which ids rule (e)
+    accepts. A new input is a reviewed edit to this test, never a quiet ``semantics=False``.
+    """
+    import inspect
+
+    from janus.registry import SourceRegistry
+
+    def inputs(target: Callable[..., object]) -> set[str]:
+        return set(inspect.signature(target).parameters)
+
+    loader_inputs = {"project_root", "policy", "strategy_registry", "hook_ids"}
+    assert inputs(load_registry) == loader_inputs
+    assert inputs(SourceRegistry.load) == loader_inputs
+    assert inputs(SourceRegistry) == {
+        "project_root",
+        "app_config",
+        "sources",
+        "locations",
+        "contracts",
+        "hook_ids",
+    }
+
+
 # ---------------------------------------------------------------------------------------
 # AC-3: one rule fixture, four call sites, one assertion each
 
