@@ -460,6 +460,14 @@ def run_api_extraction(
 
         totals.absorb(extracted)
         completed_inputs.append((request_input_key, file_index))
+        # Recorded now: otherwise only the next input's first page would record it complete.
+        progress_store.save_between_inputs(
+            plan,
+            completed_inputs=completed_inputs,
+            artifact_count=len(totals.artifacts),
+            request_input_count=request_input_count,
+            raw_path_prefix=str(raw_path_prefix) if raw_path_prefix is not None else None,
+        )
 
         if request_input_logger is not None:
             request_input_logger.info(

@@ -25,9 +25,13 @@ CI_TEST_REPORT := data/metadata/test-reports/ci.xml
 DAGSTER_TESTS := tests/unit/adapters/test_dagster_adapter.py \
 	tests/integration/dagster \
 	tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
+# The release-then-resume module is session-free but for its bronze case, which needs Spark:
+# the fast job runs the rest, and `ci` requires every case, that one included.
 FAST_TEST_ARGS := tests/unit \
+	tests/integration/cli/test_dead_letter_replay.py \
 	--ignore=tests/unit/adapters/test_dagster_adapter.py \
-	--deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
+	--deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule \
+	--deselect=tests/integration/cli/test_dead_letter_replay.py::test_bronze_holds_each_input_exactly_once_after_release_and_resume
 CONTRACT_SCHEMA_TESTS := \
 	tests/unit/models/data_contracts/test_contract_loader.py::test_pinned_odcs_schema_sha256_matches_the_sidecar \
 	tests/unit/models/data_contracts/test_contract_loader.py::test_every_checked_in_contract_validates_against_the_pinned_odcs_schema \
@@ -35,6 +39,7 @@ CONTRACT_SCHEMA_TESTS := \
 FAST_REQUIRED_CLASSES := \
 	tests.unit.cli.test_validate \
 	tests.unit.registry.test_config_semantics \
+	tests.integration.cli.test_dead_letter_replay \
 	tests.unit.observability.test_acceptance_evidence \
 	tests.unit.observability.test_architecture_guardrails \
 	tests.unit.observability.test_example_queries_and_docs \
@@ -69,6 +74,7 @@ CONTRACT_ENFORCEMENT_CLASSES := \
 	tests.unit.toolchain.test_no_write_without_contract_check \
 	tests.unit.models.test_schema_config_contract_only
 SPARK_ORCHESTRATION_CLASS := tests.integration.orchestration.test_dependency_execution
+DEAD_LETTER_REPLAY_CLASS := tests.integration.cli.test_dead_letter_replay
 QUERYABLE_CLASS := tests.integration.catalog_commits.test_queryable_observability
 RUNS_SINK_CLASS := tests.integration.catalog_commits.test_runs_table_append_sink
 RUNS_DECLARATION_CLASS := tests.unit.observability.test_pyiceberg_declared_schema
@@ -257,6 +263,7 @@ ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
 	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage $(SERVICE) python -m pytest -ra -m 'not cluster' --cov=janus --cov-report=term-missing --cov-report=xml:data/coverage.xml --junitxml=$(CI_TEST_REPORT))
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(DEAD_LETTER_REPLAY_CLASS) --minimum-passed 7)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_SINK_CLASS) --minimum-passed 4)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_DECLARATION_CLASS) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(PREFLIGHT_REAL_CATALOG_CLASS) --minimum-passed 10)
