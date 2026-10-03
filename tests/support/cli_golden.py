@@ -110,14 +110,14 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "profile_local",
         ("--environment", "local"),
         "repository",
-        documented_at="Makefile:281; docs/reproducibility.md:166,247",
+        documented_at="Makefile:292; docs/reproducibility.md:166,247",
     ),
     Invocation(
         "profile_local_with_spark",
         ("--environment", "local", "--with-spark"),
         "repository",
         requires_spark=True,
-        documented_at="Makefile:278; docs/reproducibility.md:180,248",
+        documented_at="Makefile:289; docs/reproducibility.md:180,248",
     ),
     Invocation(
         "profile_cluster",

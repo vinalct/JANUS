@@ -42,15 +42,20 @@ def run_janus(argv: Sequence[str], *, env: Mapping[str, str] | None = None) -> C
 
 
 def arm_spark_tripwire(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail the test at every point a session could be built."""
     import janus.runtime.spark_lifecycle as spark_lifecycle
     import janus.utils.environment as environment
 
     def tripped(*args: object, **kwargs: object) -> None:
         pytest.fail("a session-free verb asked for a Spark session")
 
+    builder = environment.build_spark_session
     monkeypatch.setattr(spark_lifecycle.SparkSessionProvider, "get", tripped)
-    monkeypatch.setattr(spark_lifecycle, "build_spark_session", tripped)
-    monkeypatch.setattr(environment, "build_spark_session", tripped)
+    for name, module in tuple(sys.modules.items()):
+        if name.partition(".")[0] != "janus" or module is None:
+            continue
+        if vars(module).get("build_spark_session") is builder:
+            monkeypatch.setattr(module, "build_spark_session", tripped)
 
 
 def engine_modules_loaded() -> frozenset[str]:

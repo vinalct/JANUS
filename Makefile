@@ -38,7 +38,11 @@ CONTRACT_SCHEMA_TESTS := \
 	tests/unit/models/data_contracts/test_contract_loader.py::test_odcs_validator_rejects_the_hostile_fixtures
 FAST_REQUIRED_CLASSES := \
 	tests.unit.cli.test_validate \
+	tests.unit.cli.test_list \
+	tests.unit.cli.test_dead_letters_cli \
+	tests.unit.cli.test_checkpoint_cli \
 	tests.unit.registry.test_config_semantics \
+	tests.unit.toolchain.test_cli_surface \
 	tests.integration.cli.test_dead_letter_replay \
 	tests.unit.observability.test_acceptance_evidence \
 	tests.unit.observability.test_architecture_guardrails \
