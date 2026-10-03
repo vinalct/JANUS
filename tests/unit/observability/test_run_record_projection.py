@@ -931,3 +931,43 @@ def test_a_parquet_handoff_skip_rendered_by_the_quality_layer_projects_to_null(t
 
     assert skipped.outcome == "skipped"
     assert _record(tmp_path, report=_malformed_report(plan, skipped)).malformed_rows is None
+
+
+# --------------------------------------------------------------------------------------
+
+
+def test_an_operator_reset_moves_the_next_comparison_but_never_becomes_its_decision(tmp_path):
+    """`reset` is in the decision vocabulary so the history entry can say what happened.
+
+    The projected decision is the one the run's own `save` made through the observer: a
+    reset between two runs changes what the next run compares against, never what it reports.
+    """
+    from janus.checkpoints import CheckpointStore
+    from janus.lineage import RunObserver
+
+    seeded = _plan(tmp_path, run_id="before-reset")
+    RunObserver().record_success(
+        seeded,
+        _extraction_result(seeded, checkpoint_value="2026-07-03"),
+        _write_results(seeded),
+        finished_at=FINISHED_AT,
+    )
+    reset = CheckpointStore().reset(
+        seeded, "2026-07-01", operator="ops-tester", reason="backfill", recorded_at=FINISHED_AT
+    )
+    plan = _plan(tmp_path, run_id="after-reset")
+    persisted = RunObserver().record_success(
+        plan, _extraction_result(plan), _write_results(plan), finished_at=FINISHED_AT
+    )
+
+    record = RunRecord.from_run(
+        persisted.run_metadata,
+        persisted.lineage_record,
+        emitted_at=EMITTED_AT,
+        checkpoint_result=persisted.checkpoint_result,
+    )
+
+    assert reset.decision == "reset"
+    assert record.checkpoint_decision == "advanced", "2026-07-02 is behind 07-03, ahead of 07-01"
+    assert record.checkpoint_history_path == str(persisted.checkpoint_result.history_path)
+    assert Path(record.checkpoint_history_path).name == "after-reset.json"

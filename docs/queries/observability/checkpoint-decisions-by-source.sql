@@ -1,4 +1,6 @@
 -- Spark SQL. NULL checkpoint_decision rows are runs where no checkpoint write was attempted.
+-- `reset` is an operator action (`janus checkpoint set|clear`), never a run's own decision, so it
+-- adds no row here: the checkpoint history entry records it, naming the operator and the reason.
 WITH ranked_runs AS (
     SELECT
         run_id,

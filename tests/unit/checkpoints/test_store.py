@@ -13,11 +13,6 @@ from janus.registry import load_registry
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-RED_RESET = pytest.mark.xfail(
-    strict=True,
-    reason="the `reset` decision, CheckpointStore.reset/clear_state and the "
-    "public comparator names do not exist yet",
-)
 RUN_DECISIONS = frozenset({"advanced", "retained", "reused", "skipped"})
 STORED_VALUE = "2026-04-08T12:00:00Z"
 RESET_VALUE = "2026-04-01T00:00:00Z"
@@ -163,12 +158,10 @@ def test_save_never_decides_reset(tmp_path):
     assert decisions == RUN_DECISIONS
 
 
-@RED_RESET
 def test_reset_is_the_fifth_and_last_checkpoint_decision():
     assert RUN_DECISIONS | {"reset"} == SUPPORTED_CHECKPOINT_DECISIONS
 
 
-@RED_RESET
 def test_reset_moves_the_checkpoint_backwards_and_records_who_why_and_from_what(tmp_path):
     plan = _plan_with_stored_value(tmp_path)
 
@@ -198,7 +191,6 @@ def test_reset_moves_the_checkpoint_backwards_and_records_who_why_and_from_what(
     }
 
 
-@RED_RESET
 def test_reset_records_under_a_synthesized_manual_run_id(tmp_path):
     """D-12: a real-looking run id would make an operator act indistinguishable from a run."""
     plan = _plan_with_stored_value(tmp_path)
@@ -212,7 +204,6 @@ def test_reset_records_under_a_synthesized_manual_run_id(tmp_path):
     assert result.history_path.parent == MetadataZonePaths.from_plan(plan).checkpoint_history_dir
 
 
-@RED_RESET
 @pytest.mark.parametrize(
     ("next_value", "decision"),
     [("2026-04-02T00:00:00Z", "advanced"), ("2026-03-31T00:00:00Z", "retained")],
@@ -227,7 +218,6 @@ def test_the_next_run_compares_against_the_reset_value(tmp_path, next_value, dec
     assert result.decision == decision
 
 
-@RED_RESET
 def test_a_reset_to_the_stored_value_still_writes_history(tmp_path):
     """An operator's no-op is still an act, and still on the record."""
     plan = _plan_with_stored_value(tmp_path)
@@ -240,7 +230,6 @@ def test_a_reset_to_the_stored_value_still_writes_history(tmp_path):
     assert json.loads(result.history_path.read_text("utf-8"))["previous_value"] == STORED_VALUE
 
 
-@RED_RESET
 def test_a_reset_with_no_stored_state_records_no_previous_value(tmp_path):
     plan = _build_plan(tmp_path, run_id="run-checkpoint-102", started_at=RESET_AT)
 
@@ -254,7 +243,6 @@ def test_a_reset_with_no_stored_state_records_no_previous_value(tmp_path):
     assert "previous_value" not in history["metadata"]
 
 
-@RED_RESET
 def test_reset_is_skipped_for_a_source_without_a_checkpoint(tmp_path):
     plan = _build_plan(tmp_path, run_id="run-checkpoint-103", started_at=RESET_AT)
     disabled_plan = replace(plan, checkpoint_strategy="none", checkpoint_field=None)
@@ -268,7 +256,6 @@ def test_reset_is_skipped_for_a_source_without_a_checkpoint(tmp_path):
     assert not MetadataZonePaths.from_plan(plan).checkpoints_dir.exists()
 
 
-@RED_RESET
 def test_reset_refuses_a_stored_state_that_belongs_to_another_plan(tmp_path):
     plan = _plan_with_stored_value(tmp_path)
     renamed = replace(plan, checkpoint_field="published_at")
@@ -279,7 +266,69 @@ def test_reset_refuses_a_stored_state_that_belongs_to_another_plan(tmp_path):
         )
 
 
-@RED_RESET
+def test_reset_writes_its_history_before_moving_the_checkpoint(tmp_path, monkeypatch):
+    """A failed history write must leave the checkpoint where it was, never moved silently."""
+    plan = _plan_with_stored_value(tmp_path)
+    paths = MetadataZonePaths.from_plan(plan)
+    write = store_module.write_json_atomic
+
+    def refusing_history(path, payload):
+        if paths.checkpoint_history_dir in Path(path).parents:
+            raise OSError("history volume is read-only")
+        return write(path, payload)
+
+    monkeypatch.setattr(store_module, "write_json_atomic", refusing_history)
+
+    with pytest.raises(OSError, match="read-only"):
+        CheckpointStore().reset(
+            plan, RESET_VALUE, operator="ops-tester", reason="backfill", recorded_at=RESET_AT
+        )
+
+    assert json.loads(paths.checkpoint_state_path.read_text("utf-8"))["checkpoint_value"] == (
+        STORED_VALUE
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "operator", "reason"),
+    [
+        ("  ", "ops-tester", "backfill"),
+        (RESET_VALUE, " ", "backfill"),
+        (RESET_VALUE, "ops-tester", ""),
+    ],
+    ids=["value", "operator", "reason"],
+)
+def test_reset_refuses_a_blank_value_operator_or_reason_before_writing(
+    tmp_path, value, operator, reason
+):
+    plan = _plan_with_stored_value(tmp_path)
+    paths = MetadataZonePaths.from_plan(plan)
+    before = sorted(path.name for path in paths.checkpoint_history_dir.iterdir())
+
+    with pytest.raises(ValueError, match="must be a non-empty string|must not be empty"):
+        CheckpointStore().reset(plan, value, operator=operator, reason=reason, recorded_at=RESET_AT)
+
+    assert sorted(path.name for path in paths.checkpoint_history_dir.iterdir()) == before
+    assert CheckpointStore().load(plan).checkpoint_value == STORED_VALUE
+
+
+def test_an_operator_change_never_overwrites_another_history_record(tmp_path):
+    """Two changes in the same second would share a `manual-…` id; the second is refused
+    rather than allowed to erase the record of the first."""
+    plan = _plan_with_stored_value(tmp_path)
+    store = CheckpointStore()
+    first = store.reset(
+        plan, RESET_VALUE, operator="ops-tester", reason="backfill", recorded_at=RESET_AT
+    )
+    first_history = first.history_path.read_bytes()
+
+    with pytest.raises(ValueError, match="already exists"):
+        store.clear_state(plan, operator="ops-tester", reason="re-extract", recorded_at=RESET_AT)
+
+    assert first.history_path.read_bytes() == first_history
+    assert store.load(plan).checkpoint_value == RESET_VALUE
+
+
 def test_clear_state_records_what_it_forgets_and_then_deletes_it(tmp_path):
     """D-13: `stored_value` cannot be blank, so the entry carries the forgotten value twice."""
     plan = _plan_with_stored_value(tmp_path)
@@ -301,7 +350,6 @@ def test_clear_state_records_what_it_forgets_and_then_deletes_it(tmp_path):
     assert history["metadata"]["reason"] == "re-extract from scratch"
 
 
-@RED_RESET
 def test_clear_state_writes_its_history_before_deleting(tmp_path, monkeypatch):
     plan = _plan_with_stored_value(tmp_path)
     paths = MetadataZonePaths.from_plan(plan)
@@ -324,7 +372,6 @@ def test_clear_state_writes_its_history_before_deleting(tmp_path, monkeypatch):
     )
 
 
-@RED_RESET
 def test_clear_state_with_nothing_stored_writes_nothing(tmp_path):
     plan = _build_plan(tmp_path, run_id="run-checkpoint-104", started_at=RESET_AT)
 
@@ -336,7 +383,6 @@ def test_clear_state_with_nothing_stored_writes_nothing(tmp_path):
     assert not MetadataZonePaths.from_plan(plan).checkpoints_dir.exists()
 
 
-@RED_RESET
 def test_the_comparator_is_public_and_the_private_names_still_resolve():
     """D-14: `checkpoint set` validates through the store's own comparator, not a similar one."""
     from janus.checkpoints import compare_checkpoint_values, normalize_checkpoint_value

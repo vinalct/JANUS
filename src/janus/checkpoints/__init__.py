@@ -13,6 +13,8 @@ from janus.checkpoints.store import (
     CheckpointState,
     CheckpointStore,
     CheckpointWriteResult,
+    compare_checkpoint_values,
+    normalize_checkpoint_value,
 )
 
 __all__ = [
@@ -28,4 +30,6 @@ __all__ = [
     "DeadLetterStore",
     "ExtractionProgressStore",
     "can_continue_after_dead_letter",
+    "compare_checkpoint_values",
+    "normalize_checkpoint_value",
 ]
