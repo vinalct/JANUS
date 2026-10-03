@@ -1,4 +1,5 @@
-usage: janus [-h] {run,run-all,contract,validate,list,dead-letters} ...
+usage: janus [-h]
+             {run,run-all,contract,validate,list,dead-letters,checkpoint} ...
 
 Validate JANUS configuration, plan or execute sources, and author data
 contracts. Each verb takes its own options; `janus <verb> --help` lists them.
@@ -11,7 +12,7 @@ options:
   -h, --help            show this help message and exit
 
 verbs:
-  {run,run-all,contract,validate,list,dead-letters}
+  {run,run-all,contract,validate,list,dead-letters,checkpoint}
     run                 Validate runtime configuration, plan one source, or
                         execute it. The default when the first argument is an
                         option.
@@ -25,3 +26,5 @@ verbs:
     dead-letters        Inspect, release or replay the items a source's runs
                         gave up on. Nothing runs unless replay is given
                         --execute.
+    checkpoint          Show where a source's next run starts, or set or clear
+                        it with a recorded reason. Nothing runs.

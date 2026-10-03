@@ -7,7 +7,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from janus.cli import dead_letters, list_sources, run, run_all, validate
+from janus.cli import checkpoint, dead_letters, list_sources, run, run_all, validate
 from janus.cli.common import build_parent_parser
 
 PROG = "janus"
@@ -97,6 +97,13 @@ def verbs() -> tuple[Verb, ...]:
             "unless replay is given --execute.",
             dead_letters.configure,
             dead_letters.dead_letters_command,
+        ),
+        Verb(
+            "checkpoint",
+            "Show where a source's next run starts, or set or clear it with a recorded "
+            "reason. Nothing runs.",
+            checkpoint.configure,
+            checkpoint.checkpoint_command,
         ),
     )
 

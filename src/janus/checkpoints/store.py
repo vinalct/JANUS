@@ -124,6 +124,36 @@ class CheckpointHistoryEntry:
         if self.recorded_at.tzinfo is None or self.recorded_at.utcoffset() is None:
             raise ValueError("recorded_at must be timezone-aware")
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> CheckpointHistoryEntry:
+        """Read one history file back under the invariants it was written with."""
+        metadata = payload.get("metadata") or {}
+        if not isinstance(metadata, Mapping):
+            raise ValueError("checkpoint history metadata must be a mapping")
+        advanced = payload.get("advanced")
+        if not isinstance(advanced, bool):
+            raise ValueError("advanced must be a boolean")
+        previous_value = payload.get("previous_value")
+        return cls(
+            run_id=_require_string(payload, "run_id"),
+            source_id=_require_string(payload, "source_id"),
+            strategy_family=_require_string(payload, "strategy_family"),
+            strategy_variant=_require_string(payload, "strategy_variant"),
+            checkpoint_field=_require_string(payload, "checkpoint_field"),
+            checkpoint_strategy=_require_string(payload, "checkpoint_strategy"),
+            candidate_value=_require_string(payload, "candidate_value"),
+            stored_value=_require_string(payload, "stored_value"),
+            previous_value=(
+                None if previous_value is None else _require_string(payload, "previous_value")
+            ),
+            recorded_at=_parse_datetime(_require_string(payload, "recorded_at"), "recorded_at"),
+            decision=_require_string(payload, "decision"),
+            advanced=advanced,
+            metadata=_freeze_string_mapping(
+                {str(key): str(value) for key, value in metadata.items()}
+            ),
+        )
+
     def metadata_as_dict(self) -> dict[str, str]:
         return dict(self.metadata)
 

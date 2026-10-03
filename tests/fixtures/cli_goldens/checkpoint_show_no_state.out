@@ -1,0 +1,5 @@
+no checkpoint recorded for ibge_pib_brasil
+  field     sidra_period_code  strategy  max_value
+  state     data/metadata/ibge/pib_brasil/checkpoints/current.json (absent)
+
+no checkpoint history recorded

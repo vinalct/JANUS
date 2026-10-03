@@ -67,6 +67,7 @@ class CapturedInvocation:
 _BRONZE_TABLE = "bronze_inep.censo_escolar_microdados"
 _LIST_TASK = "docs/tasks/operator-command-surface/list_command.md"
 _DEAD_LETTERS_TASK = "docs/tasks/operator-command-surface/dead_letters_command.md"
+_CHECKPOINT_TASK = "docs/tasks/operator-command-surface/checkpoint_command.md"
 
 INVOCATIONS: tuple[Invocation, ...] = (
     Invocation(
@@ -355,6 +356,24 @@ INVOCATIONS: tuple[Invocation, ...] = (
         ("dead-letters", "list", "--source-id", "ibge_pib_brasil"),
         "repository",
         documented_at=f"{_DEAD_LETTERS_TASK}:69-70",
+    ),
+    Invocation(
+        "checkpoint_help",
+        ("checkpoint", "--help"),
+        "repository",
+        documented_at=f"{_CHECKPOINT_TASK}:36-42",
+    ),
+    Invocation(
+        "checkpoint_set_help",
+        ("checkpoint", "set", "--help"),
+        "repository",
+        documented_at=f"{_CHECKPOINT_TASK}:70-86,137-141",
+    ),
+    Invocation(
+        "checkpoint_show_no_state",
+        ("checkpoint", "show", "--source-id", "ibge_pib_brasil"),
+        "repository",
+        documented_at=f"{_CHECKPOINT_TASK}:63",
     ),
 )
 

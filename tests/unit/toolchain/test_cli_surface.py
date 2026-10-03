@@ -39,16 +39,6 @@ FORBIDDEN_MODULE_SCOPE_IMPORTS = ("pyspark", "pyiceberg", "pyarrow", "dagster")
 
 CLI_TIME_BUDGET_SECONDS = 2.0
 
-RED_SURFACE = pytest.mark.xfail(
-    strict=True,
-    reason="the surface is complete only once the dispatcher and "
-    "every verb module exist; whichever lands last lifts this",
-)
-
-
-def _red(what: str) -> pytest.MarkDecorator:
-    return pytest.mark.xfail(strict=True, reason=f"{what} does not exist yet")
-
 
 def _cli_modules() -> dict[str, Path]:
     return {path.stem: path for path in sorted(CLI_ROOT.glob("*.py")) if path.stem != "__init__"}
@@ -149,7 +139,6 @@ def test_the_sweep_finds_the_cli_package_and_its_entry() -> None:
     assert {"common", "run_all", "contract"} <= modules.keys()
 
 
-@RED_SURFACE
 def test_the_sweep_covers_every_module_of_the_operator_surface() -> None:
     assert _cli_modules().keys() >= EXPECTED_CLI_MODULES
 
@@ -158,7 +147,6 @@ def test_the_sweep_covers_every_module_of_the_operator_surface() -> None:
 # 2. One registration path
 
 
-@RED_SURFACE
 def test_every_verb_is_registered_in_the_dispatcher() -> None:
     from janus.cli.dispatch import verbs
 
@@ -316,8 +304,6 @@ def test_the_engine_detector_does_not_flag_a_lazy_or_type_only_import() -> None:
 # 4. Session-free verbs (NFR-2): `dead-letters replay --execute` and `--verify-checksums`
 #    are absent on purpose — they inherit the executor's lifecycle unchanged.
 
-_CHECKPOINT = _red("the `checkpoint` verb")
-
 SESSION_FREE_FORMS = (
     pytest.param(("validate",), id="validate"),
     pytest.param(("list", "--graph"), id="list"),
@@ -331,18 +317,15 @@ SESSION_FREE_FORMS = (
     ),
     pytest.param(
         ("checkpoint", "show", "--source-id", CLEAN_PRODUCER),
-        marks=_CHECKPOINT,
         id="checkpoint show",
     ),
     pytest.param(
         ("checkpoint", "set", "--source-id", CLEAN_PRODUCER, "--to", "2026-09-01T00:00:00Z",
          "--reason", "sweep"),
-        marks=_CHECKPOINT,
         id="checkpoint set",
     ),
     pytest.param(
         ("checkpoint", "clear", "--source-id", CLEAN_PRODUCER, "--reason", "sweep"),
-        marks=_CHECKPOINT,
         id="checkpoint clear",
     ),
 )
@@ -399,7 +382,6 @@ def test_the_verb_never_acquires_a_spark_session(
         ),
         pytest.param(
             ("checkpoint", "show", "--source-id", "ibge_pib_brasil"),
-            marks=_CHECKPOINT,
             id="checkpoint show",
         ),
     ],

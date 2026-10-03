@@ -1,0 +1,34 @@
+usage: janus checkpoint set [-h] [--environment ENVIRONMENT]
+                            [--project-root PROJECT_ROOT]
+                            --source-id SOURCE_ID --to VALUE --reason REASON
+                            [--format {table,json}]
+
+Move the checkpoint to a value and write a history entry naming the previous
+value, the operator and the reason.
+
+options:
+  -h, --help            show this help message and exit
+  --environment ENVIRONMENT
+                        Environment profile name under conf/environments
+                        without the .yaml suffix.
+  --project-root PROJECT_ROOT
+                        Project root used to resolve conf/ and data/ paths.
+  --source-id SOURCE_ID
+                        Configured source_id whose checkpoint this acts on;
+                        disabled sources included.
+  --to VALUE            The new checkpoint value, as the checkpoint field
+                        holds it. Join a value that begins with '-' to the
+                        option with '='.
+  --reason REASON       Why the checkpoint moves. Recorded in the history file
+                        with the operator ($JANUS_OPERATOR, else $USER).
+                        Required: every state change is recorded.
+  --format {table,json}
+                        Output format. Defaults to table.
+
+The value is taken as written, never coerced, and must keep the kind of the
+stored value (a timestamp, a number or text): the next run compares the two to
+decide whether it advanced, and across kinds it would compare text. With
+nothing stored, any non-empty value is accepted. The previous value and the
+direction of the move are printed before anything is written. The next run
+advances from the value set: a higher value moves the checkpoint on, a lower
+one is retained.
