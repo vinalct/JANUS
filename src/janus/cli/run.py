@@ -104,6 +104,14 @@ def parse_run_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "re-uses already-fetched raw files. Has no effect if no progress file exists."
         ),
     )
+    parser.add_argument(
+        "--verify-checksums",
+        action="store_true",
+        help=(
+            "Re-hash every rediscovered raw artifact and refuse to write bronze if any file "
+            "disagrees with the checksum sidecar written at extraction time."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.execute and not args.source_id:
@@ -116,6 +124,8 @@ def parse_run_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--execute and --ingest-raw-to-bronze cannot be used together")
     if args.include_disabled and not args.source_id:
         parser.error("--include-disabled requires --source-id")
+    if args.verify_checksums and not args.ingest_raw_to_bronze:
+        parser.error("--verify-checksums requires --ingest-raw-to-bronze")
 
     return args
 
@@ -225,6 +235,7 @@ def run_command(argv: Sequence[str] | None = None) -> int:
                 config,
                 bronze_table=args.bronze_table,
                 logger=execution_logger,
+                verify_checksums=args.verify_checksums,
             )
             summary["raw_to_bronze_run"] = raw_to_bronze_run.to_summary()
             record_spark_session(summary, spark_provider)

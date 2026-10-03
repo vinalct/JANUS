@@ -169,6 +169,14 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
         "_rediscover_raw_artifacts",
         "_sha256",
     ),
+    "janus.scripts.checksums": (
+        "RawArtifactIntegrityError",
+        "_artifact_format_for_path",
+        "_read_sidecar_checksum",
+        "_resolve_raw_checksum",
+        "_sha256",
+    ),
+    "janus.writers": ("RawArtifactIntegrityError", "SIDECAR_SUFFIX"),
 }
 
 

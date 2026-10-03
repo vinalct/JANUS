@@ -51,6 +51,11 @@ from janus.writers import (
 
 _VERSIONED_DOWNLOAD_PATH_PARTS = 3
 
+#: Extraction-metadata key a verified replay records. It is written only when verification
+#: was asked for, so an absent key means "not asked". That is the honest statement for every
+#: zone replayed before verification existed.
+CHECKSUMS_VERIFIED_KEY = "checksums_verified"
+
 
 def _build_extraction_result_from_raw(
     planned_run: PlannedRun,
@@ -60,6 +65,7 @@ def _build_extraction_result_from_raw(
     *,
     raw_run_id: str | None = None,
     temporary_raw_root: Path | None = None,
+    verify_checksums: bool = False,
 ) -> ExtractionResult:
     if isinstance(planned_run.strategy, CatalogStrategy):
         return _build_catalog_extraction_result_from_raw(
@@ -69,10 +75,11 @@ def _build_extraction_result_from_raw(
             storage_layout,
             raw_run_id=raw_run_id,
             temporary_raw_root=temporary_raw_root,
+            verify_checksums=verify_checksums,
         )
 
     raw_plan = _plan_with_active_raw_root(plan, run_id=raw_run_id)
-    raw_artifacts = _rediscover_raw_artifacts(raw_plan)
+    raw_artifacts = _rediscover_raw_artifacts(raw_plan, verify_checksums=verify_checksums)
     raw_artifacts = _rehydrate_file_raw_artifacts(
         planned_run,
         raw_plan,
@@ -87,8 +94,13 @@ def _build_extraction_result_from_raw(
             "raw_to_bronze": "true",
             "rediscovered_raw_artifact_count": str(len(raw_artifacts)),
             "raw_artifact_root": raw_plan.raw_output.path,
+            **_verification_metadata(verify_checksums),
         },
     )
+
+
+def _verification_metadata(verify_checksums: bool) -> dict[str, str]:
+    return {CHECKSUMS_VERIFIED_KEY: "true"} if verify_checksums else {}
 
 
 def _rediscover_raw_artifacts(
@@ -243,6 +255,7 @@ def _build_catalog_extraction_result_from_raw(
     *,
     raw_run_id: str | None = None,
     temporary_raw_root: Path | None = None,
+    verify_checksums: bool = False,
 ) -> ExtractionResult:
     strategy = planned_run.strategy
     assert isinstance(strategy, CatalogStrategy)
@@ -261,6 +274,7 @@ def _build_catalog_extraction_result_from_raw(
         raw_plan,
         storage_layout,
         request_input_count=len(request_inputs),
+        verify_checksums=verify_checksums,
     )
     if not raw_artifacts:
         raise FileNotFoundError(f"No raw artifacts were found under {raw_plan.raw_output.path}")
@@ -317,6 +331,7 @@ def _build_catalog_extraction_result_from_raw(
             "groups_extracted": str(len(normalized_records["group"])),
             "datasets_extracted": str(len(normalized_records["dataset"])),
             "resources_extracted": str(len(normalized_records["resource"])),
+            **_verification_metadata(verify_checksums),
         },
     )
 
@@ -338,6 +353,7 @@ def _rediscover_catalog_raw_artifacts(
     storage_layout: StorageLayout,
     *,
     request_input_count: int,
+    verify_checksums: bool = False,
 ) -> tuple[ExtractedArtifact, ...]:
     artifacts: list[ExtractedArtifact] = []
     for request_input_index in range(1, request_input_count + 1):
@@ -347,13 +363,14 @@ def _rediscover_catalog_raw_artifacts(
                 storage_layout,
                 request_input_index,
                 request_input_count,
+                verify_checksums=verify_checksums,
             )
         )
 
     if artifacts:
         return tuple(artifacts)
 
-    return _rediscover_raw_artifacts(plan)
+    return _rediscover_raw_artifacts(plan, verify_checksums=verify_checksums)
 
 
 def _catalog_base_request(plan: ExecutionPlan) -> ApiRequest:

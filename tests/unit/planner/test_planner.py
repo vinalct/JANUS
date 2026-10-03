@@ -660,9 +660,11 @@ def test_main_ingests_existing_raw_artifacts_into_requested_bronze_table(
             }
 
     def fake_ingest_raw_to_bronze(
-        planned_run, spark_provider, environment_config, *, bronze_table, logger
+        planned_run, spark_provider, environment_config, *, bronze_table, logger, verify_checksums
     ):
         assert planned_run.plan.source.source_id == "cli_source"
+        # Verification is opt-in: the plain replay form never asks for it.
+        assert verify_checksums is False
         assert environment_config["name"] == "local"
         # Replay converges on the live shape: the CLI hands over a provider, and
         # rediscovery/rehydration runs before anything is built.
@@ -736,9 +738,10 @@ def test_main_raw_to_bronze_omits_the_spark_summary_when_no_session_was_started(
             return {"status": "succeeded", "raw_artifact_count": 0}
 
     def fake_ingest_raw_to_bronze(
-        planned_run, spark_provider, environment_config, *, bronze_table, logger
+        planned_run, spark_provider, environment_config, *, bronze_table, logger, verify_checksums
     ):
         del planned_run, spark_provider, environment_config, bronze_table, logger
+        del verify_checksums
         # An empty raw zone: rehydration fails before the materializer needs Spark.
         return FakeRawToBronzeRun()
 
@@ -784,9 +787,9 @@ def test_main_raw_to_bronze_stops_the_session_when_the_run_raises(tmp_path, monk
             stopped.append(True)
 
     def fake_ingest_raw_to_bronze(
-        planned_run, spark_provider, environment_config, *, bronze_table, logger
+        planned_run, spark_provider, environment_config, *, bronze_table, logger, verify_checksums
     ):
-        del planned_run, environment_config, bronze_table, logger
+        del planned_run, environment_config, bronze_table, logger, verify_checksums
         spark_provider.get()
         raise RuntimeError("escaped the loader guard")
 

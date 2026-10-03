@@ -2,6 +2,7 @@ usage: janus [-h] [--environment ENVIRONMENT] [--project-root PROJECT_ROOT]
              [--with-spark] [--source-id SOURCE_ID] [--run-id RUN_ID]
              [--started-at STARTED_AT] [--execute] [--ingest-raw-to-bronze]
              [--bronze-table BRONZE_TABLE] [--include-disabled] [--resume]
+             [--verify-checksums]
 
 Validate JANUS runtime configuration, plan one source, or execute one
 configured source through the framework runtime. Use `janus run-all [options]`
@@ -40,3 +41,6 @@ options:
                         written by a previous partial run and re-uses already-
                         fetched raw files. Has no effect if no progress file
                         exists.
+  --verify-checksums    Re-hash every rediscovered raw artifact and refuse to
+                        write bronze if any file disagrees with the checksum
+                        sidecar written at extraction time.
