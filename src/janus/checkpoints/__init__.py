@@ -1,5 +1,7 @@
 from janus.checkpoints.dead_letters import (
     DeadLetterEntry,
+    DeadLetterReleaseError,
+    DeadLetterReleaseRecord,
     DeadLetterState,
     DeadLetterStore,
     can_continue_after_dead_letter,
@@ -20,6 +22,8 @@ __all__ = [
     "CheckpointStore",
     "CheckpointWriteResult",
     "DeadLetterEntry",
+    "DeadLetterReleaseError",
+    "DeadLetterReleaseRecord",
     "DeadLetterState",
     "DeadLetterStore",
     "ExtractionProgressStore",

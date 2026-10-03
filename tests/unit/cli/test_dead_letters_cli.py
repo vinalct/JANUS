@@ -26,11 +26,6 @@ RED_VERB = pytest.mark.xfail(
     strict=True,
     reason="janus.cli.dispatch registers no `dead-letters` verb yet",
 )
-RED_OPERATOR = pytest.mark.xfail(
-    strict=True,
-    reason="janus.cli.operator (resolve_operator, manual_run_id) does not "
-    "exist yet",
-)
 
 KEYS = ("window_start=2026-09-01", "window_start=2026-09-02")
 OPERATOR = {OPERATOR_ENV: "ops-tester"}
@@ -352,7 +347,6 @@ def test_list_and_release_never_acquire_a_spark_session(
 # operator identity 
 
 
-@RED_OPERATOR
 @pytest.mark.parametrize(
     ("environment", "expected"),
     [
@@ -375,7 +369,6 @@ def test_the_operator_is_janus_operator_then_user_then_unknown(
     assert resolve_operator() == expected
 
 
-@RED_OPERATOR
 @pytest.mark.parametrize("operator", ["ops-tester", "../../etc/passwd", "Ana Maria / ops"])
 def test_a_manual_run_id_is_path_safe_whatever_the_operator_is_called(operator: str) -> None:
     from janus.cli.operator import manual_run_id
@@ -383,3 +376,28 @@ def test_a_manual_run_id_is_path_safe_whatever_the_operator_is_called(operator: 
     run_id = manual_run_id(operator, now=datetime(2026, 9, 21, 9, 15, 3, tzinfo=UTC))
 
     assert re.fullmatch(r"manual-20260921T091503Z-[a-z0-9-]+", run_id), run_id
+
+
+@pytest.mark.parametrize("reason", [None, "", "   "], ids=["absent", "empty", "blank"])
+def test_a_missing_or_blank_reason_is_an_argument_error(
+    capsys: pytest.CaptureFixture[str], reason: str | None
+) -> None:
+    import argparse
+
+    from janus.cli.operator import require_reason
+
+    parser = argparse.ArgumentParser(prog="janus dead-letters release")
+
+    with pytest.raises(SystemExit) as refused:
+        require_reason(parser, reason)
+
+    assert refused.value.code == 2
+    assert "--reason" in capsys.readouterr().err
+
+
+def test_a_reason_is_kept_without_its_surrounding_whitespace() -> None:
+    import argparse
+
+    from janus.cli.operator import require_reason
+
+    assert require_reason(argparse.ArgumentParser(), "  upstream fixed \n") == "upstream fixed"

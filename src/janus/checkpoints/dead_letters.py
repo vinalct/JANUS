@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -119,6 +119,48 @@ class DeadLetterState:
         }
 
 
+class DeadLetterReleaseError(ValueError):
+    """A release that cannot be applied as asked. Raised before anything is written."""
+
+
+@dataclass(frozen=True, slots=True)
+class DeadLetterReleaseRecord:
+    """One operator release: what was let go, by whom, why, and what remained."""
+
+    source_id: str
+    released_at: datetime
+    operator: str
+    reason: str
+    released_entries: tuple[DeadLetterEntry, ...]
+    remaining_item_keys: tuple[str, ...]
+    state_run_id: str
+
+    def __post_init__(self) -> None:
+        if not self.source_id.strip():
+            raise ValueError("source_id must not be empty")
+        if not self.operator.strip():
+            raise ValueError("operator must not be empty")
+        if not self.reason.strip():
+            raise ValueError("reason must not be empty")
+        if not self.state_run_id.strip():
+            raise ValueError("state_run_id must not be empty")
+        if not self.released_entries:
+            raise ValueError("released_entries must not be empty")
+        if self.released_at.tzinfo is None or self.released_at.utcoffset() is None:
+            raise ValueError("released_at must be timezone-aware")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_id": self.source_id,
+            "released_at": self.released_at.isoformat(),
+            "operator": self.operator,
+            "reason": self.reason,
+            "state_run_id": self.state_run_id,
+            "released_entries": [entry.to_dict() for entry in self.released_entries],
+            "remaining_item_keys": list(self.remaining_item_keys),
+        }
+
+
 @dataclass(slots=True)
 class DeadLetterStore:
     """Persist dead-lettered execution items so resume can skip them safely."""
@@ -175,6 +217,65 @@ class DeadLetterStore:
         write_json_atomic(self.path(plan), state.to_dict())
         return state
 
+    def release(
+        self,
+        plan: ExecutionPlan,
+        *,
+        item_keys: Sequence[str] | None = None,
+        operator: str,
+        reason: str,
+        released_at: datetime | None = None,
+    ) -> DeadLetterReleaseRecord:
+        """Remove exactly these entries, atomically, and record the removal.
+
+        Deletes `current.json` when nothing remains, so `load` returns None and a
+        resuming run sees no skip set — the same end state `clear` produces, reached
+        without forgetting the entries that were not named. `item_keys=None` releases
+        every entry.
+
+        The history record is written first. If that write fails, the state is untouched
+        and the release did not happen; the reverse order could drop entries with no record
+        of who let them go. Every refusal is raised before anything is written.
+        """
+        resolved_released_at = released_at or datetime.now(tz=UTC)
+        if resolved_released_at.tzinfo is None or resolved_released_at.utcoffset() is None:
+            raise ValueError("released_at must be timezone-aware")
+
+        state = self.load(plan)
+        if state is None or not state.entries:
+            raise DeadLetterReleaseError(
+                f"No dead letters are recorded for source {plan.source.source_id!r} "
+                f"at {self.path(plan)}; there is nothing to release"
+            )
+
+        released, remaining = _split_released_entries(state, item_keys)
+        record = DeadLetterReleaseRecord(
+            source_id=state.source_id,
+            released_at=resolved_released_at,
+            operator=operator.strip(),
+            reason=reason.strip(),
+            released_entries=released,
+            remaining_item_keys=tuple(entry.item_key for entry in remaining),
+            state_run_id=state.run_id,
+        )
+        history_path = self.history_path(plan, record)
+        if history_path.exists():
+            raise DeadLetterReleaseError(
+                f"A release of dead letters recorded by run {state.run_id!r} is already on "
+                f"record at {history_path}; release again in a later second rather than "
+                "overwrite it"
+            )
+
+        write_json_atomic(history_path, record.to_dict())
+        if remaining:
+            write_json_atomic(
+                self.path(plan),
+                replace(state, updated_at=resolved_released_at, entries=remaining).to_dict(),
+            )
+        else:
+            self.clear(plan)
+        return record
+
     def clear(self, plan: ExecutionPlan) -> None:
         path = self.path(plan)
         if path.exists():
@@ -182,6 +283,57 @@ class DeadLetterStore:
 
     def path(self, plan: ExecutionPlan) -> Path:
         return MetadataZonePaths.from_plan(plan).dead_letter_state_path
+
+    def history_path(self, plan: ExecutionPlan, record: DeadLetterReleaseRecord) -> Path:
+        """`dead_letters/history/<released_at>-<state run id>.json`.
+
+        The run id passes through the planner's `normalize_run_id_segment`, so a state file
+        whose `run_id` holds a slash or `..` cannot steer the record out of the directory.
+        The import is deferred: the planner sits above this store (it binds the strategies
+        that record dead letters), and `janus.checkpoints` is imported by modules that must
+        never load it.
+        """
+        from janus.planner import normalize_run_id_segment
+
+        timestamp = record.released_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+        name = f"{timestamp}-{normalize_run_id_segment(record.state_run_id)}"
+        return MetadataZonePaths.from_plan(plan).dead_letter_history_path(name)
+
+
+def _split_released_entries(
+    state: DeadLetterState, item_keys: Sequence[str] | None
+) -> tuple[tuple[DeadLetterEntry, ...], tuple[DeadLetterEntry, ...]]:
+    """Split the entries into (released, remaining), both in their recorded order.
+
+    A key that is not recorded refuses the whole release: releasing the rest of a request
+    that held a typo is how an operator lets go of the wrong entry.
+    """
+    if item_keys is None:
+        return state.entries, ()
+
+    requested = tuple(dict.fromkeys(key.strip() for key in item_keys))
+    if not requested or "" in requested:
+        raise ValueError(
+            "item_keys must name at least one non-empty key; pass None to release every entry"
+        )
+
+    unknown = [key for key in requested if key not in state.item_keys]
+    if unknown:
+        raise DeadLetterReleaseError(
+            f"Cannot release dead letters for source {state.source_id!r}: unknown item "
+            f"key(s) {_render_keys(unknown)}; recorded item keys: "
+            f"{_render_keys(entry.item_key for entry in state.entries)}"
+        )
+
+    released_keys = frozenset(requested)
+    return (
+        tuple(entry for entry in state.entries if entry.item_key in released_keys),
+        tuple(entry for entry in state.entries if entry.item_key not in released_keys),
+    )
+
+
+def _render_keys(keys: Iterable[str]) -> str:
+    return ", ".join(repr(key) for key in keys)
 
 
 def _freeze_string_mapping(values: Mapping[str, str] | None) -> tuple[tuple[str, str], ...]:

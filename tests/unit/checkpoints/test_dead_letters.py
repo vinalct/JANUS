@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -12,11 +12,6 @@ from janus.registry import load_registry
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-RED_RELEASE = pytest.mark.xfail(
-    strict=True,
-    reason="DeadLetterStore.release, DeadLetterReleaseError and the "
-    "dead_letters/history/ location do not exist yet",
-)
 RELEASE_RUN_ID = "run-dead-letter-release"
 RELEASED_AT = datetime(2026, 9, 20, 8, 30, tzinfo=UTC)
 SEEDED_KEYS = ("orgao_codigo=1", "orgao_codigo=2", "orgao_codigo=3")
@@ -148,7 +143,6 @@ def _file_state(path: Path) -> tuple[bytes, int]:
     return path.read_bytes(), path.stat().st_mtime_ns
 
 
-@RED_RELEASE
 def test_metadata_zone_paths_name_the_dead_letter_history_location(tmp_path):
     """Mirrors `checkpoint_history_dir`, so both histories share one containment rule."""
     paths = MetadataZonePaths.from_plan(
@@ -159,7 +153,6 @@ def test_metadata_zone_paths_name_the_dead_letter_history_location(tmp_path):
     assert paths.dead_letter_history_path("x") == paths.dead_letters_dir / "history" / "x.json"
 
 
-@RED_RELEASE
 def test_release_removes_exactly_the_named_key_and_keeps_the_rest_in_order(tmp_path):
     plan, store = _seed_three(tmp_path)
 
@@ -182,7 +175,6 @@ def test_release_removes_exactly_the_named_key_and_keeps_the_rest_in_order(tmp_p
     assert record.state_run_id == RELEASE_RUN_ID
 
 
-@RED_RELEASE
 def test_release_writes_a_history_record_with_the_whole_entries_operator_and_reason(tmp_path):
     """The released entries are kept whole: their error is the only record of *why* they were
     given up on, and `current.json` is about to lose it."""
@@ -212,7 +204,6 @@ def test_release_writes_a_history_record_with_the_whole_entries_operator_and_rea
     assert released["metadata"] == {"request_url": "https://example.invalid/orgaos?orgao_codigo=2"}
 
 
-@RED_RELEASE
 def test_releasing_every_key_deletes_the_state_file_like_clear_does(tmp_path):
     """D-15: `load` returns None, so a resuming run sees no skip set."""
     plan, store = _seed_three(tmp_path)
@@ -228,7 +219,6 @@ def test_releasing_every_key_deletes_the_state_file_like_clear_does(tmp_path):
     assert len(_history_files(plan)) == 1
 
 
-@RED_RELEASE
 def test_releasing_an_unknown_key_names_both_sets_and_changes_nothing(tmp_path):
     """A typo must never release the wrong entry, or half of a request."""
     from janus.checkpoints import DeadLetterReleaseError
@@ -252,7 +242,6 @@ def test_releasing_an_unknown_key_names_both_sets_and_changes_nothing(tmp_path):
     assert _history_files(plan) == []
 
 
-@RED_RELEASE
 def test_releasing_with_no_recorded_state_is_an_error_and_writes_nothing(tmp_path):
     from janus.checkpoints import DeadLetterReleaseError
 
@@ -266,7 +255,6 @@ def test_releasing_with_no_recorded_state_is_an_error_and_writes_nothing(tmp_pat
     assert not MetadataZonePaths.from_plan(plan).dead_letters_dir.exists()
 
 
-@RED_RELEASE
 def test_the_history_record_is_written_before_the_state_is_touched(tmp_path, monkeypatch):
     """If the record cannot be written, the release did not happen: entries never leave
     `current.json` without a trace of who let them go."""
@@ -294,7 +282,6 @@ def test_the_history_record_is_written_before_the_state_is_touched(tmp_path, mon
     assert _file_state(store.path(plan)) == before
 
 
-@RED_RELEASE
 def test_a_state_run_id_cannot_steer_the_history_file_out_of_its_directory(tmp_path):
     """The file name passes through the planner's `normalize_run_id_segment`."""
     plan, store = _seed_three(tmp_path)
@@ -311,7 +298,6 @@ def test_a_state_run_id_cannot_steer_the_history_file_out_of_its_directory(tmp_p
     assert ".." not in history.name and "/" not in history.name
 
 
-@RED_RELEASE
 def test_released_at_must_be_timezone_aware(tmp_path):
     plan, store = _seed_three(tmp_path)
     before = _file_state(store.path(plan))
@@ -328,7 +314,6 @@ def test_released_at_must_be_timezone_aware(tmp_path):
     assert _file_state(store.path(plan)) == before
 
 
-@RED_RELEASE
 def test_a_released_key_is_recorded_afresh_the_next_time_it_fails(tmp_path):
     """`record` stays idempotent only for keys still present; a released key that fails
     again must produce a new entry, not be swallowed."""
@@ -354,3 +339,136 @@ def test_a_released_key_is_recorded_afresh_the_next_time_it_fails(tmp_path):
         "orgao_codigo=2",
     ]
     assert "again" in state.entries[-1].error_message
+
+
+def test_a_crash_while_rewriting_the_state_leaves_the_old_state_whole(tmp_path, monkeypatch):
+    """The rewrite is a `replace` of a finished temp file: a crash before it lands leaves the
+    previous `current.json` intact, and the history record (written first) says what was
+    meant, so a retry is safe."""
+    plan, store = _seed_three(tmp_path)
+    before = _file_state(store.path(plan))
+    state_path = store.path(plan)
+    replace = Path.replace
+
+    def crashing_replace(self, target):
+        if Path(target) == state_path:
+            raise OSError("power lost mid-write")
+        return replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", crashing_replace)
+
+    with pytest.raises(OSError, match="power lost"):
+        store.release(
+            plan,
+            item_keys=["orgao_codigo=2"],
+            operator="ops-tester",
+            reason="upstream fixed",
+            released_at=RELEASED_AT,
+        )
+
+    assert _file_state(state_path) == before
+    assert store.load(plan).item_keys == frozenset(SEEDED_KEYS)
+    (history,) = _history_files(plan)
+    assert json.loads(history.read_text("utf-8"))["remaining_item_keys"] == [
+        "orgao_codigo=1",
+        "orgao_codigo=3",
+    ]
+
+
+def test_a_second_release_in_the_same_second_never_overwrites_the_first_record(tmp_path):
+    """Both releases name `<second>-<state run id>.json`; the second is refused rather than
+    erase the only record of the first."""
+    from janus.checkpoints import DeadLetterReleaseError
+
+    plan, store = _seed_three(tmp_path)
+    store.release(
+        plan,
+        item_keys=["orgao_codigo=1"],
+        operator="ops-tester",
+        reason="first",
+        released_at=RELEASED_AT,
+    )
+    (history,) = _history_files(plan)
+    first_record = history.read_bytes()
+    state_before = _file_state(store.path(plan))
+
+    with pytest.raises(DeadLetterReleaseError, match="already on record"):
+        store.release(
+            plan,
+            item_keys=["orgao_codigo=2"],
+            operator="ops-tester",
+            reason="second",
+            released_at=RELEASED_AT.replace(microsecond=500_000),
+        )
+
+    assert history.read_bytes() == first_record
+    assert _file_state(store.path(plan)) == state_before
+
+
+def test_a_state_recorded_for_another_source_is_refused_and_left_alone(tmp_path):
+    """Rule 1: `load` disowns a file whose `source_id` is not the plan's, and so does
+    `release`."""
+    from janus.checkpoints import DeadLetterReleaseError
+
+    plan, store = _seed_three(tmp_path)
+    foreign = json.loads(store.path(plan).read_text(encoding="utf-8"))
+    foreign["source_id"] = "some_other_source"
+    store.path(plan).write_text(json.dumps(foreign), encoding="utf-8")
+    before = _file_state(store.path(plan))
+
+    with pytest.raises(DeadLetterReleaseError, match=plan.source.source_id):
+        store.release(
+            plan,
+            item_keys=None,
+            operator="ops-tester",
+            reason="wrong file",
+            released_at=RELEASED_AT,
+        )
+
+    assert _file_state(store.path(plan)) == before
+    assert _history_files(plan) == []
+
+
+@pytest.mark.parametrize("item_keys", [[], ["  "]], ids=["empty", "blank"])
+def test_an_empty_selection_is_not_a_release_of_everything(tmp_path, item_keys):
+    """Only `None` means every entry; an empty list is a caller bug, never a wildcard."""
+    plan, store = _seed_three(tmp_path)
+    before = _file_state(store.path(plan))
+
+    with pytest.raises(ValueError, match="pass None to release every entry"):
+        store.release(
+            plan,
+            item_keys=item_keys,
+            operator="ops-tester",
+            reason="empty",
+            released_at=RELEASED_AT,
+        )
+
+    assert _file_state(store.path(plan)) == before
+    assert _history_files(plan) == []
+
+
+def test_a_release_through_a_later_plan_keeps_the_recording_run_as_the_author(tmp_path):
+    """D-15, as the command will exercise it: the operator's plan carries a fresh run id,
+    and neither the state nor the history file name may take it. The file name is UTC
+    whatever zone `released_at` arrives in."""
+    plan, store = _seed_three(tmp_path)
+    operator_plan = _build_plan(
+        tmp_path, run_id="run-operator-plan", started_at=datetime(2026, 9, 20, 8, 0, tzinfo=UTC)
+    )
+    brasilia = timezone(timedelta(hours=-3))
+
+    record = store.release(
+        operator_plan,
+        item_keys=["orgao_codigo=3"],
+        operator="ops-tester",
+        reason="upstream fixed",
+        released_at=datetime(2026, 9, 20, 5, 30, tzinfo=brasilia),
+    )
+
+    remaining = store.load(operator_plan)
+    assert remaining is not None and remaining.run_id == RELEASE_RUN_ID
+    assert record.state_run_id == RELEASE_RUN_ID
+    (history,) = _history_files(plan)
+    assert history.name == f"20260920T083000Z-{RELEASE_RUN_ID}.json"
+    assert store.history_path(operator_plan, record) == history
