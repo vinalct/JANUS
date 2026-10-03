@@ -6,7 +6,7 @@ import copy
 import hashlib
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,7 +17,7 @@ import yaml
 
 from janus.lineage import RunObserver
 from janus.normalizers import NORMALIZATION_METADATA_COLUMNS
-from janus.orchestration import BatchPlanner, BatchPlanRequest
+from janus.orchestration import BatchPlan, BatchPlanner, BatchPlanRequest, PlannedSource
 from janus.planner import HookCatalog, Planner, StrategyBinding, StrategyCatalog
 from janus.quality import QualityGate, ValidationReportStore
 from janus.registry import load_registry
@@ -26,7 +26,7 @@ from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.strategies.api import ApiResponse, ApiStrategy
 from janus.strategies.catalog import CatalogStrategy
 from janus.utils.storage import StorageLayout
-from tests.support.contracts import DECLARED_CONTRACT_PATH
+from tests.support.contracts import DECLARED_CONTRACT_PATH, with_registry_contract
 from tests.support.orchestration import GraphCase, SourceSpec, source_documents, write_project
 from tests.support.orchestration_capture import EmptyHandoffHook
 from tests.support.spark_sessions import (
@@ -40,7 +40,8 @@ from tests.support.spark_sessions import (
 PLANNED_AT = datetime(2026, 9, 15, 12, tzinfo=UTC)
 A_ROWS = ({"id": "a-2", "value": 20}, {"id": "a-1", "value": 10})
 # The shared declaration keyed on ``id`` without requiring it: the quality gate's config
-# check refuses that after the commit, which is the quality failure form below.
+# check refuses that after the commit, which is the quality failure form below. The loader
+# refuses it too, so it reaches the plan only after planning (``_with_unrequired_key``).
 UNREQUIRED_KEY_CONTRACT_PATH = "conf/contracts/test/unrequired_key.yaml"
 C_ROWS = ({"id": "c-1", "value": 30},)
 
@@ -605,13 +606,16 @@ def _execute_graph(
             if item["property"] == "janus.enforcement"
         )["value"] = contract_enforcement
     contract_path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
+    # The loader refuses a key that is not required (semantic rule (b)), so the snapshot is
+    # loaded with ``id`` required; the unrequired declaration replaces it after planning.
     unrequired_key = copy.deepcopy(contract)
-    next(
-        prop for prop in unrequired_key["schema"][0]["properties"] if prop["name"] == "id"
-    )["primaryKey"] = True
-    (root / UNREQUIRED_KEY_CONTRACT_PATH).write_text(
+    key = next(prop for prop in unrequired_key["schema"][0]["properties"] if prop["name"] == "id")
+    key.update(primaryKey=True, required=True)
+    unrequired_key_path = root / UNREQUIRED_KEY_CONTRACT_PATH
+    unrequired_key_path.write_text(
         yaml.safe_dump(unrequired_key, sort_keys=False), encoding="utf-8"
     )
+    del key["required"]
     environment_config = {
         "name": "local",
         "storage": {
@@ -654,7 +658,7 @@ def _execute_graph(
         strategy_catalog=StrategyCatalog(bindings),
         hook_catalog=HookCatalog(tuple(hooks)),
     )
-    registry = load_registry(root)
+    registry = load_registry(root, hook_ids=frozenset(hook_id for hook_id, _hook in hooks))
     plan = BatchPlanner(planner=planner).plan(
         BatchPlanRequest.create(
             environment="local",
@@ -664,6 +668,10 @@ def _execute_graph(
         ),
         registry=registry,
     )
+    unrequired_key_path.write_text(
+        yaml.safe_dump(unrequired_key, sort_keys=False), encoding="utf-8"
+    )
+    plan = _with_unrequired_key(plan)
     observer = _LifecycleObserver(active_sources=active_sources, events=events)
     quality = _LifecycleQualityGate(active_sources, events)
     executor = SourceExecutor(observer=observer, quality_gate=quality)
@@ -691,6 +699,23 @@ def _execute_graph(
         events=events,
         tables=_table_identifiers(specs),
     )
+
+
+def _with_unrequired_key(plan: BatchPlan) -> BatchPlan:
+    
+    def reattach(source: PlannedSource) -> PlannedSource:
+        planned_run = source.planned_run
+        if (
+            planned_run is None
+            or planned_run.plan.source_config.schema.contract != UNREQUIRED_KEY_CONTRACT_PATH
+        ):
+            return source
+        return replace(
+            source,
+            planned_run=replace(planned_run, plan=with_registry_contract(planned_run.plan)),
+        )
+
+    return replace(plan, sources=tuple(reattach(source) for source in plan.sources))
 
 
 def _table_suffix(root: Path) -> str:

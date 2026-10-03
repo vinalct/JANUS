@@ -30,6 +30,7 @@ x-janus-service: &janus-service
 x-janus-environment: &janus-environment
   PYTHONPATH: /workspace/src:/workspace
   MYPY_CACHE_DIR: /tmp/janus-mypy-cache
+  RUFF_CACHE_DIR: /tmp/janus-ruff-cache
   PYTEST_ADDOPTS: "-o cache_dir=/tmp/janus-pytest-cache"
   JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
   JANUS_CA_BUNDLE: /workspace/conf/certs/rnpicpedugr46ovtlsca2025.pem
