@@ -1,6 +1,6 @@
 usage: janus validate [-h] [--environment ENVIRONMENT]
                       [--project-root PROJECT_ROOT] [--source-id SOURCE_ID]
-                      [--format {text,json}]
+                      [--format {text,json}] [--prepare]
 
 Load the source registry, resolve its graph, and plan every source, without
 running any.
@@ -16,3 +16,11 @@ options:
                         Plan only this source; the semantic pass still covers
                         the whole registry.
   --format {text,json}  Report format. Defaults to text.
+  --prepare             With --environment, also create the runtime
+                        directories the profile resolves. Off by default:
+                        validate creates nothing.
+
+With --environment, the named profile is checked as well: its catalog, its
+OpenLineage transport, the Spark options it renders and the runtime paths it
+resolves. No Spark session is started, and no directory is created unless
+--prepare is given.

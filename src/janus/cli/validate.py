@@ -8,6 +8,15 @@ runs once per source through one `Planner` against the one snapshot, always with
 one source of thirty-one. A source that cannot be planned is that source's issue; its
 peers are still planned and reported.
 
+With `--environment` the named profile is checked too, in the order a run reads it: load,
+runtime paths, OpenLineage transport, Spark options. Nothing is created unless `--prepare`
+asks for it, and no session is built: `build_spark_options` is a mapping, not a JVM. The
+two halves are independent. A refusal from either is printed to stderr verbatim, profile
+first, and a refusal leaves stdout empty, so a report only ever describes a registry and a
+profile that both resolved. Spark options are reported by key only, never by value: an
+option value is where a catalog credential lives, and a report that prints none cannot
+leak one.
+
 The report is deterministic: no run id, timestamp, duration, or absolute path outside
 `--project-root`; sources are sorted by id and issues by (source, path, message). Its
 markers are ASCII (`ok`, `FAIL`, `note`). That is decided here, once: a glyph cannot be
@@ -25,7 +34,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from janus.cli.common import format_runtime_permission_error
 from janus.models.source_config import SourceConfig
+from janus.observability.openlineage import (
+    FileOpenLineageTransport,
+    HttpOpenLineageTransport,
+    OpenLineageTransport,
+    resolve_openlineage_settings,
+    resolve_openlineage_transport,
+)
 from janus.planner import PlannedRun, Planner, PlannerError, PlanningRequest
 from janus.registry import (
     SourceNotFoundError,
@@ -33,10 +50,29 @@ from janus.registry import (
     load_registry,
     unverified_required_fields,
 )
+from janus.utils.catalog_options import (
+    ICEBERG_CATALOG_DB_PATH_KEY,
+    RuntimeLocation,
+    resolve_catalog_type,
+)
+from janus.utils.environment import (
+    build_spark_options,
+    environment_config_path,
+    load_environment_config,
+    materialize_runtime_paths,
+    prepare_runtime,
+)
 
 ISSUES_FOUND = 2
 VALIDATE_INSTANT = datetime(1970, 1, 1, tzinfo=UTC)
 PLAN_ISSUE_PATH = "plan"
+
+_EPILOG = (
+    "With --environment, the named profile is checked as well: its catalog, its "
+    "OpenLineage transport, the Spark options it renders and the runtime paths it "
+    "resolves. No Spark session is started, and no directory is created unless "
+    "--prepare is given."
+)
 
 
 def configure(parser: argparse.ArgumentParser) -> None:
@@ -50,22 +86,102 @@ def configure(parser: argparse.ArgumentParser) -> None:
         default="text",
         help="Report format. Defaults to text.",
     )
+    parser.add_argument(
+        "--prepare",
+        action="store_true",
+        help="With --environment, also create the runtime directories the profile "
+        "resolves. Off by default: validate creates nothing.",
+    )
+    parser.epilog = _EPILOG
+    # The parent defaults --environment for every verb. Here the flag also asks for the
+    # profile half, so an absent flag must stay visible: its default moves to
+    # `planning_environment`, which only feeds a run context that is never printed.
+    parser.set_defaults(planning_environment=parser.get_default("environment"), environment=None)
 
 
 def validate_command(args: argparse.Namespace) -> int:
-    """Exit 0 when the registry loads and every selected source plans, 2 otherwise."""
+    """Exit 0 when everything resolves and every selected source plans, 2 otherwise."""
+    project_root = args.project_root.resolve()
+    if args.prepare and args.environment is None:
+        return _refuse(["--prepare requires --environment"])
+
+    refusals: list[str] = []
+    environment: dict[str, Any] | None = None
+    if args.environment is not None:
+        try:
+            environment = _validate_environment(
+                args.environment, project_root, prepare=args.prepare
+            )
+        except PermissionError as exc:
+            refusals.append(format_runtime_permission_error(exc))
+        except (FileNotFoundError, ValueError) as exc:
+            refusals.append(str(exc))
+        except KeyError as exc:
+            refusals.append(f"Environment config is incomplete: {exc}")
+
     try:
-        registry = load_registry(args.project_root.resolve())
+        registry = load_registry(project_root)
         selected = _selected_sources(registry, args.source_id)
     except (FileNotFoundError, SourceNotFoundError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return ISSUES_FOUND
+        return _refuse([*refusals, str(exc)])
+    if refusals:
+        return _refuse(refusals)
 
     planner = _build_planner()
-    sources = [_plan_source(planner, registry, source, args.environment) for source in selected]
+    planning_environment = args.environment or args.planning_environment
+    sources = [_plan_source(planner, registry, source, planning_environment) for source in selected]
     report = _build_report(registry, sources)
+    if environment is not None:
+        report["environment"] = environment
     print(_render_json(report) if args.format == "json" else _render_text(report))
     return ISSUES_FOUND if report["issues"] else 0
+
+
+def _refuse(messages: Sequence[str]) -> int:
+    for message in messages:
+        print(message, file=sys.stderr)
+    return ISSUES_FOUND
+
+
+def _validate_environment(name: str, project_root: Path, *, prepare: bool) -> dict[str, Any]:
+    """The profile half, step by step as a run reads it; the first refusal raises.
+
+    D-19: the dry run resolves every location with `materialize_runtime_paths`, which
+    creates nothing; only `--prepare` reaches `prepare_runtime` and its fallback.
+    """
+    config = load_environment_config(name, project_root)
+    resolve_paths = prepare_runtime if prepare else materialize_runtime_paths
+    paths = resolve_paths(config, project_root)
+    transport = resolve_openlineage_transport(resolve_openlineage_settings(config), paths)
+    options = build_spark_options(config, paths)
+    iceberg = config.get("spark", {}).get("iceberg")
+    catalog_type = resolve_catalog_type(iceberg) if isinstance(iceberg, dict) and iceberg else None
+    config_path = environment_config_path(name, project_root)
+    return {
+        "name": config.get("name", name),
+        "config_path": _project_relative(config_path, project_root),
+        "catalog_type": catalog_type,
+        "openlineage_transport": transport.kind,
+        "openlineage_target": _transport_target(transport, project_root),
+        "spark_option_keys": sorted(options),
+        "paths": {key: _location(value, project_root) for key, value in paths.items()},
+        "prepared": prepare,
+    }
+
+
+def _transport_target(transport: OpenLineageTransport, project_root: Path) -> str | None:
+    """Where events would go: the events directory, or the URL redacted as the transport
+    itself redacts it. Never a token: the HTTP target carries none, and auth is a header."""
+    if isinstance(transport, FileOpenLineageTransport):
+        return _project_relative(transport.directory, project_root)
+    if isinstance(transport, HttpOpenLineageTransport):
+        return transport.target
+    return None
+
+
+def _location(value: RuntimeLocation, project_root: Path) -> str:
+    """A path relative to the project root; a location URI or warehouse name verbatim."""
+    return _project_relative(value, project_root) if isinstance(value, Path) else value
 
 
 def _build_planner() -> Planner:
@@ -183,9 +299,33 @@ def _render_text(report: dict[str, Any]) -> str:
                 "to verify them against"
             )
             lines.append(f"          ({', '.join(note['fields'])})")
+    if "environment" in report:
+        lines.extend(("", *_render_environment(report["environment"])))
     failing = sum(1 for source in sources if source["issues"])
     summary = (
         f"{counts['issues']} issue(s) in {failing} source(s); "
         f"{counts['unverified_required_fields']} unverified required-field declaration(s)"
     )
     return "\n".join([*lines, "", summary])
+
+
+def _render_environment(environment: dict[str, Any]) -> list[str]:
+    paths = environment["paths"]
+    catalog = environment["catalog_type"] or "none"
+    if ICEBERG_CATALOG_DB_PATH_KEY in paths:
+        catalog += f"  (database file: {paths[ICEBERG_CATALOG_DB_PATH_KEY]})"
+    elif environment["catalog_type"] is None:
+        catalog += "  (no spark.iceberg block)"
+    openlineage = environment["openlineage_transport"]
+    if environment["openlineage_target"] is not None:
+        openlineage += f"  ({environment['openlineage_target']})"
+    created = "[materialized: --prepare]" if environment["prepared"] else "[not created: dry run]"
+    width = max((len(key) for key in paths), default=0)
+    return [
+        f"environment: {environment['name']}  ({environment['config_path']})",
+        f"  catalog        {catalog}",
+        f"  openlineage    {openlineage}",
+        f"  spark options  {len(environment['spark_option_keys'])} keys",
+        f"  paths          {created}",
+        *(f"    {key:<{width}}  {value}" for key, value in paths.items()),
+    ]

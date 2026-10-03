@@ -4,14 +4,18 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
+from janus.cli.common import format_runtime_permission_error
 from janus.observability.openlineage import resolve_openlineage_settings
 from janus.registry import load_registry
 from janus.utils.environment import (
+    ICEBERG_CATALOG_DB_PATH_KEY,
     build_spark_options,
     load_environment_config,
     materialize_runtime_paths,
 )
+from janus.utils.logging import REDACTED_VALUE, redact_url
 from tests.support.operator_cli import arm_spark_tripwire, engine_modules_loaded, run_janus
 from tests.support.semantics_fixtures import (
     CLEAN,
@@ -26,16 +30,13 @@ from tests.support.semantics_fixtures import (
     tree_snapshot,
 )
 
-RED_ENVIRONMENT = pytest.mark.xfail(
-    strict=True,
-    reason="`janus validate --environment/--prepare` does not exist yet",
-)
-
 REST_OVERLAY = REPO_ROOT / "conf" / "environments" / "cluster-rest.env.example"
 SECRET = "do-not-print-me"
 # Both report formats name the profile they read. Every verb parses --environment through
 # the parent parser, so without this a profile-half claim also holds for the registry half.
 LOCAL_PROFILE = "conf/environments/local.yaml"
+# The options a catalog credential would render as; an unset `${VAR:-}` renders none of them.
+CREDENTIAL_OPTIONS = (".jdbc.user", ".jdbc.password", ".token", ".credential", ".scope")
 
 
 def _project(tmp_path: Path, name: str = CLEAN) -> Path:
@@ -363,7 +364,6 @@ def test_the_registry_half_reads_no_profile_and_writes_nothing(tmp_path: Path) -
 # The profile half
 
 
-@RED_ENVIRONMENT
 @pytest.mark.parametrize(
     ("profile", "overlay", "catalog_type"),
     [("local", None, "jdbc"), ("cluster", None, "jdbc"), ("cluster", REST_OVERLAY, "rest")],
@@ -378,7 +378,11 @@ def test_shipped_profiles_validate_clean(
     install_profile(root, profile)
 
     result = _validate(
-        root, "--environment", profile, "--format", "json",
+        root,
+        "--environment",
+        profile,
+        "--format",
+        "json",
         env=_overlay(overlay) if overlay else None,
     )
     environment = json.loads(result.stdout)["environment"]
@@ -388,9 +392,11 @@ def test_shipped_profiles_validate_clean(
     assert environment["catalog_type"] == catalog_type
     assert environment["openlineage_transport"] == "file"
     assert environment["prepared"] is False
+    assert [
+        key for key in environment["spark_option_keys"] if key.endswith(CREDENTIAL_OPTIONS)
+    ] == []
 
 
-@RED_ENVIRONMENT
 def test_a_profile_without_catalog_type_exits_2_with_the_existing_message(
     tmp_path: Path,
 ) -> None:
@@ -406,7 +412,6 @@ def test_a_profile_without_catalog_type_exits_2_with_the_existing_message(
     assert str(refused.value) in result.stderr
 
 
-@RED_ENVIRONMENT
 def test_an_unrecognised_openlineage_transport_exits_2_with_the_existing_message(
     tmp_path: Path,
 ) -> None:
@@ -421,7 +426,6 @@ def test_an_unrecognised_openlineage_transport_exits_2_with_the_existing_message
     assert str(refused.value) in result.stderr
 
 
-@RED_ENVIRONMENT
 def test_a_profile_without_an_openlineage_block_reports_disabled(tmp_path: Path) -> None:
     """absent means disabled, which is legitimate; only a wrong value is an error."""
     root = _project(tmp_path)
@@ -433,7 +437,6 @@ def test_a_profile_without_an_openlineage_block_reports_disabled(tmp_path: Path)
     assert json.loads(result.stdout)["environment"]["openlineage_transport"] == "disabled"
 
 
-@RED_ENVIRONMENT
 def test_validate_creates_no_directory_without_prepare(tmp_path: Path) -> None:
     """D-19: the dry run resolves every runtime location and creates none of them."""
     root = _project(tmp_path)
@@ -447,7 +450,6 @@ def test_validate_creates_no_directory_without_prepare(tmp_path: Path) -> None:
     assert tree_snapshot(root) == before
 
 
-@RED_ENVIRONMENT
 def test_validate_prepare_materializes_the_runtime_paths(tmp_path: Path) -> None:
     root = _project(tmp_path)
     install_profile(root, "local")
@@ -460,7 +462,6 @@ def test_validate_prepare_materializes_the_runtime_paths(tmp_path: Path) -> None
         assert (root / "data" / zone).is_dir()
 
 
-@RED_ENVIRONMENT
 @pytest.mark.parametrize("output_format", ["text", "json"])
 def test_no_credential_value_reaches_either_output_format(
     output_format: str, tmp_path: Path
@@ -480,7 +481,6 @@ def test_no_credential_value_reaches_either_output_format(
     assert SECRET not in result.output
 
 
-@RED_ENVIRONMENT
 def test_validate_with_environment_never_acquires_a_spark_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -492,3 +492,292 @@ def test_validate_with_environment_never_acquires_a_spark_session(
 
     assert result.exit_code == 0, result.output
     assert LOCAL_PROFILE in result.stdout
+
+
+def _environment(result) -> dict:
+    return json.loads(result.stdout)["environment"]
+
+
+def test_the_text_report_gains_the_environment_section_before_the_verdict(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    install_profile(root, "local")
+    config = load_environment_config("local", root)
+    paths = materialize_runtime_paths(config, root)
+    options = build_spark_options(config, paths)
+    rendered = {key: Path(value).relative_to(root).as_posix() for key, value in paths.items()}
+    events = f"{rendered['metadata_dir']}/{config['observability']['openlineage']['path']}"
+    width = max(len(key) for key in rendered)
+
+    lines = _validate(root, "--environment", "local").stdout.splitlines()
+    start = lines.index(f"environment: local  ({LOCAL_PROFILE})")
+
+    assert lines[start - 1] == ""
+    assert lines[start + 1 : start + 5] == [
+        f"  catalog        jdbc  (database file: {rendered[ICEBERG_CATALOG_DB_PATH_KEY]})",
+        f"  openlineage    file  ({events})",
+        f"  spark options  {len(options)} keys",
+        "  paths          [not created: dry run]",
+    ]
+    assert lines[start + 5 : -2] == [
+        f"    {key:<{width}}  {value}" for key, value in rendered.items()
+    ]
+    assert lines[-2:] == [
+        "",
+        "0 issue(s) in 0 source(s); 0 unverified required-field declaration(s)",
+    ]
+
+
+def test_the_environment_object_has_the_documented_shape_and_leaves_the_rest_alone(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    install_profile(root, "local")
+    config = load_environment_config("local", root)
+    options = build_spark_options(config, materialize_runtime_paths(config, root))
+
+    with_profile = json.loads(_validate(root, "--environment", "local", "--format", "json").stdout)
+    without = json.loads(_validate(root, "--format", "json").stdout)
+    environment = with_profile.pop("environment")
+
+    assert environment.keys() == {
+        "name",
+        "config_path",
+        "catalog_type",
+        "openlineage_transport",
+        "openlineage_target",
+        "spark_option_keys",
+        "paths",
+        "prepared",
+    }
+    assert (environment["name"], environment["config_path"]) == ("local", LOCAL_PROFILE)
+    assert environment["spark_option_keys"] == sorted(options)
+    assert "environment" not in without
+    assert with_profile == without
+
+
+@pytest.mark.parametrize(
+    ("profile", "overlay", "warehouse"),
+    [
+        ("local", None, "data/bronze/iceberg"),
+        ("cluster", None, "s3://janus-bronze/warehouse"),
+        ("cluster", REST_OVERLAY, "janus"),
+    ],
+    ids=["local", "cluster", "cluster-rest"],
+)
+def test_paths_are_project_relative_and_locations_verbatim(
+    profile: str, overlay: Path | None, warehouse: str, tmp_path: Path
+) -> None:
+    """A location URI or a catalog-managed warehouse name is never resolved as a path."""
+    root = _project(tmp_path)
+    install_profile(root, profile)
+
+    result = _validate(
+        root,
+        "--environment",
+        profile,
+        "--format",
+        "json",
+        env=_overlay(overlay) if overlay else None,
+    )
+    environment = _environment(result)
+    paths = environment["paths"]
+
+    assert result.exit_code == 0, result.output
+    assert paths["iceberg_warehouse_dir"] == warehouse
+    assert (paths["raw_dir"], paths["metadata_dir"]) == ("data/raw", "data/metadata")
+    assert (ICEBERG_CATALOG_DB_PATH_KEY in paths) == (profile == "local")
+    assert str(root.resolve()) not in json.dumps(environment)
+
+
+def test_catalog_auth_is_reported_by_key_and_never_by_value(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    install_profile(root, "cluster")
+    exported = {
+        **_overlay(REST_OVERLAY),
+        "JANUS_ICEBERG_CATALOG_TOKEN": f"{SECRET}-token",
+        "JANUS_ICEBERG_CATALOG_CREDENTIAL": f"{SECRET}-credential",
+    }
+
+    data = _validate(root, "--environment", "cluster", "--format", "json", env=exported)
+    text = _validate(root, "--environment", "cluster", env=exported)
+
+    assert (data.exit_code, text.exit_code) == (0, 0)
+    assert {"spark.sql.catalog.janus.token", "spark.sql.catalog.janus.credential"} <= set(
+        _environment(data)["spark_option_keys"]
+    )
+    assert SECRET not in data.output + text.output
+
+
+def test_an_http_openlineage_target_is_reported_redacted(tmp_path: Path) -> None:
+    """The transport's own `redact_url` rendering; the bearer token is a header, never shown."""
+    root = _project(tmp_path)
+    install_profile(root, "local")
+    exported = {
+        "JANUS_OPENLINEAGE_TRANSPORT": "http",
+        "JANUS_OPENLINEAGE_URL": "https://lineage.example.invalid",
+        "JANUS_OPENLINEAGE_ENDPOINT": f"api/v1/lineage?api_key={SECRET}-query",
+        "JANUS_OPENLINEAGE_API_KEY": f"{SECRET}-token",
+    }
+    target = redact_url(f"https://lineage.example.invalid/api/v1/lineage?api_key={SECRET}-query")
+
+    data = _validate(root, "--environment", "local", "--format", "json", env=exported)
+    text = _validate(root, "--environment", "local", env=exported)
+    environment = _environment(data)
+
+    assert REDACTED_VALUE in target
+    assert (environment["openlineage_transport"], environment["openlineage_target"]) == (
+        "http",
+        target,
+    )
+    assert f"  openlineage    http  ({target})" in text.stdout.splitlines()
+    assert SECRET not in data.output + text.output
+
+
+def test_an_events_path_outside_the_metadata_zone_is_refused_not_disabled(tmp_path: Path) -> None:
+    """Inside a run this degrades to no lineage at all; validate is where it is caught."""
+    root = _project(tmp_path)
+    install_profile(root, "local")
+
+    result = _validate(
+        root, "--environment", "local", env={"JANUS_OPENLINEAGE_EVENTS_DIR": "../../escaped"}
+    )
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert result.stderr.startswith(
+        "The OpenLineage events path must stay inside the metadata zone: "
+    )
+
+
+def test_a_profile_missing_a_required_key_exits_2_naming_it(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    profile = yaml.safe_load(install_profile(root, "local").read_text(encoding="utf-8"))
+    del profile["storage"]
+    incomplete = root / "conf" / "environments" / "incomplete.yaml"
+    incomplete.write_text(yaml.safe_dump(profile), encoding="utf-8")
+
+    result = _validate(root, "--environment", "incomplete")
+
+    assert (result.exit_code, result.stdout) == (2, "")
+    assert result.stderr == "Environment config is incomplete: 'root_dir'\n"
+
+
+def test_both_refusals_are_reported_profile_first_and_no_report_is_printed(
+    tmp_path: Path,
+) -> None:
+    """The halves are independent: a broken profile does not hide a broken registry."""
+    root = _project(tmp_path, "graph_cycle")
+    install_profile(root, "broken-openlineage", source=ENVIRONMENT_FIXTURES)
+    with pytest.raises(ValueError) as profile_refused:
+        resolve_openlineage_settings(load_environment_config("broken-openlineage", root))
+    with pytest.raises(ValueError) as registry_refused:
+        load_registry(root)
+
+    result = _validate(root, "--environment", "broken-openlineage")
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert result.stderr == f"{profile_refused.value}\n{registry_refused.value}\n"
+
+
+def test_a_refused_profile_prints_no_report_even_over_a_clean_registry(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    install_profile(root, "broken-catalog", source=ENVIRONMENT_FIXTURES)
+
+    result = _validate(root, "--environment", "broken-catalog", "--format", "json")
+
+    assert (result.exit_code, result.stdout) == (2, "")
+    assert result.stderr.count("\n") == 1
+
+
+def test_prepare_without_environment_exits_2_and_creates_nothing(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    before = tree_snapshot(root)
+
+    result = _validate(root, "--prepare")
+
+    assert (result.exit_code, result.stdout) == (2, "")
+    assert result.stderr == "--prepare requires --environment\n"
+    assert tree_snapshot(root) == before
+
+
+def test_prepare_creates_every_directory_the_dry_run_resolves(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    install_profile(root, "local")
+
+    dry = _environment(_validate(root, "--environment", "local", "--format", "json"))
+    expected = {
+        root / (Path(value).parent if key == ICEBERG_CATALOG_DB_PATH_KEY else Path(value))
+        for key, value in dry["paths"].items()
+    }
+    assert expected and not any(path.exists() for path in expected)
+
+    prepared = _validate(root, "--environment", "local", "--prepare", "--format", "json")
+
+    assert prepared.exit_code == 0, prepared.output
+    assert _environment(prepared) == {**dry, "prepared": True}
+    assert all(path.is_dir() for path in expected)
+
+
+def test_an_unwritable_path_under_prepare_is_explained_as_run_explains_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from janus.cli import validate
+
+    denied = PermissionError(13, "Permission denied", "/workspace/data/raw")
+
+    def refusing(config: dict, project_root: Path) -> dict:
+        raise denied
+
+    monkeypatch.setattr(validate, "prepare_runtime", refusing)
+    root = _project(tmp_path)
+    install_profile(root, "local")
+
+    result = _validate(root, "--environment", "local", "--prepare")
+
+    assert (result.exit_code, result.stdout) == (2, "")
+    assert result.stderr == f"{format_runtime_permission_error(denied)}\n"
+
+
+@pytest.mark.parametrize("output_format", ["text", "json"])
+def test_the_profile_half_is_byte_identical_across_runs(output_format: str, tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    install_profile(root, "local")
+
+    first = _validate(root, "--environment", "local", "--format", output_format)
+    second = _validate(root, "--environment", "local", "--format", output_format)
+
+    assert first.exit_code == 0, first.output
+    assert first == second
+
+
+@pytest.mark.parametrize(
+    ("argv", "planned_in"),
+    [((), "local"), (("--environment", "cluster"), "cluster")],
+    ids=["registry-half", "with-profile"],
+)
+def test_the_plan_step_keeps_the_parent_default_environment(
+    argv: tuple[str, ...], planned_in: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An absent --environment skips the profile half without changing what is planned."""
+    from janus.cli import validate
+    from janus.planner import Planner
+
+    environments: list[str] = []
+
+    class RecordingPlanner:
+        def __init__(self) -> None:
+            self._planner = Planner()
+
+        def plan(self, request, *, registry=None):
+            environments.append(request.environment)
+            return self._planner.plan(request, registry=registry)
+
+    monkeypatch.setattr(validate, "_build_planner", RecordingPlanner)
+    root = _project(tmp_path)
+    install_profile(root, "cluster")
+
+    result = _validate(root, *argv)
+
+    assert result.exit_code == 0, result.output
+    assert environments and set(environments) == {planned_in}

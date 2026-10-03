@@ -282,15 +282,20 @@ def build_openlineage_transport(
     """
     try:
         settings = resolve_openlineage_settings(config)
-        return _transport_for(settings, resolved_paths)
+        return resolve_openlineage_transport(settings, resolved_paths)
     except Exception as exc:
         return _disabled_by_profile_error(exc, logger)
 
 
-def _transport_for(
+def resolve_openlineage_transport(
     settings: OpenLineageSettings,
     resolved_paths: Mapping[str, RuntimeLocation],
 ) -> OpenLineageTransport:
+    """The transport resolved settings select, raising where a run would degrade.
+
+    Outside a run — `janus validate` — an events path that climbs out of the metadata zone
+    is a profile error to report, not a reason to emit nothing.
+    """
     if settings.file is not None:
         return FileOpenLineageTransport(
             directory=_resolve_events_directory(settings.file.directory, resolved_paths)

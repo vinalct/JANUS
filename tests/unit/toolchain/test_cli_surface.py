@@ -316,7 +316,6 @@ def test_the_engine_detector_does_not_flag_a_lazy_or_type_only_import() -> None:
 # 4. Session-free verbs (NFR-2): `dead-letters replay --execute` and `--verify-checksums`
 #    are absent on purpose — they inherit the executor's lifecycle unchanged.
 
-_ENVIRONMENT = _red("`validate --environment`")
 _LIST = _red("the `list` verb")
 _DEAD_LETTERS = _red("the `dead-letters` verb")
 _CHECKPOINT = _red("the `checkpoint` verb")
@@ -396,9 +395,7 @@ def test_the_verb_never_acquires_a_spark_session(
     "argv",
     [
         pytest.param(("validate",), id="validate"),
-        pytest.param(
-            ("validate", "--environment", "local"), marks=_ENVIRONMENT, id="validate --environment"
-        ),
+        pytest.param(("validate", "--environment", "local"), id="validate --environment"),
         pytest.param(("list",), marks=_LIST, id="list"),
         pytest.param(
             ("dead-letters", "list", "--source-id", "ibge_pib_brasil"),
