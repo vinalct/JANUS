@@ -66,6 +66,7 @@ class CapturedInvocation:
 
 _BRONZE_TABLE = "bronze_inep.censo_escolar_microdados"
 _LIST_TASK = "docs/tasks/operator-command-surface/list_command.md"
+_DEAD_LETTERS_TASK = "docs/tasks/operator-command-surface/dead_letters_command.md"
 
 INVOCATIONS: tuple[Invocation, ...] = (
     Invocation(
@@ -336,6 +337,24 @@ INVOCATIONS: tuple[Invocation, ...] = (
         ("list", "--tag", "ibge"),
         "repository",
         documented_at=f"{_LIST_TASK}:154-155",
+    ),
+    Invocation(
+        "dead_letters_help",
+        ("dead-letters", "--help"),
+        "repository",
+        documented_at=f"{_DEAD_LETTERS_TASK}:42-50",
+    ),
+    Invocation(
+        "dead_letters_replay_help",
+        ("dead-letters", "replay", "--help"),
+        "repository",
+        documented_at=f"{_DEAD_LETTERS_TASK}:78-86,154-155",
+    ),
+    Invocation(
+        "dead_letters_list_no_state",
+        ("dead-letters", "list", "--source-id", "ibge_pib_brasil"),
+        "repository",
+        documented_at=f"{_DEAD_LETTERS_TASK}:69-70",
     ),
 )
 

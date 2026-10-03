@@ -472,3 +472,68 @@ def test_a_release_through_a_later_plan_keeps_the_recording_run_as_the_author(tm
     (history,) = _history_files(plan)
     assert history.name == f"20260920T083000Z-{RELEASE_RUN_ID}.json"
     assert store.history_path(operator_plan, record) == history
+
+
+# ---------------------------------------------------------------------------------------
+
+
+def test_a_preview_is_the_record_a_release_writes_and_writes_nothing(tmp_path):
+    """`replay` without `--execute` prints this record: it must be the one `release` writes."""
+    plan, store = _seed_three(tmp_path)
+    state_before = _file_state(store.path(plan))
+    arguments = {
+        "item_keys": ["orgao_codigo=2"],
+        "operator": "ops-tester",
+        "reason": "upstream fixed",
+        "released_at": RELEASED_AT,
+        "metadata": {"source": "cli", "replay": "true"},
+    }
+
+    preview = store.preview_release(plan, **arguments)
+
+    assert _file_state(store.path(plan)) == state_before
+    assert _history_files(plan) == []
+    assert store.release(plan, **arguments) == preview
+    (history,) = _history_files(plan)
+    assert json.loads(history.read_text(encoding="utf-8")) == preview.to_dict()
+
+
+def test_a_preview_refuses_exactly_what_a_release_refuses(tmp_path):
+    plan, store = _seed_three(tmp_path)
+    arguments = {"operator": "ops-tester", "reason": "typo", "released_at": RELEASED_AT}
+
+    for operation in (store.preview_release, store.release):
+        with pytest.raises(dead_letters_module.DeadLetterReleaseError, match="orgao_codigo=9"):
+            operation(plan, item_keys=["orgao_codigo=9"], **arguments)
+
+    store.clear(plan)
+    for operation in (store.preview_release, store.release):
+        with pytest.raises(dead_letters_module.DeadLetterReleaseError, match="nothing to release"):
+            operation(plan, item_keys=None, **arguments)
+    assert _history_files(plan) == []
+
+
+def test_the_history_record_carries_the_callers_metadata(tmp_path):
+    """The record always has a `metadata` mapping, empty when the caller adds nothing, so a
+    reader of the history directory meets one shape."""
+    plan, store = _seed_three(tmp_path)
+
+    store.release(
+        plan,
+        item_keys=["orgao_codigo=1"],
+        operator="ops-tester",
+        reason="first",
+        released_at=RELEASED_AT,
+    )
+    store.release(
+        plan,
+        item_keys=["orgao_codigo=2"],
+        operator="ops-tester",
+        reason="second",
+        released_at=RELEASED_AT + timedelta(seconds=1),
+        metadata={"source": "cli", "replay": "true"},
+    )
+
+    first, second = (json.loads(path.read_text(encoding="utf-8")) for path in _history_files(plan))
+    assert first["metadata"] == {}
+    assert second["metadata"] == {"replay": "true", "source": "cli"}

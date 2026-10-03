@@ -1,0 +1,39 @@
+usage: janus dead-letters replay [-h] [--environment ENVIRONMENT]
+                                 [--project-root PROJECT_ROOT]
+                                 --source-id SOURCE_ID (--item-key KEY |
+                                 --all) --reason REASON [--execute]
+                                 [--include-disabled]
+
+Show what a release followed by a resuming run would do, and, with --execute,
+do it.
+
+options:
+  -h, --help            show this help message and exit
+  --environment ENVIRONMENT
+                        Environment profile name under conf/environments
+                        without the .yaml suffix.
+  --project-root PROJECT_ROOT
+                        Project root used to resolve conf/ and data/ paths.
+  --source-id SOURCE_ID
+                        Configured source_id whose dead letters to read;
+                        disabled sources included.
+  --item-key KEY        A recorded item key, as `list` prints it; repeat for
+                        several. Quote a key that holds spaces; join one that
+                        begins with '-' to the option with '='.
+  --all                 Every recorded entry. Releasing them all is asked for
+                        by name, never by default.
+  --reason REASON       Why they are released. With --execute it is recorded
+                        in the history file with the operator
+                        ($JANUS_OPERATOR, else $USER). Required: every state
+                        change is recorded.
+  --execute             Release, then run the source with --execute --resume.
+                        Without it, nothing is written.
+  --include-disabled    Allow --execute to run a source that is configured but
+                        disabled.
+
+Without --execute this is a dry run: nothing is released, nothing runs and
+nothing is written. It prints what a resuming run would retry, what stays
+skipped and where the run picks up. With --execute the entries are released,
+the history record noting the replay, and the source runs as `janus run` runs
+it with --execute and --resume. A release followed by that run is the same
+operation in two steps.

@@ -125,7 +125,11 @@ class DeadLetterReleaseError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class DeadLetterReleaseRecord:
-    """One operator release: what was let go, by whom, why, and what remained."""
+    """One operator release: what was let go, by whom, why, and what remained.
+
+    ``metadata`` is what the caller adds about how the release was made — the CLI records
+    ``source: cli``, and ``replay: true`` when the release was followed by a resuming run.
+    """
 
     source_id: str
     released_at: datetime
@@ -134,6 +138,7 @@ class DeadLetterReleaseRecord:
     released_entries: tuple[DeadLetterEntry, ...]
     remaining_item_keys: tuple[str, ...]
     state_run_id: str
+    metadata: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.source_id.strip():
@@ -149,6 +154,9 @@ class DeadLetterReleaseRecord:
         if self.released_at.tzinfo is None or self.released_at.utcoffset() is None:
             raise ValueError("released_at must be timezone-aware")
 
+    def metadata_as_dict(self) -> dict[str, str]:
+        return dict(self.metadata)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "source_id": self.source_id,
@@ -158,6 +166,7 @@ class DeadLetterReleaseRecord:
             "state_run_id": self.state_run_id,
             "released_entries": [entry.to_dict() for entry in self.released_entries],
             "remaining_item_keys": list(self.remaining_item_keys),
+            "metadata": self.metadata_as_dict(),
         }
 
 
@@ -225,6 +234,7 @@ class DeadLetterStore:
         operator: str,
         reason: str,
         released_at: datetime | None = None,
+        metadata: Mapping[str, str] | None = None,
     ) -> DeadLetterReleaseRecord:
         """Remove exactly these entries, atomically, and record the removal.
 
@@ -237,6 +247,57 @@ class DeadLetterStore:
         and the release did not happen; the reverse order could drop entries with no record
         of who let them go. Every refusal is raised before anything is written.
         """
+        state, record, remaining = self._prepare_release(
+            plan,
+            item_keys=item_keys,
+            operator=operator,
+            reason=reason,
+            released_at=released_at,
+            metadata=metadata,
+        )
+        write_json_atomic(self.history_path(plan, record), record.to_dict())
+        if remaining:
+            write_json_atomic(
+                self.path(plan),
+                replace(state, updated_at=record.released_at, entries=remaining).to_dict(),
+            )
+        else:
+            self.clear(plan)
+        return record
+
+    def preview_release(
+        self,
+        plan: ExecutionPlan,
+        *,
+        item_keys: Sequence[str] | None = None,
+        operator: str,
+        reason: str,
+        released_at: datetime | None = None,
+        metadata: Mapping[str, str] | None = None,
+    ) -> DeadLetterReleaseRecord:
+        """The record `release` would write, refused exactly as `release` refuses, with
+        nothing written. A dry run built on it cannot promise a release that would fail."""
+        _state, record, _remaining = self._prepare_release(
+            plan,
+            item_keys=item_keys,
+            operator=operator,
+            reason=reason,
+            released_at=released_at,
+            metadata=metadata,
+        )
+        return record
+
+    def _prepare_release(
+        self,
+        plan: ExecutionPlan,
+        *,
+        item_keys: Sequence[str] | None,
+        operator: str,
+        reason: str,
+        released_at: datetime | None,
+        metadata: Mapping[str, str] | None,
+    ) -> tuple[DeadLetterState, DeadLetterReleaseRecord, tuple[DeadLetterEntry, ...]]:
+        """Every check a release makes, and the record it would write; reads only."""
         resolved_released_at = released_at or datetime.now(tz=UTC)
         if resolved_released_at.tzinfo is None or resolved_released_at.utcoffset() is None:
             raise ValueError("released_at must be timezone-aware")
@@ -257,6 +318,7 @@ class DeadLetterStore:
             released_entries=released,
             remaining_item_keys=tuple(entry.item_key for entry in remaining),
             state_run_id=state.run_id,
+            metadata=_freeze_string_mapping(metadata),
         )
         history_path = self.history_path(plan, record)
         if history_path.exists():
@@ -265,16 +327,7 @@ class DeadLetterStore:
                 f"record at {history_path}; release again in a later second rather than "
                 "overwrite it"
             )
-
-        write_json_atomic(history_path, record.to_dict())
-        if remaining:
-            write_json_atomic(
-                self.path(plan),
-                replace(state, updated_at=resolved_released_at, entries=remaining).to_dict(),
-            )
-        else:
-            self.clear(plan)
-        return record
+        return state, record, remaining
 
     def clear(self, plan: ExecutionPlan) -> None:
         path = self.path(plan)

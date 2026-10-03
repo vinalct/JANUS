@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from janus.checkpoints import DeadLetterStore
+from janus.checkpoints import DeadLetterStore, ExtractionProgressStore
 from janus.lineage import MetadataZonePaths
 from janus.planner import PlannedRun, Planner, PlanningRequest
 from janus.runtime.executor import SourceExecutor
@@ -20,11 +20,6 @@ from tests.support.semantics_fixtures import (
     install_profile,
     materialize,
     tree_snapshot,
-)
-
-RED_VERB = pytest.mark.xfail(
-    strict=True,
-    reason="janus.cli.dispatch registers no `dead-letters` verb yet",
 )
 
 KEYS = ("window_start=2026-09-01", "window_start=2026-09-02")
@@ -114,7 +109,6 @@ def planning_requests(monkeypatch: pytest.MonkeyPatch) -> list[PlanningRequest]:
 # list
 
 
-@RED_VERB
 def test_list_prints_every_entry_with_its_error_and_metadata(root: Path) -> None:
     """The error message is printed whole: it carries the bounded response excerpt, which is
     the only record of *why* the item was given up on."""
@@ -130,7 +124,6 @@ def test_list_prints_every_entry_with_its_error_and_metadata(root: Path) -> None
     assert "RuntimeError" in result.stdout
 
 
-@RED_VERB
 def test_list_json_is_the_recorded_state(root: Path) -> None:
     plan, store = _seed(root)
 
@@ -143,7 +136,6 @@ def test_list_json_is_the_recorded_state(root: Path) -> None:
     assert result.stdout == json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
-@RED_VERB
 def test_list_narrows_to_one_item_key(root: Path) -> None:
     _seed(root)
 
@@ -153,7 +145,6 @@ def test_list_narrows_to_one_item_key(root: Path) -> None:
     assert [entry["item_key"] for entry in json.loads(result.stdout)["entries"]] == [KEYS[1]]
 
 
-@RED_VERB
 def test_list_with_no_state_is_a_healthy_answer(root: Path) -> None:
     result = _dead_letters(root, "list")
 
@@ -161,11 +152,37 @@ def test_list_with_no_state_is_a_healthy_answer(root: Path) -> None:
     assert f"no dead letters recorded for {CLEAN_PRODUCER}" in result.stdout
 
 
+def test_list_names_a_requested_key_that_is_not_recorded(root: Path) -> None:
+    """A read does not fail on content: absence is an answer, shown beside the recorded keys
+    so a typo is visible."""
+    _seed(root)
+
+    result = _dead_letters(root, "list", "--item-key", "window_start=1999-01-01")
+
+    assert result.exit_code == 0, result.output
+    assert "0 of 2 dead letter(s)" in result.stdout
+    assert "'window_start=1999-01-01'" in result.stdout
+    assert all(repr(key) in result.stdout for key in KEYS)
+
+
+def test_parent_options_before_the_action_are_not_reset_by_its_parser(root: Path) -> None:
+    """argparse copies an action parser's defaults over what the verb parser parsed. The
+    action parsers suppress theirs, so `--project-root` may come before the action too."""
+    _seed(root)
+
+    result = run_janus(
+        ("dead-letters", "--project-root", str(root), "list", "--source-id", CLEAN_PRODUCER),
+        env=OPERATOR,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert all(key in result.stdout for key in KEYS)
+
+
 # ---------------------------------------------------------------------------------------
 # release
 
 
-@RED_VERB
 def test_release_removes_exactly_the_named_key_and_writes_history(root: Path) -> None:
     plan, store = _seed(root)
 
@@ -183,7 +200,6 @@ def test_release_removes_exactly_the_named_key_and_writes_history(root: Path) ->
     assert str(history.name) in result.stdout
 
 
-@RED_VERB
 def test_release_all_deletes_the_state_file(root: Path) -> None:
     plan, store = _seed(root)
 
@@ -193,7 +209,6 @@ def test_release_all_deletes_the_state_file(root: Path) -> None:
     assert store.path(plan).exists() is False
 
 
-@RED_VERB
 @pytest.mark.parametrize(
     ("flags", "named"),
     [
@@ -217,7 +232,6 @@ def test_release_argument_errors_exit_2_and_touch_nothing(
     assert store.path(plan).read_bytes() == before
 
 
-@RED_VERB
 def test_releasing_an_unknown_key_names_the_available_ones_and_changes_nothing(root: Path) -> None:
     plan, store = _seed(root)
     before = tree_snapshot(root)
@@ -232,7 +246,6 @@ def test_releasing_an_unknown_key_names_the_available_ones_and_changes_nothing(r
     assert tree_snapshot(root) == before
 
 
-@RED_VERB
 def test_release_with_no_state_exits_2(root: Path) -> None:
     result = _dead_letters(root, "release", "--all", "--reason", "nothing to release")
 
@@ -240,11 +253,54 @@ def test_release_with_no_state_exits_2(root: Path) -> None:
     assert CLEAN_PRODUCER in result.stderr
 
 
+def test_release_json_is_the_history_record_and_where_it_was_written(root: Path) -> None:
+    _seed(root)
+
+    result = _dead_letters(
+        root, "release", "--all", "--reason", "upstream fixed", "--format", "json"
+    )
+    payload = json.loads(result.stdout)
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    assert payload["metadata"] == {"source": "cli"}
+    assert payload["state_deleted"] is True
+    history = root.resolve() / payload["history_path"]
+    written = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"history_path", "state_path", "state_deleted"}
+    }
+    assert json.loads(history.read_text(encoding="utf-8")) == written
+
+
+@pytest.mark.parametrize(
+    ("flags", "named"),
+    [
+        (("--item-key", KEYS[0], "--reason", "   "), "--reason"),
+        (("--item-key", " ", "--reason", "blank key"), "--item-key"),
+    ],
+    ids=["blank-reason", "blank-key"],
+)
+def test_a_blank_reason_or_item_key_is_an_argument_error(
+    root: Path, flags: tuple[str, ...], named: str
+) -> None:
+    """A blank key must never act as a wildcard, and a blank reason explains nothing."""
+    _seed(root)
+    before = tree_snapshot(root)
+
+    for action in ("release", "replay"):
+        result = _dead_letters(root, action, *flags)
+        assert result.exit_code == 2, (action, result.output)
+        assert named in result.stderr
+
+    assert tree_snapshot(root) == before
+
+
 # ---------------------------------------------------------------------------------------
 # replay
 
 
-@RED_VERB
 def test_replay_without_execute_is_a_dry_run_that_writes_nothing(root: Path) -> None:
     """Q4: the safe default prints what a resume would retry, and what stays skipped."""
     _seed(root)
@@ -257,7 +313,6 @@ def test_replay_without_execute_is_a_dry_run_that_writes_nothing(root: Path) -> 
     assert tree_snapshot(root) == before
 
 
-@RED_VERB
 def test_replay_execute_releases_then_plans_with_resume(
     root: Path,
     executor_calls: list[PlannedRun],
@@ -286,7 +341,6 @@ def test_replay_execute_releases_then_plans_with_resume(
     assert executed.plan.run_context.attributes_as_dict()["resume"] == "true"
 
 
-@RED_VERB
 def test_replay_execute_refuses_a_disabled_source_without_include_disabled(
     root: Path, executor_calls: list[PlannedRun]
 ) -> None:
@@ -309,7 +363,6 @@ def test_replay_execute_refuses_a_disabled_source_without_include_disabled(
     assert tree_snapshot(root) == before
 
 
-@RED_VERB
 def test_replay_execute_and_run_execute_share_one_executor_call_site(
     root: Path, executor_calls: list[PlannedRun]
 ) -> None:
@@ -328,7 +381,6 @@ def test_replay_execute_and_run_execute_share_one_executor_call_site(
     assert [call.plan.source.source_id for call in executor_calls] == [CLEAN_PRODUCER] * 2
 
 
-@RED_VERB
 @pytest.mark.parametrize(
     "argv",
     [("list",), ("release", "--item-key", KEYS[0], "--reason", "tripwire")],
@@ -341,6 +393,123 @@ def test_list_and_release_never_acquire_a_spark_session(
     arm_spark_tripwire(monkeypatch)
 
     assert _dead_letters(root, *argv).exit_code == 0
+
+
+def test_the_dry_run_names_what_it_would_retry_and_what_stays_skipped(root: Path) -> None:
+    plan, _store = _seed(root)
+    ExtractionProgressStore().save(
+        plan,
+        page_number=3,
+        request_index=4,
+        artifact_count=3,
+        completed_inputs=[("window_start=2026-08-31", 1)],
+        current_input_key=KEYS[1],
+        current_input_index=2,
+        request_input_count=3,
+    )
+    before = tree_snapshot(root)
+
+    result = _dead_letters(root, "replay", "--item-key", KEYS[1], "--reason", "dry run")
+
+    assert result.exit_code == 0, result.output
+    assert re.search(rf"would release\s+{re.escape(KEYS[1])}", result.stdout), result.stdout
+    assert re.search(rf"stays skipped\s+{re.escape(KEYS[0])}", result.stdout), result.stdout
+    assert f"request input 2 of 3 ({KEYS[1]}); last page 3; 1 input(s) completed" in result.stdout
+    assert f"janus --environment local --source-id {CLEAN_PRODUCER} --execute --resume" in (
+        result.stdout
+    )
+    assert tree_snapshot(root) == before
+
+
+def test_the_dry_run_refuses_what_the_release_would_refuse(root: Path) -> None:
+    """Built on `preview_release`: a dry run never promises a release that would fail."""
+    _seed(root)
+    before = tree_snapshot(root)
+
+    result = _dead_letters(
+        root, "replay", "--item-key", "window_start=1999-01-01", "--reason", "typo"
+    )
+
+    assert result.exit_code == 2
+    assert "window_start=1999-01-01" in result.stderr
+    assert all(key in result.stderr for key in KEYS)
+    assert tree_snapshot(root) == before
+
+
+def test_replay_execute_with_an_unreadable_profile_releases_nothing(
+    root: Path, executor_calls: list[PlannedRun]
+) -> None:
+    """The profile is read before the release, so a misspelt environment writes nothing."""
+    _seed(root)
+    before = tree_snapshot(root)
+
+    result = _dead_letters(
+        root, "replay", "--environment", "nowhere", "--all", "--reason", "retry", "--execute"
+    )
+
+    assert result.exit_code == 2
+    assert "nowhere" in result.stderr
+    assert executor_calls == []
+    assert tree_snapshot(root) == before
+
+
+def test_replay_execute_prints_the_run_summary_and_reports_the_release_on_stderr(
+    root: Path, executor_calls: list[PlannedRun]
+) -> None:
+    """stdout is the run's summary as `run --execute` prints it, so one parser reads both."""
+    install_profile(root, "local")
+    plan, _store = _seed(root)
+
+    flags = ("--environment", "local", "--item-key", KEYS[0], "--reason", "fixed", "--execute")
+
+    result = _dead_letters(root, "replay", *flags)
+    summary = json.loads(result.stdout)
+
+    assert result.exit_code == 0, result.output
+    assert summary["executed_run"] == {"status": "succeeded"}
+    attributes = summary["planned_run"]["run"]["attributes"]
+    assert (attributes["resume"], attributes["trigger"]) == ("true", "cli")
+    assert "released 1 dead letter(s); 1 remain" in result.stderr
+    (history,) = (MetadataZonePaths.from_plan(plan).dead_letters_dir / "history").glob("*.json")
+    assert json.loads(history.read_text(encoding="utf-8"))["metadata"] == {
+        "replay": "true",
+        "source": "cli",
+    }
+
+
+def test_replay_execute_exits_1_when_the_run_fails(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rule `run --execute` follows: the run happened, and it did not succeed."""
+    install_profile(root, "local")
+    _seed(root)
+
+    def execute(self, planned_run, spark_provider, environment_config):
+        executed = _ExecutedRun(planned_run)
+        executed.is_successful = False
+        return executed
+
+    monkeypatch.setattr(SourceExecutor, "execute", execute)
+
+    result = _dead_letters(
+        root, "replay", "--environment", "local", "--all", "--reason", "retry", "--execute"
+    )
+
+    assert result.exit_code == 1, result.output
+
+
+def test_replay_execute_runs_a_disabled_source_with_include_disabled(
+    root: Path, executor_calls: list[PlannedRun]
+) -> None:
+    install_profile(root, "local")
+    _seed(root, CLEAN_CONSUMER)
+
+    flags = ("--environment", "local", "--all", "--reason", "retry", "--include-disabled")
+
+    result = _dead_letters(root, "replay", *flags, "--execute", source_id=CLEAN_CONSUMER)
+
+    assert result.exit_code == 0, result.output
+    assert [call.plan.source.source_id for call in executor_calls] == [CLEAN_CONSUMER]
 
 
 # ---------------------------------------------------------------------------------------

@@ -6,10 +6,9 @@ import argparse
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
-from janus.cli import list_sources, run, run_all, validate
-from janus.cli.common import default_project_root
+from janus.cli import dead_letters, list_sources, run, run_all, validate
+from janus.cli.common import build_parent_parser
 
 PROG = "janus"
 VERB_RUN = "run"
@@ -40,26 +39,6 @@ class Verb:
     help: str
     configure: Callable[[argparse.ArgumentParser], None] | None
     handler: Callable[..., int]
-
-
-def build_parent_parser() -> argparse.ArgumentParser:
-    """The parent: --environment and --project-root, shared by every verb (FR-1).
-
-    The help texts are `run`'s own, so a new verb takes both options the way `run` does.
-    """
-    parent = argparse.ArgumentParser(add_help=False)
-    parent.add_argument(
-        "--environment",
-        default="local",
-        help="Environment profile name under conf/environments without the .yaml suffix.",
-    )
-    parent.add_argument(
-        "--project-root",
-        type=Path,
-        default=default_project_root(),
-        help="Project root used to resolve conf/ and data/ paths.",
-    )
-    return parent
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -111,6 +90,13 @@ def verbs() -> tuple[Verb, ...]:
             "running any.",
             list_sources.configure,
             list_sources.list_command,
+        ),
+        Verb(
+            "dead-letters",
+            "Inspect, release or replay the items a source's runs gave up on. Nothing runs "
+            "unless replay is given --execute.",
+            dead_letters.configure,
+            dead_letters.dead_letters_command,
         ),
     )
 

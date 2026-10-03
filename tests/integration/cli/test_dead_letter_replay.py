@@ -32,9 +32,8 @@ from tests.support.semantics_fixtures import CLEAN, CLEAN_PRODUCER, install_prof
 
 RED = pytest.mark.xfail(
     strict=True,
-    reason="janus dead-letters release|replay` does not exist yet, "
-    "and a completed input is re-requested on resume when the next input dead-letters on its "
-    "first request",
+    reason="a completed input is re-requested on resume when the next input dead-letters on "
+    "its first request (F-12)",
 )
 
 FIRST, SECOND = "2026-09-01", "2026-09-02"
@@ -177,7 +176,6 @@ def test_release_then_resume_retries_only_the_released_input(root: Path) -> None
     assert resumed_inputs == {"request-input-000001", "request-input-000002"}
 
 
-@RED
 def test_release_of_the_only_dead_letter_deletes_the_state_file(root: Path) -> None:
     plan, _first = _first_run(root)
 
@@ -188,7 +186,6 @@ def test_release_of_the_only_dead_letter_deletes_the_state_file(root: Path) -> N
     assert DeadLetterStore().load(plan) is None
 
 
-@RED
 def test_replay_execute_carries_the_resume_attribute(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
