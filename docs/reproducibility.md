@@ -166,7 +166,7 @@ This runs:
 python -m janus.main --environment local
 ```
 
-The command loads the local environment profile, prepares runtime paths, and prints a JSON summary of resolved settings.
+The command loads the local environment profile, prepares runtime paths, and prints a JSON summary of resolved settings. This validates the *environment profile* only; `make validate` validates the source registry.
 
 ### Validate the local profile and start Spark
 

@@ -32,7 +32,9 @@ CONTRACT_SCHEMA_TESTS := \
 	tests/unit/models/data_contracts/test_contract_loader.py::test_pinned_odcs_schema_sha256_matches_the_sidecar \
 	tests/unit/models/data_contracts/test_contract_loader.py::test_every_checked_in_contract_validates_against_the_pinned_odcs_schema \
 	tests/unit/models/data_contracts/test_contract_loader.py::test_odcs_validator_rejects_the_hostile_fixtures
-FAST_OBSERVABILITY_CLASSES := \
+FAST_REQUIRED_CLASSES := \
+	tests.unit.cli.test_validate \
+	tests.unit.registry.test_config_semantics \
 	tests.unit.observability.test_acceptance_evidence \
 	tests.unit.observability.test_architecture_guardrails \
 	tests.unit.observability.test_example_queries_and_docs \
@@ -114,7 +116,7 @@ define RUN_COMPOSE
 	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-contract-schema test-adapter ci run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
+.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-contract-schema test-adapter ci validate run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
 
 seed-ivy:
 	@mkdir -p "$(IVY_JAR_DEST_DIR)" "$(ICEBERG_CATALOG_DIR)"; \
@@ -226,7 +228,7 @@ test: ensure-up
 test-fast:
 	@mkdir -p "$(dir $(FAST_TEST_REPORT))"
 	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --junitxml="$(FAST_TEST_REPORT)"
-	@for class_name in $(FAST_OBSERVABILITY_CLASSES); do \
+	@for class_name in $(FAST_REQUIRED_CLASSES); do \
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
@@ -265,6 +267,12 @@ ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CONTRACTS_GOLDEN_CLASS) --minimum-passed 23)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main validate --environment $(ENVIRONMENT))
+
+# Registry semantics and profile wiring, with no Spark session and no writes.
+# `run-local-config` stays what it is: the environment profile only.
+validate: ensure-up
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main validate --environment $(ENVIRONMENT))
 
 run-local: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main --environment $(ENVIRONMENT) --with-spark)
