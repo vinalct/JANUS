@@ -8,7 +8,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from janus.cli import run, run_all, validate
+from janus.cli import list_sources, run, run_all, validate
 from janus.cli.common import default_project_root
 
 PROG = "janus"
@@ -104,6 +104,13 @@ def verbs() -> tuple[Verb, ...]:
             "without running any.",
             validate.configure,
             validate.validate_command,
+        ),
+        Verb(
+            "list",
+            "List configured sources with their dispatch, state and dependencies, without "
+            "running any.",
+            list_sources.configure,
+            list_sources.list_command,
         ),
     )
 

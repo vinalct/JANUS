@@ -1,0 +1,46 @@
+topological order (31)
+   1  dados_abertos_catalog__conjunto_dados__full_refresh
+   2  dados_abertos_catalog__conjunto_dados_details__full_refresh
+   3  federal_open_data_example
+   4  ibge_agro_abacaxi_pronaf
+   5  ibge_pib_brasil
+   6  inep_censo_escolar_microdados
+   7  receita_federal__cnpj__cnaes_full_refresh
+   8  receita_federal__cnpj__empresas_full_refresh
+   9  receita_federal__cnpj__estabelecimentos_full_refresh
+  10  receita_federal__cnpj__motivos_full_refresh
+  11  receita_federal__cnpj__municipios_full_refresh
+  12  receita_federal__cnpj__naturezas_full_refresh
+  13  receita_federal__cnpj__paises_full_refresh
+  14  receita_federal__cnpj__qualificacoes_full_refresh
+  15  receita_federal__cnpj__simples_full_refresh
+  16  receita_federal__cnpj__socios_full_refresh
+  17  transparencia__emendas_parlamentares__emendas__full_refresh
+  18  transparencia__emendas_parlamentares__documentos__full_refresh
+  19  transparencia__gastos_cartoes__cartoes__full_refresh
+  20  transparencia__gastos_cartoes__cartoes__incremental
+  21  transparencia__licitacoes__modalidades__full_refresh
+  22  transparencia__licitacoes__unidades_gestoras__full_refresh
+  23  transparencia__orgaos__siafi__full_refresh
+  24  transparencia__contratos__contratos__full_refresh
+  25  transparencia__licitacoes__licitacoes__full_refresh
+  26  transparencia__orgaos__siape__full_refresh
+  27  transparencia__poder_executivo_federal__servidores__full_refresh
+  28  transparencia__poder_executivo_federal__servidores_por_orgao__full_refresh
+  29  transparencia__renuncias_fiscais__empresas_habilitadas__full_refresh
+  30  transparencia__renuncias_fiscais__empresas_imunes_isentas__full_refresh
+  31  transparencia__renuncias_fiscais__renuncias_valores__full_refresh
+
+edges (4)
+  dados_abertos_catalog__conjunto_dados__full_refresh  ->  dados_abertos_catalog__conjunto_dados_details__full_refresh
+      table bronze__dados_abertos_catalog.conjuntos_dados
+      via   access.request_inputs
+  transparencia__emendas_parlamentares__emendas__full_refresh  ->  transparencia__emendas_parlamentares__documentos__full_refresh
+      table bronze__transparencia.emendas_parlamentares__emendas
+      via   access.request_inputs
+  transparencia__orgaos__siafi__full_refresh  ->  transparencia__contratos__contratos__full_refresh
+      table bronze__transparencia.orgaos__siafi
+      via   access.request_inputs
+  transparencia__orgaos__siafi__full_refresh  ->  transparencia__licitacoes__licitacoes__full_refresh
+      table bronze__transparencia.orgaos__siafi
+      via   access.request_inputs.inputs[0]

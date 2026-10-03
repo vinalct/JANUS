@@ -12,11 +12,6 @@ from tests.support.cli_golden import GOLDENS_DIR, INVOCATIONS
 from tests.support.operator_cli import arm_spark_tripwire, run_janus
 from tests.support.semantics_fixtures import CLEAN, CLEAN_CONSUMER, CLEAN_PRODUCER, materialize
 
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    reason="janus.cli.dispatch registers no `list` verb yet",
-)
-
 TABLE_COLUMNS = ["SOURCE_ID", "FAMILY", "VARIANT", "MODE", "EN", "HOOK", "UPSTREAMS", "TAGS"]
 JSON_SOURCE_KEYS = {
     "source_id",

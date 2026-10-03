@@ -65,6 +65,7 @@ class CapturedInvocation:
 
 
 _BRONZE_TABLE = "bronze_inep.censo_escolar_microdados"
+_LIST_TASK = "docs/tasks/operator-command-surface/list_command.md"
 
 INVOCATIONS: tuple[Invocation, ...] = (
     Invocation(
@@ -305,6 +306,36 @@ INVOCATIONS: tuple[Invocation, ...] = (
         ("validate", "--format", "json"),
         "repository",
         documented_at="docs/operator_command_surface_.md:79",
+    ),
+    Invocation(
+        "list_help",
+        ("list", "--help"),
+        "repository",
+        documented_at=f"{_LIST_TASK}:44-48",
+    ),
+    Invocation(
+        "list_table",
+        ("list",),
+        "repository",
+        documented_at=f"{_LIST_TASK}:60-73",
+    ),
+    Invocation(
+        "list_json",
+        ("list", "--format", "json"),
+        "repository",
+        documented_at=f"{_LIST_TASK}:75-90",
+    ),
+    Invocation(
+        "list_graph",
+        ("list", "--graph"),
+        "repository",
+        documented_at=f"{_LIST_TASK}:92-107",
+    ),
+    Invocation(
+        "list_filtered_by_tag",
+        ("list", "--tag", "ibge"),
+        "repository",
+        documented_at=f"{_LIST_TASK}:154-155",
     ),
 )
 
