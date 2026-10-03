@@ -1,0 +1,29 @@
+usage: janus dead-letters [-h] [--environment ENVIRONMENT]
+                          [--project-root PROJECT_ROOT]
+                          {list,release,replay} ...
+
+Inspect, release or replay the items a source's runs gave up on. Nothing runs
+unless replay is given --execute.
+
+options:
+  -h, --help            show this help message and exit
+  --environment ENVIRONMENT
+                        Environment profile name under conf/environments
+                        without the .yaml suffix.
+  --project-root PROJECT_ROOT
+                        Project root used to resolve conf/ and data/ paths.
+
+actions:
+  {list,release,replay}
+    list                Print a source's dead letters, each with its error and
+                        metadata.
+    release             Release dead letters with a recorded reason, so the
+                        next resuming run retries them.
+    replay              Show what a resume would retry after a release (a dry
+                        run, the default), or release and run it with
+                        --execute.
+
+A dead letter is an item a run skipped after exhausting its retries. Every
+action plans the source to find its metadata zone, disabled sources included.
+Only replay with --execute reads an environment profile or runs anything.
+`janus dead-letters ACTION --help` describes each action.

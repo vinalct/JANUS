@@ -1,0 +1,29 @@
+usage: janus checkpoint [-h] [--environment ENVIRONMENT]
+                        [--project-root PROJECT_ROOT]
+                        {show,set,clear} ...
+
+Show where a source's next run starts, or set or clear it with a recorded
+reason. Nothing runs.
+
+options:
+  -h, --help            show this help message and exit
+  --environment ENVIRONMENT
+                        Environment profile name under conf/environments
+                        without the .yaml suffix.
+  --project-root PROJECT_ROOT
+                        Project root used to resolve conf/ and data/ paths.
+
+actions:
+  {show,set,clear}
+    show                Print a source's checkpoint and its last history
+                        entries.
+    set                 Move the checkpoint to a value, backwards or forwards,
+                        with a recorded reason.
+    clear               Forget the checkpoint, so the next run starts without
+                        one, with a recorded reason.
+
+A checkpoint is the value an incremental source's next run starts from. Every
+action plans the source to find its metadata zone, disabled sources included;
+none reads an environment profile or runs anything. set and clear are recorded
+in the history directory with the operator and the reason. `janus checkpoint
+ACTION --help` describes each action.

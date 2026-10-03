@@ -1,0 +1,9 @@
+usage: janus contract [-h] {draft} ...
+
+Inspect and author versioned data contract files.
+
+positional arguments:
+  {draft}
+
+options:
+  -h, --help  show this help message and exit

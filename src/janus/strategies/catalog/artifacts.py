@@ -6,7 +6,6 @@ import contextlib
 import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +27,7 @@ from janus.strategies.common import _raw_page_path
 from janus.strategies.http import ApiRequest, ApiResponse
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
+from janus.writers.sidecar import _resolve_raw_checksum
 
 
 def _raw_relative_path(
@@ -134,7 +134,7 @@ def _rediscover_catalog_raw_artifacts(
             if num <= last_page:
                 candidates.append((num, path))
         for _, path in sorted(candidates):
-            checksum = sha256(path.read_bytes()).hexdigest()
+            checksum = _resolve_raw_checksum(path)
             artifacts.append(ExtractedArtifact(path=str(path), format="json", checksum=checksum))
 
     elif last_offset is not None:
@@ -148,7 +148,7 @@ def _rediscover_catalog_raw_artifacts(
             if num <= last_offset:
                 candidates.append((num, path))
         for _, path in sorted(candidates):
-            checksum = sha256(path.read_bytes()).hexdigest()
+            checksum = _resolve_raw_checksum(path)
             artifacts.append(ExtractedArtifact(path=str(path), format="json", checksum=checksum))
 
     return artifacts
@@ -159,13 +159,19 @@ def _rediscover_catalog_input_artifacts(
     storage_layout: StorageLayout,
     request_input_index: int,
     request_input_count: int,
+    *,
+    verify_checksums: bool = False,
 ) -> list[ExtractedArtifact]:
-    """Re-discover all raw JSON artifacts for a fully completed catalog input."""
+    """Re-discover all raw JSON artifacts for a fully completed catalog input.
+
+    ``verify_checksums`` is set only by a verified replay. The live resume path never
+    sets it: extraction wrote those sidecars from the bytes it had just persisted.
+    """
     artifacts: list[ExtractedArtifact] = []
     for path in _sorted_catalog_pages(
         _catalog_input_dir(plan, storage_layout, request_input_index, request_input_count)
     ):
-        checksum = sha256(path.read_bytes()).hexdigest()
+        checksum = _resolve_raw_checksum(path, verify=verify_checksums)
         artifacts.append(ExtractedArtifact(path=str(path), format="json", checksum=checksum))
     return artifacts
 
@@ -199,7 +205,9 @@ def _replay_catalog_entities_from_dir(
             body=b"",
             received_at=file_mtime,
         )
-        checksum = sha256(path.read_bytes()).hexdigest()
+        # Read from the sidecar, never verified here. Every page this walk visits was
+        # rediscovered first, and a verified replay has already re-hashed it there.
+        checksum = _resolve_raw_checksum(path)
         raw_artifact = ExtractedArtifact(path=str(path), format="json", checksum=checksum)
         checkpoint_value = _collect_catalog_entities(
             plan,

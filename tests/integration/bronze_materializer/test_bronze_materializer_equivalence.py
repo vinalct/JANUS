@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -229,6 +230,93 @@ def test_api_family_replay_produces_identical_bronze(spark, tmp_path, monkeypatc
     replay_bronze_results = _bronze_results(ingested.write_results)
     assert len(live_bronze_results) == len(replay_bronze_results) == 1
     assert live_bronze_results[0].partition_by == replay_bronze_results[0].partition_by
+
+
+def test_verified_replay_is_recorded_and_a_changed_raw_zone_commits_nothing(
+    spark, tmp_path, monkeypatch, catalog_target
+):
+    """AC-8 on a real raw zone: the sidecars a live run wrote are what replay verifies."""
+    planned_run = _live_api_run(spark, tmp_path, monkeypatch, catalog_target)
+    environment_config = {**ENVIRONMENT_CONFIG, **catalog_target.environment_config()}
+
+    verified = ingest_raw_to_bronze(
+        planned_run,
+        SparkSessionProvider.wrapping(spark, resolved_paths=catalog_target.resolved_paths),
+        environment_config,
+        bronze_table="servidores_por_orgao_verified_replay",
+        verify_checksums=True,
+    )
+    assert verified.status == "succeeded", verified.failure_reason
+    assert verified.to_summary()["checksums_verified"] == "true"
+    run_metadata = json.loads(verified.run_metadata_path.read_text(encoding="utf-8"))
+    assert run_metadata["run_attributes"]["checksums_verified"] == "true"
+    lineage = json.loads(verified.lineage_path.read_text(encoding="utf-8"))
+    assert lineage["extraction_metadata"]["checksums_verified"] == "true"
+
+    replay_table = _bronze_table(verified.write_results)
+    snapshots_before = _snapshot_ids(spark, replay_table)
+    first_page = Path(min(artifact.path for artifact in verified.extraction_result.artifacts))
+    # Still valid JSON, so only the digest can tell that the raw zone changed.
+    first_page.write_bytes(first_page.read_bytes() + b"\n")
+
+    refused = ingest_raw_to_bronze(
+        planned_run,
+        SparkSessionProvider.wrapping(spark, resolved_paths=catalog_target.resolved_paths),
+        environment_config,
+        bronze_table="servidores_por_orgao_verified_replay",
+        verify_checksums=True,
+    )
+
+    assert refused.status == "failed"
+    assert refused.error_type == "RawArtifactIntegrityError"
+    assert f"Raw artifact integrity check failed for {first_page}:" in refused.failure_reason
+    assert _bronze_results(refused.write_results) == ()
+    assert _snapshot_ids(spark, replay_table) == snapshots_before
+    assert "checksums_verified" not in refused.to_summary()
+    failed_metadata = json.loads(refused.run_metadata_path.read_text(encoding="utf-8"))
+    assert failed_metadata["error_type"] == "RawArtifactIntegrityError"
+    assert "checksums_verified" not in failed_metadata["run_attributes"]
+
+
+def _live_api_run(spark, project_root: Path, monkeypatch, catalog_target) -> PlannedRun:
+    """One live servidores-por-órgão run, leaving a raw zone with extraction's sidecars."""
+    source_config = _cloned_api_source_config(project_root, page_size=2)
+    run_context = RunContext.create(
+        run_id="run-bronze-verified-replay-001",
+        environment="local",
+        project_root=project_root,
+        started_at=datetime(2026, 10, 2, 10, 0, tzinfo=UTC),
+    )
+    transport = FixtureTransport(
+        fixture_paths=[
+            TRANSPARENCIA_FIXTURES_DIR / "servidores_por_orgao_page_1.json",
+            TRANSPARENCIA_FIXTURES_DIR / "servidores_por_orgao_page_2.json",
+        ]
+    )
+    storage_layout = _storage_layout(project_root)
+    strategy = ApiStrategy(
+        transport_factory=lambda: transport,
+        storage_layout_factory=lambda plan: storage_layout,
+        sleeper=lambda seconds: None,
+        clock=lambda: 0.0,
+    )
+    monkeypatch.setenv("TRANSPARENCIA_API_TOKEN", "super-secret-token")
+
+    planned_run = PlannedRun(
+        plan=with_registry_contract(strategy.plan(source_config, run_context)),
+        strategy=strategy,
+    )
+    executed = SourceExecutor().execute(
+        planned_run,
+        SparkSessionProvider.wrapping(spark, resolved_paths=catalog_target.resolved_paths),
+        {**ENVIRONMENT_CONFIG, **catalog_target.environment_config()},
+    )
+    assert executed.status == "succeeded", executed.failure_reason
+    return planned_run
+
+
+def _snapshot_ids(spark, table_identifier: str) -> list[int]:
+    return sorted(row.snapshot_id for row in spark.table(f"{table_identifier}.snapshots").collect())
 
 
 def _bronze_results(write_results):

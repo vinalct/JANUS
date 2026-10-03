@@ -1,0 +1,72 @@
+
+source_id: semantics_clean_producer
+name: Semantics clean producer
+owner: janus-tests
+enabled: true
+source_type: api
+strategy: api
+strategy_variant: page_number_api
+federation_level: federal
+domain: semantics_reference
+public_access: true
+tags: [semantics, producer]
+
+access:
+  base_url: https://example.invalid
+  path: /reference
+  method: GET
+  format: json
+  timeout_seconds: 5
+  auth:
+    type: none
+  pagination:
+    type: page_number
+    page_param: page
+    size_param: page_size
+    page_size: 2
+  request_inputs:
+    type: date_window
+    start: 2026-09-01
+    end: 2026-09-02
+    step: day
+  parameter_bindings:
+    window_start:
+      from: request_input.window_start
+      format: "%Y-%m-%d"
+  rate_limit:
+    concurrency: 1
+
+extraction:
+  mode: incremental
+  checkpoint_field: updated_at
+  checkpoint_strategy: max_value
+  dead_letter_max_items: 10
+  retry:
+    max_attempts: 1
+    backoff_strategy: fixed
+    backoff_seconds: 1
+
+schema:
+  contract: conf/contracts/semantics/clean_producer.yaml
+
+spark:
+  input_format: json
+  write_mode: append
+  repartition: 1
+  partition_by: [ingestion_date]
+
+outputs:
+  raw:
+    path: data/raw/semantics/clean_producer
+    format: json
+  bronze:
+    path: data/bronze/semantics/clean_producer
+    format: iceberg
+    namespace: semantics
+    table_name: clean_producer
+  metadata:
+    path: data/metadata/semantics/clean_producer
+    format: json
+
+quality:
+  unique_fields: [code]

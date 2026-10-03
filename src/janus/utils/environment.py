@@ -94,8 +94,14 @@ def expand_env_vars(value: Any) -> Any:
     return value
 
 
+def environment_config_path(environment: str, project_root: Path) -> Path:
+    """The file a profile name refers to; the one place that layout is spelled out."""
+
+    return project_root / "conf" / "environments" / f"{environment}.yaml"
+
+
 def load_environment_config(environment: str, project_root: Path) -> dict[str, Any]:
-    config_path = project_root / "conf" / "environments" / f"{environment}.yaml"
+    config_path = environment_config_path(environment, project_root)
     if not config_path.exists():
         raise FileNotFoundError(f"Environment config not found: {config_path}")
 

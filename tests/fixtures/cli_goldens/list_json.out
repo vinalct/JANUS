@@ -1,0 +1,625 @@
+{
+  "counts": {
+    "edges": 4,
+    "enabled": 1,
+    "sources": 31
+  },
+  "sources": [
+    {
+      "bronze_table": "bronze__dados_abertos_catalog.conjuntos_dados",
+      "domain": "dados_abertos",
+      "downstreams": [
+        "dados_abertos_catalog__conjunto_dados_details__full_refresh"
+      ],
+      "enabled": false,
+      "family": "catalog",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal Brasileiro de Dados Abertos - Catalogo de conjuntos de dados",
+      "source_id": "dados_abertos_catalog__conjunto_dados__full_refresh",
+      "tags": [
+        "catalog",
+        "dados-gov-br",
+        "federal",
+        "metadata"
+      ],
+      "upstreams": [],
+      "variant": "metadata_catalog"
+    },
+    {
+      "bronze_table": "bronze__dados_abertos_catalog.conjuntos_dados_details",
+      "domain": "dados_abertos",
+      "downstreams": [],
+      "enabled": false,
+      "family": "catalog",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal Brasileiro de Dados Abertos - Catalogo de conjuntos de dados",
+      "source_id": "dados_abertos_catalog__conjunto_dados_details__full_refresh",
+      "tags": [
+        "catalog",
+        "dados-gov-br",
+        "federal",
+        "metadata"
+      ],
+      "upstreams": [
+        "dados_abertos_catalog__conjunto_dados__full_refresh"
+      ],
+      "variant": "metadata_catalog"
+    },
+    {
+      "bronze_table": "bronze_example.federal_open_data_example",
+      "domain": "example",
+      "downstreams": [],
+      "enabled": true,
+      "family": "api",
+      "hook": null,
+      "mode": "incremental",
+      "name": "Federal Open Data Example Source",
+      "source_id": "federal_open_data_example",
+      "tags": [
+        "contract",
+        "example"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze.ibge__agro_abacaxi_pronaf",
+      "domain": "estatisticas",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": "ibge.sidra_flat",
+      "mode": "incremental",
+      "name": "IBGE - Quantidade produzida de abacaxi em estabelecimentos agropecuarios",
+      "source_id": "ibge_agro_abacaxi_pronaf",
+      "tags": [
+        "agropecuaria",
+        "api",
+        "federal",
+        "ibge",
+        "pronaf",
+        "sidra"
+      ],
+      "upstreams": [],
+      "variant": "date_window_api"
+    },
+    {
+      "bronze_table": "bronze.ibge__pib_brasil",
+      "domain": "estatisticas",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": "ibge.sidra_flat",
+      "mode": "incremental",
+      "name": "IBGE - PIB nacional a precos correntes",
+      "source_id": "ibge_pib_brasil",
+      "tags": [
+        "api",
+        "federal",
+        "ibge",
+        "pib",
+        "sidra"
+      ],
+      "upstreams": [],
+      "variant": "date_window_api"
+    },
+    {
+      "bronze_table": "bronze_inep.censo_escolar_microdados",
+      "domain": "educacao",
+      "downstreams": [],
+      "enabled": false,
+      "family": "file",
+      "hook": null,
+      "mode": "snapshot",
+      "name": "INEP - Microdados do Censo Escolar da Educacao Basica",
+      "source_id": "inep_censo_escolar_microdados",
+      "tags": [
+        "bulk-file",
+        "censo-escolar",
+        "federal",
+        "inep",
+        "microdados"
+      ],
+      "upstreams": [],
+      "variant": "archive_package"
+    },
+    {
+      "bronze_table": "bronze__receita_federal.cnpj_cnaes",
+      "domain": "receita_federal",
+      "downstreams": [],
+      "enabled": false,
+      "family": "file",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Receita Federal - CNPJ CNAEs",
+      "source_id": "receita_federal__cnpj__cnaes_full_refresh",
+      "tags": [
+        "cnaes",
+        "cnpj",
+        "federal",
+        "lookup",
+        "receita-federal"
+      ],
+      "upstreams": [],
+      "variant": "static_file"
+    },
+    {
+      "bronze_table": "bronze__receita_federal.cnpj_empresas",
+      "domain": "receita_federal",
+      "downstreams": [],
+      "enabled": false,
+      "family": "file",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Receita Federal - CNPJ Empresas",
+      "source_id": "receita_federal__cnpj__empresas_full_refresh",
+      "tags": [
+        "bulk-file",
+        "cnpj",
+        "empresas",
+        "federal",
+        "receita-federal"
+      ],
+      "upstreams": [],
+      "variant": "static_file"
+    },
+    {
+      "bronze_table": "bronze__receita_federal.cnpj_estabelecimentos",
+      "domain": "receita_federal",
+      "downstreams": [],
+      "enabled": false,
+      "family": "file",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Receita Federal - CNPJ Estabelecimentos",
+      "source_id": "receita_federal__cnpj__estabelecimentos_full_refresh",
+      "tags": [
+        "bulk-file",
+        "cnpj",
+        "estabelecimentos",
+        "federal",
+        "receita-federal"
+      ],
+      "upstreams": [],
+      "variant": "static_file"
+    },
+    {
+      "bronze_table": "bronze__receita_federal.cnpj_motivos",
+      "domain": "receita_federal",
+      "downstreams": [],
+      "enabled": false,
+      "family": "file",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Receita Federal - CNPJ Motivos",
+      "source_id": "receita_federal__cnpj__motivos_full_refresh",
+      "tags": [
+        "cnpj",
+        "federal",
+        "lookup",
+        "motivos",
+        "receita-federal"
+      ],
+      "upstreams": [],
+      "variant": "static_file"
+    },
+    {
+      "bronze_table": "bronze__receita_federal.cnpj_municipios",
+      "domain": "receita_federal",
+      "downstreams": [],
+      "enabled": false,
+      "family": "file",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Receita Federal - CNPJ Municipios",
+      "source_id": "receita_federal__cnpj__municipios_full_refresh",
+      "tags": [
+        "cnpj",
+        "federal",
+        "lookup",
+        "municipios",
+        "receita-federal"
+      ],
+      "upstreams": [],
+      "variant": "static_file"
+    },
+    {
+      "bronze_table": "bronze__receita_federal.cnpj_naturezas",
+      "domain": "receita_federal",
+      "downstreams": [],
+      "enabled": false,
+      "family": "file",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Receita Federal - CNPJ Naturezas Juridicas",
+      "source_id": "receita_federal__cnpj__naturezas_full_refresh",
+      "tags": [
+        "cnpj",
+        "federal",
+        "lookup",
+        "naturezas",
+        "receita-federal"
+      ],
+      "upstreams": [],
+      "variant": "static_file"
+    },
+    {
+      "bronze_table": "bronze__receita_federal.cnpj_paises",
+      "domain": "receita_federal",
+      "downstreams": [],
+      "enabled": false,
+      "family": "file",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Receita Federal - CNPJ Paises",
+      "source_id": "receita_federal__cnpj__paises_full_refresh",
+      "tags": [
+        "cnpj",
+        "federal",
+        "lookup",
+        "paises",
+        "receita-federal"
+      ],
+      "upstreams": [],
+      "variant": "static_file"
+    },
+    {
+      "bronze_table": "bronze__receita_federal.cnpj_qualificacoes",
+      "domain": "receita_federal",
+      "downstreams": [],
+      "enabled": false,
+      "family": "file",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Receita Federal - CNPJ Qualificacoes",
+      "source_id": "receita_federal__cnpj__qualificacoes_full_refresh",
+      "tags": [
+        "cnpj",
+        "federal",
+        "lookup",
+        "qualificacoes",
+        "receita-federal"
+      ],
+      "upstreams": [],
+      "variant": "static_file"
+    },
+    {
+      "bronze_table": "bronze__receita_federal.cnpj_simples",
+      "domain": "receita_federal",
+      "downstreams": [],
+      "enabled": false,
+      "family": "file",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Receita Federal - CNPJ Simples",
+      "source_id": "receita_federal__cnpj__simples_full_refresh",
+      "tags": [
+        "bulk-file",
+        "cnpj",
+        "federal",
+        "receita-federal",
+        "simples"
+      ],
+      "upstreams": [],
+      "variant": "static_file"
+    },
+    {
+      "bronze_table": "bronze__receita_federal.cnpj_socios",
+      "domain": "receita_federal",
+      "downstreams": [],
+      "enabled": false,
+      "family": "file",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Receita Federal - CNPJ Socios",
+      "source_id": "receita_federal__cnpj__socios_full_refresh",
+      "tags": [
+        "bulk-file",
+        "cnpj",
+        "federal",
+        "receita-federal",
+        "socios"
+      ],
+      "upstreams": [],
+      "variant": "static_file"
+    },
+    {
+      "bronze_table": "bronze__transparencia.contratos__contratos",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Contratos",
+      "source_id": "transparencia__contratos__contratos__full_refresh",
+      "tags": [
+        "api",
+        "contratos",
+        "federal",
+        "transparencia"
+      ],
+      "upstreams": [
+        "transparencia__orgaos__siafi__full_refresh"
+      ],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.emendas_parlamentares__documentos",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Emendas parlamentares - Documentos",
+      "source_id": "transparencia__emendas_parlamentares__documentos__full_refresh",
+      "tags": [
+        "api",
+        "emendas parlamentares",
+        "federal",
+        "transparencia"
+      ],
+      "upstreams": [
+        "transparencia__emendas_parlamentares__emendas__full_refresh"
+      ],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.emendas_parlamentares__emendas",
+      "domain": "transparencia",
+      "downstreams": [
+        "transparencia__emendas_parlamentares__documentos__full_refresh"
+      ],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Emendas parlamentares - Emendas",
+      "source_id": "transparencia__emendas_parlamentares__emendas__full_refresh",
+      "tags": [
+        "api",
+        "federal",
+        "servidores",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.gastos_cartoes__cartoes",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Gastos Cart\u00f5es",
+      "source_id": "transparencia__gastos_cartoes__cartoes__full_refresh",
+      "tags": [
+        "api",
+        "cartoes",
+        "federal",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.gastos_cartoes__cartoes",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "incremental",
+      "name": "Portal da Transparencia - Gastos Cart\u00f5es",
+      "source_id": "transparencia__gastos_cartoes__cartoes__incremental",
+      "tags": [
+        "api",
+        "cartoes",
+        "federal",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.licitacoes__licitacoes",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Licita\u00e7\u00f5es",
+      "source_id": "transparencia__licitacoes__licitacoes__full_refresh",
+      "tags": [
+        "api",
+        "federal",
+        "licitacoes",
+        "transparencia"
+      ],
+      "upstreams": [
+        "transparencia__orgaos__siafi__full_refresh"
+      ],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.licitacoes__modalidades",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Modalidades das Licita\u00e7\u00f5es",
+      "source_id": "transparencia__licitacoes__modalidades__full_refresh",
+      "tags": [
+        "api",
+        "federal",
+        "licitacoes",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.licitacoes__unidades_gestoras",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Unidades Gestoras das Licita\u00e7\u00f5es",
+      "source_id": "transparencia__licitacoes__unidades_gestoras__full_refresh",
+      "tags": [
+        "api",
+        "federal",
+        "licitacoes",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.orgaos__siafi",
+      "domain": "transparencia",
+      "downstreams": [
+        "transparencia__contratos__contratos__full_refresh",
+        "transparencia__licitacoes__licitacoes__full_refresh"
+      ],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - \u00d3rg\u00e3os do SIAFI",
+      "source_id": "transparencia__orgaos__siafi__full_refresh",
+      "tags": [
+        "api",
+        "federal",
+        "servidores",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.orgaos__siape",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - \u00d3rg\u00e3os do SIAPE",
+      "source_id": "transparencia__orgaos__siape__full_refresh",
+      "tags": [
+        "api",
+        "federal",
+        "servidores",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.poder_executivo_federal__servidores",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Servidores do Poder Executivo Federal",
+      "source_id": "transparencia__poder_executivo_federal__servidores__full_refresh",
+      "tags": [
+        "api",
+        "federal",
+        "servidores",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.poder_executivo_federal__servidores_por_orgao",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Servidores agregados por orgao",
+      "source_id": "transparencia__poder_executivo_federal__servidores_por_orgao__full_refresh",
+      "tags": [
+        "api",
+        "federal",
+        "servidores",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.renuncias_fiscais__empresas_habilitadas",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Renuncias Fiscais - Empresas Habilitadas a Beneficios Fiscais",
+      "source_id": "transparencia__renuncias_fiscais__empresas_habilitadas__full_refresh",
+      "tags": [
+        "api",
+        "federal",
+        "renuncias fiscais",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.renuncias_fiscais__empresas_imunes_isentas",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Renuncias Fiscais - Empresas Imunes e Isentas",
+      "source_id": "transparencia__renuncias_fiscais__empresas_imunes_isentas__full_refresh",
+      "tags": [
+        "api",
+        "federal",
+        "renuncias fiscais",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    },
+    {
+      "bronze_table": "bronze__transparencia.renuncias_fiscais__renuncias_valores",
+      "domain": "transparencia",
+      "downstreams": [],
+      "enabled": false,
+      "family": "api",
+      "hook": null,
+      "mode": "full_refresh",
+      "name": "Portal da Transparencia - Renuncias Fiscais - Valores",
+      "source_id": "transparencia__renuncias_fiscais__renuncias_valores__full_refresh",
+      "tags": [
+        "api",
+        "federal",
+        "renuncias fiscais",
+        "transparencia"
+      ],
+      "upstreams": [],
+      "variant": "page_number_api"
+    }
+  ]
+}

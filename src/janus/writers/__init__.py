@@ -26,6 +26,7 @@ from janus.writers.raw import (
     StagedWrite,
 )
 from janus.writers.schema_ddl import build_add_columns_sql, build_insert_into_sql
+from janus.writers.sidecar import RawArtifactIntegrityError
 from janus.writers.spark import (
     SUPPORTED_SPARK_WRITE_FORMATS,
     SparkDatasetWriter,
@@ -45,6 +46,7 @@ __all__ = [
     "FullRefreshOverwritePlan",
     "LiveColumn",
     "PersistedArtifact",
+    "RawArtifactIntegrityError",
     "RawArtifactWriter",
     "RawWriteLimitError",
     "SchemaEvolutionRefusedError",

@@ -1,0 +1,33 @@
+usage: janus list [-h] [--environment ENVIRONMENT]
+                  [--project-root PROJECT_ROOT] [--format {table,json}]
+                  [--tag TAG] [--domain DOMAIN] [--family {api,catalog,file}]
+                  [--enabled-only] [--graph]
+
+List configured sources with their dispatch, state and dependencies, without
+running any.
+
+options:
+  -h, --help            show this help message and exit
+  --environment ENVIRONMENT
+                        Environment profile name under conf/environments
+                        without the .yaml suffix.
+  --project-root PROJECT_ROOT
+                        Project root used to resolve conf/ and data/ paths.
+  --format {table,json}
+                        Output format. Defaults to table.
+  --tag TAG             List sources carrying this tag; repeat for an any-
+                        match filter. Cannot be combined with --domain.
+  --domain DOMAIN       List sources in this domain; repeat for an any-match
+                        filter. Cannot be combined with --tag.
+  --family {api,catalog,file}
+                        List only sources of this strategy family.
+  --enabled-only        List only enabled sources. Off by default: disabled
+                        sources are listed too.
+  --graph               Print the dependency graph of the listed sources
+                        instead of their rows: the topological order, then
+                        every edge with its table and input path.
+
+Filters list exactly the sources they match. Unlike run-all, list never adds
+the upstreams a matching consumer depends on: the UPSTREAMS column names them,
+and --graph shows the dependency order. An empty listing exits 0. Only the
+source registry is read: no environment profile, no plan and no Spark session.

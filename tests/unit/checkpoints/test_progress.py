@@ -142,6 +142,41 @@ def test_progress_store_completed_inputs_none_treated_as_empty(tmp_path):
     assert progress["completed_inputs"] == []
 
 
+def test_progress_between_inputs_names_every_finished_input_and_no_page(tmp_path):
+    """The record a resume reads when the next input failed before its first page."""
+    plan = _build_plan(tmp_path)
+    store = ExtractionProgressStore()
+    finished = "window_end=2025-01-31|window_start=2025-01-01"
+
+    store.save(
+        plan,
+        page_number=4,
+        request_index=4,
+        artifact_count=4,
+        current_input_key=finished,
+        current_input_index=1,
+        request_input_count=2,
+    )
+    store.save_between_inputs(
+        plan,
+        completed_inputs=[(finished, 1)],
+        artifact_count=4,
+        request_input_count=2,
+        raw_path_prefix="runs/ingestion_date=2026-04-14/run_id=run-progress-001",
+    )
+    progress = store.load(plan)
+
+    assert progress is not None
+    assert progress["completed_inputs"] == [{"key": finished, "index": 1}]
+    assert progress["current_input_key"] is None
+    assert progress["current_input_index"] is None
+    assert progress["request_index"] == 0
+    assert progress["artifact_count"] == 4
+    assert progress["request_input_count"] == 2
+    assert progress["raw_path_prefix"] == "runs/ingestion_date=2026-04-14/run_id=run-progress-001"
+    assert not {"last_page_number", "last_offset", "last_cursor"} & progress.keys()
+
+
 # ---------------------------------------------------------------------------
 # load — edge cases
 # ---------------------------------------------------------------------------

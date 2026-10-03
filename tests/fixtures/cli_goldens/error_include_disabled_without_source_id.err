@@ -1,0 +1,6 @@
+usage: janus [-h] [--environment ENVIRONMENT] [--project-root PROJECT_ROOT]
+             [--with-spark] [--source-id SOURCE_ID] [--run-id RUN_ID]
+             [--started-at STARTED_AT] [--execute] [--ingest-raw-to-bronze]
+             [--bronze-table BRONZE_TABLE] [--include-disabled] [--resume]
+             [--verify-checksums]
+janus: error: --include-disabled requires --source-id

@@ -18,6 +18,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -458,7 +459,11 @@ def _hooked_project(tmp_path, name: str, source_id: str, hook_id: str = "test-ho
 
 
 def _planner_with(hook: SourceHook, hook_id: str = "test-hook") -> BatchPlanner:
-    return BatchPlanner(planner=Planner(hook_catalog=HookCatalog(hooks=((hook_id, hook),))))
+    """A batch whose planner resolves ``hook_id``, over a registry validated against it."""
+    return BatchPlanner(
+        planner=Planner(hook_catalog=HookCatalog(hooks=((hook_id, hook),))),
+        registry_loader=partial(load_registry, hook_ids=frozenset({hook_id})),
+    )
 
 
 def test_one_sources_planning_failure_stays_that_sources_failure(tmp_path):

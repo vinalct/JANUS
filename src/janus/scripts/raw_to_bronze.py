@@ -55,6 +55,7 @@ from janus.runtime.materialize import (
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.scripts.checksums import _artifact_format_for_path, _sha256
 from janus.scripts.rehydrate import (
+    CHECKSUMS_VERIFIED_KEY,
     _build_extraction_result_from_raw,
     _rediscover_raw_artifacts,
 )
@@ -153,6 +154,12 @@ class RawToBronzeRun:
                 ],
             }
 
+        # Present only after a verified rediscovery, so an unverified replay's summary keeps
+        # its shape and a refused one never claims a verification that did not complete.
+        checksums_verified = self.extraction_result.metadata_as_dict().get(CHECKSUMS_VERIFIED_KEY)
+        if checksums_verified is not None:
+            summary[CHECKSUMS_VERIFIED_KEY] = checksums_verified
+
         if self.failure_reason is not None:
             summary["failure_reason"] = self.failure_reason
         if self.error_type is not None:
@@ -186,10 +193,13 @@ class RawToBronzeLoader:
         environment_config: Mapping[str, Any],
         *,
         bronze_table: str,
+        verify_checksums: bool = False,
     ) -> RawToBronzeRun:
         # Replay converges on the live path's lifecycle: rediscovery and rehydration
         # are pure Python, so Spark starts only where BronzeMaterializer needs it.
         # A caller that hands over a live session keeps owning it.
+        # `verify_checksums` re-hashes every rediscovered artifact against its sidecar
+        # during rediscovery, so a changed raw zone fails the run before materialization.
         spark_provider = (
             spark
             if isinstance(spark, SparkSessionProvider)
@@ -246,6 +256,10 @@ class RawToBronzeLoader:
                     plan,
                     spark_provider,
                     storage_layout,
+                    verify_checksums=verify_checksums,
+                )
+                runtime_planned_run, plan = _record_verified_checksums(
+                    runtime_planned_run, extraction_result
                 )
                 write_results = _raw_write_results(plan, extraction_result)
                 _log_info(
@@ -457,13 +471,34 @@ def ingest_raw_to_bronze(
     *,
     bronze_table: str,
     logger: StructuredLogger | None = None,
+    verify_checksums: bool = False,
 ) -> RawToBronzeRun:
     return RawToBronzeLoader(logger=logger).ingest(
         planned_run,
         spark,
         environment_config,
         bronze_table=bronze_table,
+        verify_checksums=verify_checksums,
     )
+
+
+def _record_verified_checksums(
+    planned_run: PlannedRun, extraction_result: ExtractionResult
+) -> tuple[PlannedRun, ExecutionPlan]:
+    """Copy a verified rediscovery into the run attributes.
+
+    The run-metadata JSON records run attributes, not extraction metadata. Recording the
+    fact here is how it reaches that file, the same way the preflight outcome does.
+    """
+
+    verified = extraction_result.metadata_as_dict().get(CHECKSUMS_VERIFIED_KEY)
+    if verified is None:
+        return planned_run, planned_run.plan
+    plan = replace(
+        planned_run.plan,
+        run_context=planned_run.plan.run_context.with_attribute(CHECKSUMS_VERIFIED_KEY, verified),
+    )
+    return replace(planned_run, plan=plan), plan
 
 
 def _build_result(

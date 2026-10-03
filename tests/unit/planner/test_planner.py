@@ -18,6 +18,7 @@ from janus.planner import (
     StrategyCatalog,
     StrategyResolutionError,
 )
+from janus.registry import load_registry
 from janus.strategies.base import BaseStrategy, SourceHook
 from tests.support.contracts import write_minimal_contract
 
@@ -237,7 +238,8 @@ def test_planner_resolves_registered_source_hook(tmp_path):
             project_root=project_root,
             run_id="run-hook-001",
             started_at=datetime(2026, 4, 8, 13, 30, tzinfo=UTC),
-        )
+        ),
+        registry=load_registry(project_root, hook_ids=frozenset({"example.hook"})),
     )
 
     assert planned_run.plan.notes == (
@@ -250,6 +252,12 @@ def test_planner_resolves_registered_source_hook(tmp_path):
 
 
 def test_planner_reports_missing_hook_binding(tmp_path):
+    """The planner still refuses a hook its own catalog lacks.
+
+    Loading refuses an unregistered hook first (the registry's semantic rule (e)), so this
+    plans against a snapshot validated with a catalog that does hold ``example.hook``: the
+    planner's resolution is the guard left for a snapshot validated against another catalog.
+    """
     project_root = _create_project(
         tmp_path,
         _source_yaml(
@@ -278,7 +286,8 @@ def test_planner_reports_missing_hook_binding(tmp_path):
                 project_root=project_root,
                 run_id="run-hook-002",
                 started_at=datetime(2026, 4, 8, 14, 0, tzinfo=UTC),
-            )
+            ),
+            registry=load_registry(project_root, hook_ids=frozenset({"example.hook"})),
         )
 
 
@@ -427,7 +436,7 @@ def test_main_executes_source_through_framework_runtime(tmp_path, capsys, monkey
         return FakeSparkSession()
 
     monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _build_session)
-    monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
+    monkeypatch.setattr("janus.cli.run.SourceExecutor", FakeSourceExecutor)
 
     exit_code = main(
         [
@@ -495,7 +504,7 @@ def test_main_execute_omits_the_spark_summary_when_no_session_was_started(
         raise AssertionError("a run with nothing to materialize must not start Spark")
 
     monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _refuse_to_build)
-    monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
+    monkeypatch.setattr("janus.cli.run.SourceExecutor", FakeSourceExecutor)
 
     exit_code = main(
         [
@@ -554,7 +563,7 @@ def test_main_execute_reports_a_failed_run_without_bypassing_observability(
         raise RuntimeError("spark session build failed")
 
     monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _failing_build)
-    monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
+    monkeypatch.setattr("janus.cli.run.SourceExecutor", FakeSourceExecutor)
 
     exit_code = main(
         [
@@ -603,7 +612,7 @@ def test_main_execute_stops_the_session_when_the_run_raises(tmp_path, monkeypatc
         "janus.runtime.spark_lifecycle.build_spark_session",
         lambda config, paths: FakeSparkSession(),
     )
-    monkeypatch.setattr("janus.main.SourceExecutor", FakeSourceExecutor)
+    monkeypatch.setattr("janus.cli.run.SourceExecutor", FakeSourceExecutor)
 
     with pytest.raises(RuntimeError, match="escaped the executor guard"):
         main(
@@ -651,9 +660,11 @@ def test_main_ingests_existing_raw_artifacts_into_requested_bronze_table(
             }
 
     def fake_ingest_raw_to_bronze(
-        planned_run, spark_provider, environment_config, *, bronze_table, logger
+        planned_run, spark_provider, environment_config, *, bronze_table, logger, verify_checksums
     ):
         assert planned_run.plan.source.source_id == "cli_source"
+        # Verification is opt-in: the plain replay form never asks for it.
+        assert verify_checksums is False
         assert environment_config["name"] == "local"
         # Replay converges on the live shape: the CLI hands over a provider, and
         # rediscovery/rehydration runs before anything is built.
@@ -670,7 +681,7 @@ def test_main_ingests_existing_raw_artifacts_into_requested_bronze_table(
         return FakeSparkSession()
 
     monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _build_session)
-    monkeypatch.setattr("janus.main.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
+    monkeypatch.setattr("janus.cli.run.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
 
     exit_code = main(
         [
@@ -727,9 +738,10 @@ def test_main_raw_to_bronze_omits_the_spark_summary_when_no_session_was_started(
             return {"status": "succeeded", "raw_artifact_count": 0}
 
     def fake_ingest_raw_to_bronze(
-        planned_run, spark_provider, environment_config, *, bronze_table, logger
+        planned_run, spark_provider, environment_config, *, bronze_table, logger, verify_checksums
     ):
         del planned_run, spark_provider, environment_config, bronze_table, logger
+        del verify_checksums
         # An empty raw zone: rehydration fails before the materializer needs Spark.
         return FakeRawToBronzeRun()
 
@@ -738,7 +750,7 @@ def test_main_raw_to_bronze_omits_the_spark_summary_when_no_session_was_started(
         raise AssertionError("replaying an empty raw zone must not start Spark")
 
     monkeypatch.setattr("janus.runtime.spark_lifecycle.build_spark_session", _refuse_to_build)
-    monkeypatch.setattr("janus.main.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
+    monkeypatch.setattr("janus.cli.run.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
 
     exit_code = main(
         [
@@ -775,9 +787,9 @@ def test_main_raw_to_bronze_stops_the_session_when_the_run_raises(tmp_path, monk
             stopped.append(True)
 
     def fake_ingest_raw_to_bronze(
-        planned_run, spark_provider, environment_config, *, bronze_table, logger
+        planned_run, spark_provider, environment_config, *, bronze_table, logger, verify_checksums
     ):
-        del planned_run, environment_config, bronze_table, logger
+        del planned_run, environment_config, bronze_table, logger, verify_checksums
         spark_provider.get()
         raise RuntimeError("escaped the loader guard")
 
@@ -785,7 +797,7 @@ def test_main_raw_to_bronze_stops_the_session_when_the_run_raises(tmp_path, monk
         "janus.runtime.spark_lifecycle.build_spark_session",
         lambda config, paths: FakeSparkSession(),
     )
-    monkeypatch.setattr("janus.main.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
+    monkeypatch.setattr("janus.cli.run.ingest_raw_to_bronze", fake_ingest_raw_to_bronze)
 
     with pytest.raises(RuntimeError, match="escaped the loader guard"):
         main(

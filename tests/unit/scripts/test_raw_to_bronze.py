@@ -9,7 +9,7 @@ from zipfile import ZipFile
 
 import pytest
 
-import janus.scripts.checksums as checksums
+import janus.writers.sidecar as sidecar
 from janus.models import ExecutionPlan, RunContext, WriteResult
 from janus.planner import PlannedRun
 from janus.quality import PersistedValidationReport, ValidationCheck, ValidationReport
@@ -491,9 +491,9 @@ def _spy_on_sha256(monkeypatch) -> list[Path]:
         return _sha256(path)
 
     # `_resolve_raw_checksum` calls `_sha256` through its own module globals, so the spy
-    # has to land there — patching the `raw_to_bronze` re-export would rebind a name
-    # nothing reads.
-    monkeypatch.setattr(checksums, "_sha256", spy)
+    # has to land there — patching the `raw_to_bronze` or `scripts.checksums` re-export
+    # would rebind a name nothing reads.
+    monkeypatch.setattr(sidecar, "_sha256", spy)
     return hashed
 
 
@@ -615,7 +615,7 @@ def test_rediscover_raw_artifacts_verify_mode_detects_sidecar_mismatch(tmp_path)
     assert trusted[0].checksum == "f" * 64
 
     # Opt-in verification re-hashes and rejects the divergent sidecar.
-    with pytest.raises(ValueError, match="Checksum sidecar mismatch"):
+    with pytest.raises(ValueError, match="Raw artifact integrity check failed"):
         _rediscover_raw_artifacts(plan, verify_checksums=True)
 
 

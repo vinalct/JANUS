@@ -59,20 +59,16 @@ class ExtractionProgressStore:
         raw_path_prefix: str | None = None,
     ) -> Path:
         """Atomically persist the last successfully processed pagination position."""
-        payload: dict[str, Any] = {
-            "source_id": plan.source.source_id,
-            "request_index": request_index,
-            "completed_inputs": [
-                {"key": k, "index": i} for k, i in (completed_inputs or [])
-            ],
-            "current_input_key": current_input_key,
-            "current_input_index": current_input_index,
-            "request_input_count": request_input_count,
-            "artifact_count": artifact_count,
-            "updated_at": datetime.now(tz=UTC).isoformat(),
-        }
-        if raw_path_prefix is not None and raw_path_prefix.strip():
-            payload["raw_path_prefix"] = raw_path_prefix.strip()
+        payload = _progress_payload(
+            plan,
+            request_index=request_index,
+            artifact_count=artifact_count,
+            completed_inputs=completed_inputs,
+            current_input_key=current_input_key,
+            current_input_index=current_input_index,
+            request_input_count=request_input_count,
+            raw_path_prefix=raw_path_prefix,
+        )
         if page_number is not None:
             payload["last_page_number"] = page_number
         if offset is not None:
@@ -81,11 +77,66 @@ class ExtractionProgressStore:
             payload["last_cursor"] = cursor
         return write_json_atomic(_progress_path(plan), payload)
 
+    def save_between_inputs(
+        self,
+        plan: ExecutionPlan,
+        *,
+        completed_inputs: list[tuple[str, int]],
+        artifact_count: int,
+        request_input_count: int,
+        raw_path_prefix: str | None = None,
+    ) -> Path:
+        """Atomically persist that a request input finished and no other has started.
+
+        ``save`` runs once per page, so on its own it records a finished input only with the
+        next input's first page. A next input that failed before that page left the finished
+        one named as the input in progress, and a resume asked for the page after its last.
+        This record names no input in progress and no page: every finished input is
+        rehydrated, never requested again.
+        """
+        payload = _progress_payload(
+            plan,
+            request_index=0,
+            artifact_count=artifact_count,
+            completed_inputs=completed_inputs,
+            current_input_key=None,
+            current_input_index=None,
+            request_input_count=request_input_count,
+            raw_path_prefix=raw_path_prefix,
+        )
+        return write_json_atomic(_progress_path(plan), payload)
+
     def clear(self, plan: ExecutionPlan) -> None:
         """Remove the progress file — called after successful extraction."""
         path = _progress_path(plan)
         if path.exists():
             path.unlink()
+
+
+def _progress_payload(
+    plan: ExecutionPlan,
+    *,
+    request_index: int,
+    artifact_count: int,
+    completed_inputs: list[tuple[str, int]] | None,
+    current_input_key: str | None,
+    current_input_index: int | None,
+    request_input_count: int,
+    raw_path_prefix: str | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "source_id": plan.source.source_id,
+        "request_index": request_index,
+        "completed_inputs": [{"key": k, "index": i} for k, i in (completed_inputs or [])],
+        "current_input_key": current_input_key,
+        "current_input_index": current_input_index,
+        "request_input_count": request_input_count,
+        "artifact_count": artifact_count,
+        "updated_at": datetime.now(tz=UTC).isoformat(),
+    }
+    if raw_path_prefix is not None and raw_path_prefix.strip():
+        payload["raw_path_prefix"] = raw_path_prefix.strip()
+    return payload
 
 
 def _progress_path(plan: ExecutionPlan) -> Path:

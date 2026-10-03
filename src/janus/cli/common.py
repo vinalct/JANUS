@@ -21,6 +21,36 @@ def default_project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def build_parent_parser(*, suppress_defaults: bool = False) -> argparse.ArgumentParser:
+    """The parent: --environment and --project-root, shared by every verb.
+
+    The help texts are `run`'s own, so a new verb takes both options the way `run` does.
+
+    A verb with actions (`janus dead-letters list …`) declares the pair again on each action
+    parser with ``suppress_defaults=True``, so the options may follow the action as well.
+    argparse copies an action parser's defaults over what the verb parser already parsed, so
+    a real default there would silently undo `--project-root X` given before the action. A
+    suppressed one leaves the verb parser's value, given or defaulted, unless the option is
+    repeated after the action.
+
+    It lives here, not in the dispatcher, because a verb module that needs it cannot import
+    the dispatcher that imports it.
+    """
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument(
+        "--environment",
+        default=argparse.SUPPRESS if suppress_defaults else "local",
+        help="Environment profile name under conf/environments without the .yaml suffix.",
+    )
+    parent.add_argument(
+        "--project-root",
+        type=Path,
+        default=argparse.SUPPRESS if suppress_defaults else default_project_root(),
+        help="Project root used to resolve conf/ and data/ paths.",
+    )
+    return parent
+
+
 def parse_started_at(value: str) -> datetime:
     """Parse the timezone-aware logical planning timestamp used by every CLI."""
     normalized = value.strip()

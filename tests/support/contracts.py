@@ -21,6 +21,9 @@ CONTRACT_SCHEMA_BLOCK = {"contract": DECLARED_CONTRACT_PATH}
 #: Where a synthetic project keeps a contract that declares a primaryKey.
 KEYED_CONTRACT_PATH = "conf/contracts/test/keyed_contract.yaml"
 
+#: Where a synthetic project keeps the contract of a producer serving more than ``id``.
+PRODUCER_CONTRACT_PATH = "conf/contracts/test/producer_contract.yaml"
+
 
 def write_minimal_contract(project_root: Path) -> Path:
     """Copy the minimal contract into ``project_root`` and return where it landed."""
@@ -77,6 +80,31 @@ def write_keyed_contract(
     target = project_root / KEYED_CONTRACT_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(keyed_contract_yaml(primary_key, required=required), encoding="utf-8")
+    return target
+
+
+def producer_contract_yaml(columns: Sequence[str]) -> str:
+    """The minimal contract, declaring ``columns`` beside ``id``, one string column each.
+
+    An ``iceberg_rows`` leaf may read only a column its producer's contract declares (the
+    registry's semantic rule (c)), so a fixture producer that serves ``codigo`` says so here.
+    """
+    contract = yaml.safe_load(minimal_contract_yaml())
+    contract["id"] = "example.producer"
+    contract["name"] = "Producer contract"
+    contract["description"]["purpose"] = "Minimal contract for a producer read by a consumer."
+    contract["schema"][0]["properties"] = [
+        {"name": name, "logicalType": "string", "physicalType": "string"}
+        for name in dict.fromkeys(("id", *columns))
+    ]
+    return yaml.safe_dump(contract, sort_keys=False)
+
+
+def write_producer_contract(project_root: Path, columns: Sequence[str]) -> Path:
+    """Write :func:`producer_contract_yaml` at ``PRODUCER_CONTRACT_PATH``; return the path."""
+    target = project_root / PRODUCER_CONTRACT_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(producer_contract_yaml(columns), encoding="utf-8")
     return target
 
 

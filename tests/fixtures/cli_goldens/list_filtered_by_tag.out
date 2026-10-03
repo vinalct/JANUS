@@ -1,0 +1,5 @@
+SOURCE_ID                 FAMILY  VARIANT          MODE         EN  HOOK             UPSTREAMS  TAGS
+ibge_agro_abacaxi_pronaf  api     date_window_api  incremental  no  ibge.sidra_flat  -          agropecuaria,api,federal,ibge,pronaf,sidra
+ibge_pib_brasil           api     date_window_api  incremental  no  ibge.sidra_flat  -          api,federal,ibge,pib,sidra
+
+2 source(s); 0 enabled; 0 edge(s)

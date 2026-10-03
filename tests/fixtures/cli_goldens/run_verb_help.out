@@ -1,0 +1,46 @@
+usage: janus [-h] [--environment ENVIRONMENT] [--project-root PROJECT_ROOT]
+             [--with-spark] [--source-id SOURCE_ID] [--run-id RUN_ID]
+             [--started-at STARTED_AT] [--execute] [--ingest-raw-to-bronze]
+             [--bronze-table BRONZE_TABLE] [--include-disabled] [--resume]
+             [--verify-checksums]
+
+Validate JANUS runtime configuration, plan one source, or execute one
+configured source through the framework runtime. Use `janus run-all [options]`
+to execute enabled sources once in dependency order.
+
+options:
+  -h, --help            show this help message and exit
+  --environment ENVIRONMENT
+                        Environment profile name under conf/environments
+                        without the .yaml suffix.
+  --project-root PROJECT_ROOT
+                        Project root used to resolve conf/ and data/ paths.
+  --with-spark          Create and stop a Spark session after validating the
+                        environment config.
+  --source-id SOURCE_ID
+                        Configured source_id to plan from the source registry.
+  --run-id RUN_ID       Optional explicit run identifier for the planned
+                        source execution.
+  --started-at STARTED_AT
+                        Optional timezone-aware ISO-8601 timestamp used to
+                        make planning deterministic.
+  --execute             Execute the selected source through planning,
+                        extraction, Spark normalization, bronze writes,
+                        validation, and metadata persistence.
+  --ingest-raw-to-bronze
+                        Skip extraction, rediscover the selected source raw
+                        artifacts already stored in the raw zone, and load
+                        them into a bronze table informed at the CLI.
+  --bronze-table BRONZE_TABLE
+                        Target bronze table name for --ingest-raw-to-bronze.
+                        Accepts either table_name or namespace.table_name.
+  --include-disabled    Allow planning or executing a source that is
+                        configured but disabled.
+  --resume              Resume extraction from the last recorded page instead
+                        of starting over. Reads the extraction_progress.json
+                        written by a previous partial run and re-uses already-
+                        fetched raw files. Has no effect if no progress file
+                        exists.
+  --verify-checksums    Re-hash every rediscovered raw artifact and refuse to
+                        write bronze if any file disagrees with the checksum
+                        sidecar written at extraction time.

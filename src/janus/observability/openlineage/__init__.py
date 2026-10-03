@@ -43,6 +43,7 @@ from janus.observability.openlineage.transport import (
     OpenLineageEmissionResult,
     OpenLineageTransport,
     build_openlineage_transport,
+    resolve_openlineage_transport,
 )
 
 __all__ = [
@@ -80,4 +81,5 @@ __all__ = [
     "disabled_openlineage_sink",
     "openlineage_run_id",
     "resolve_openlineage_settings",
+    "resolve_openlineage_transport",
 ]

@@ -1,0 +1,27 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: semantics.orphan_consumer
+name: Semantics orphan_consumer
+version: 1.0.0
+status: active
+domain: semantics_rules
+description:
+  purpose: Reads a producer that is not configured.
+tags: [semantics]
+team:
+  - username: janus-tests
+    role: owner
+schema:
+  - name: semantics.orphan_consumer
+    physicalType: table
+    properties:
+      - name: code
+        logicalType: string
+        physicalType: string
+        required: true
+        primaryKey: true
+customProperties:
+  - property: janus.compatibility
+    value: additive
+  - property: janus.enforcement
+    value: lenient

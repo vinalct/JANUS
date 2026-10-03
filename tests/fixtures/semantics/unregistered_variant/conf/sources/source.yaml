@@ -1,0 +1,58 @@
+
+source_id: semantics_unregistered_variant
+name: Semantics unregistered_variant
+owner: janus-tests
+enabled: false
+source_type: api
+strategy: api
+strategy_variant: not_a_registered_variant
+federation_level: federal
+domain: semantics_rules
+public_access: true
+tags: [semantics]
+
+access:
+  base_url: https://example.invalid
+  path: /records
+  method: GET
+  format: json
+  timeout_seconds: 5
+  auth:
+    type: none
+  pagination:
+    type: page_number
+    page_param: page
+    size_param: page_size
+    page_size: 100
+  rate_limit:
+    concurrency: 1
+
+extraction:
+  mode: full_refresh
+  retry:
+    max_attempts: 1
+    backoff_strategy: fixed
+    backoff_seconds: 1
+
+schema:
+  contract: conf/contracts/semantics/unregistered_variant.yaml
+
+spark:
+  input_format: json
+  write_mode: overwrite
+  partition_by: [ingestion_date]
+
+outputs:
+  raw:
+    path: data/raw/semantics/unregistered_variant
+    format: json
+  bronze:
+    path: data/bronze/semantics/unregistered_variant
+    format: iceberg
+    namespace: semantics
+    table_name: unregistered_variant
+  metadata:
+    path: data/metadata/semantics/unregistered_variant
+    format: json
+
+quality: {}

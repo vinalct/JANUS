@@ -1,0 +1,30 @@
+usage: janus [-h]
+             {run,run-all,contract,validate,list,dead-letters,checkpoint} ...
+
+Validate JANUS configuration, plan or execute sources, and author data
+contracts. Each verb takes its own options; `janus <verb> --help` lists them.
+
+`run` is the default verb when the first argument is an option, so
+`janus --environment local --source-id ID --execute` runs one source. Use
+`janus run-all [options]` to execute enabled sources once in dependency order.
+
+options:
+  -h, --help            show this help message and exit
+
+verbs:
+  {run,run-all,contract,validate,list,dead-letters,checkpoint}
+    run                 Validate runtime configuration, plan one source, or
+                        execute it. The default when the first argument is an
+                        option.
+    run-all             Run enabled sources once in deterministic dependency
+                        order.
+    contract            Inspect and author versioned data contract files.
+    validate            Load the source registry, resolve its graph, and plan
+                        every source, without running any.
+    list                List configured sources with their dispatch, state and
+                        dependencies, without running any.
+    dead-letters        Inspect, release or replay the items a source's runs
+                        gave up on. Nothing runs unless replay is given
+                        --execute.
+    checkpoint          Show where a source's next run starts, or set or clear
+                        it with a recorded reason. Nothing runs.

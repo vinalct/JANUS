@@ -38,7 +38,12 @@ from janus.registry.dependencies import (
 )
 from janus.strategies.api.request_inputs import _iceberg_table_identifier
 from janus.utils.storage import bronze_table_identifier
-from tests.support.contracts import KEYED_CONTRACT_PATH, write_keyed_contract
+from tests.support.contracts import (
+    KEYED_CONTRACT_PATH,
+    PRODUCER_CONTRACT_PATH,
+    write_keyed_contract,
+    write_producer_contract,
+)
 from tests.support.orchestration import (
     GRAPH_CASES,
     GraphCase,
@@ -174,8 +179,11 @@ def test_reading_one_producer_twice_is_one_dependency_with_two_explanations(tmp_
         "a_id": {"from": "request_input.a_id"},
         "a_code": {"from": "request_input.a_code"},
     }
+    _document(documents, "A")["schema"] = {"contract": PRODUCER_CONTRACT_PATH}
+    root = _project(tmp_path, documents)
+    write_producer_contract(root, ("code",))
 
-    graph = _load_documents(tmp_path, documents).graph
+    graph = load_registry(root).graph
 
     assert graph.edges == (
         SourceDependencyEdge(

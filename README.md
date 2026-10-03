@@ -81,13 +81,18 @@ make bootstrap
 make up
 ```
 
-### 2. Validate the runtime without starting Spark
+### 2. Validate the profile and the source registry without starting Spark
 
 ```bash
 make run-local-config
+make validate
 ```
 
-This validates the `local` environment profile and prepares the runtime paths.
+`make run-local-config` validates the `local` **environment profile** and prepares its runtime
+paths. `make validate` validates the **source registry**: it loads every source, resolves the
+dependency graph, applies the semantic rules and plans every source, then checks the `local`
+profile as well (`janus validate --environment local`). It starts no Spark session and creates
+no directory. Run it first after editing a source or a contract.
 
 ### 3. Validate Spark startup
 
@@ -193,6 +198,29 @@ missing table row is not proof that a run did not happen.
 Table columns, the tested failed-run and quality-breach queries, OpenLineage transports,
 retention limits, retry semantics, and troubleshooting are in the
 [queryable observability guide](docs/queryable-observability.md).
+
+## Commands
+
+`janus <verb> [options]` is one command. A command line that starts with an option is
+`janus run`, so every invocation shown above works unchanged. `janus <verb> --help` lists a
+verb's options.
+
+| Command | What it does | Guide |
+| --- | --- | --- |
+| `janus run`, or `janus --environment … [--source-id …]` | Checks a profile, plans one source, runs it (`--execute`, `--resume`), or replays its raw zone into bronze (`--ingest-raw-to-bronze`, optionally `--verify-checksums`). | [Reproducibility](docs/reproducibility.md#what-the-current-cli-does-and-does-not-do) |
+| `janus run-all` | Runs the enabled sources once, in dependency order. | [Batch orchestration](docs/orchestration.md) |
+| `janus contract draft` | Drafts a data contract from a raw run or a fixture. | [Data contracts](docs/data-contracts.md) |
+| `janus validate` | Loads the registry, checks what it means, and plans every source. With `--environment` it checks the profile too. | [Source onboarding](docs/source-onboarding.md#what-the-registry-checks-across-sources) |
+| `janus list` | Lists sources with family, variant, mode, enabled state, hook, tags and upstreams. `--graph` prints the dependency order. | [Operator commands](docs/reproducibility.md#operator-commands) |
+| `janus dead-letters list\|release\|replay` | Shows the items a run gave up on, releases them with a recorded reason, or releases them and resumes. | [Troubleshooting](docs/orchestration.md#a-source-failed-and-its-dependents-were-skipped) |
+| `janus checkpoint show\|set\|clear` | Shows where a source's next run starts, or moves or clears that point with a recorded reason. | [Troubleshooting](docs/orchestration.md#a-run-started-from-the-wrong-position) |
+
+`validate`, `list`, `dead-letters list`/`release` and `checkpoint` start no Spark session and
+send no request. They plan disabled sources too, so they work on the checked-in registry, where
+most sources ship disabled. `dead-letters release` and `checkpoint set`/`clear` change state, and
+each writes a history record first, naming the operator (`$JANUS_OPERATOR`, else `$USER`), the
+reason, and what it replaced: the released entries, or the previous checkpoint value. Only
+`dead-letters replay --execute` runs a source.
 
 ## Documentation Map
 

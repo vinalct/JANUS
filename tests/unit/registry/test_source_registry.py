@@ -10,7 +10,12 @@ from janus.models.source_config import (
     SourceConfigValidationError,
 )
 from janus.registry import SourceNotFoundError, load_registry
-from tests.support.contracts import DECLARED_CONTRACT_PATH, write_minimal_contract
+from tests.support.contracts import (
+    DECLARED_CONTRACT_PATH,
+    PRODUCER_CONTRACT_PATH,
+    write_minimal_contract,
+    write_producer_contract,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -844,9 +849,12 @@ def test_registry_parses_combined_request_inputs_and_parameter_bindings(tmp_path
                 "orgaos",
                 namespace="bronze_transparencia",
                 table_name="orgaos",
+            ).replace(
+                f"contract: {DECLARED_CONTRACT_PATH}", f"contract: {PRODUCER_CONTRACT_PATH}"
             ),
         },
     )
+    write_producer_contract(project_root, ("codigo",))
 
     source = load_registry(project_root).get_source("combined_source")
 

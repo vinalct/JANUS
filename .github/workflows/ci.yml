@@ -58,6 +58,8 @@ jobs:
         run: mypy
       - name: Fast tests without adapter or active Spark
         run: make test-fast PYTHON=python
+      - name: Validate the checked-in registry (no engines, no Spark)
+        run: python -m janus.main validate --project-root .
 
   adapter:
     name: Dagster gate (Python ${{ matrix.python-version }})
@@ -239,6 +241,17 @@ jobs:
               data/metadata/test-reports/ci.xml \
               --class-name tests.integration.orchestration.test_dependency_execution \
               --minimum-passed 8
+      - name: Assert the release-then-resume suite executed, bronze case included
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate \
+              data/metadata/test-reports/ci.xml \
+              --class-name tests.integration.cli.test_dead_letter_replay \
+              --minimum-passed 7
+      - name: Validate the registry against the local profile (no Spark session, no writes)
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m janus.main validate --environment local
       - name: Coverage summary (inside container)
         if: ${{ always() && hashFiles('data/.coverage') != '' }}
         run: |

@@ -15,18 +15,30 @@ from typing import Any
 import yaml
 
 from janus.checkpoints import DeadLetterStore
+from janus.cli.run import record_spark_session
 from janus.lineage import RunObserver
-from janus.main import record_spark_session
 from janus.models import WriteResult
-from janus.planner import HookCatalog, Planner, PlanningRequest, StrategyBinding, StrategyCatalog
+from janus.planner import (
+    HookCatalog,
+    PlannedRun,
+    Planner,
+    PlanningRequest,
+    StrategyBinding,
+    StrategyCatalog,
+)
 from janus.quality import PersistedValidationReport, QualityGate, ValidationReportStore
+from janus.registry import load_registry
 from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.scripts.raw_to_bronze import RawToBronzeLoader
 from janus.strategies.api import ApiHook, ApiResponse, ApiStrategy
 from janus.strategies.catalog import CatalogStrategy
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from tests.support.contract_frames import SchemaRows
-from tests.support.contracts import KEYED_CONTRACT_PATH, keyed_contract_yaml
+from tests.support.contracts import (
+    KEYED_CONTRACT_PATH,
+    keyed_contract_yaml,
+    with_registry_contract,
+)
 
 # Fixed instants: every timestamp in a golden is derived from one of these two.
 STARTED_AT = datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)
@@ -42,6 +54,9 @@ BASELINE_CASES = (
     "empty_handoff",
     "replay",
 )
+
+
+HOOK_IDS = frozenset({"order15.empty"})
 
 RECORDS = (
     {"id": "1", "title": "Fixture one", "updated_at": "2026-07-01"},
@@ -241,6 +256,14 @@ def contract_yaml(case: str) -> str:
     return keyed_contract_yaml(required=() if case == "quality_failure" else None)
 
 
+def plan_case(planner: Planner, request: PlanningRequest, case: str) -> PlannedRun:
+    planned = planner.plan(request, registry=load_registry(request.project_root, hook_ids=HOOK_IDS))
+    if case != "quality_failure":
+        return planned
+    (request.project_root / KEYED_CONTRACT_PATH).write_text(contract_yaml(case), encoding="utf-8")
+    return replace(planned, plan=with_registry_contract(planned.plan))
+
+
 def write_project(root: Path, document: dict[str, Any], *, contract: str | None = None) -> None:
     sources_dir = root / "conf" / "sources"
     sources_dir.mkdir(parents=True, exist_ok=True)
@@ -261,7 +284,7 @@ def capture_case(root: Path, case: str) -> dict[str, Any]:
     """Run one case end to end and return its manifest; JSON lands in the metadata zone."""
 
     document = source_payload(case)
-    write_project(root, document, contract=contract_yaml(case))
+    write_project(root, document)
 
     environment: dict[str, Any] = {
         "storage": {
@@ -287,7 +310,8 @@ def capture_case(root: Path, case: str) -> dict[str, Any]:
         ),
         hook_catalog=HookCatalog((("order15.empty", EmptyHandoffHook()),)),
     )
-    planned = planner.plan(
+    planned = plan_case(
+        planner,
         PlanningRequest.create(
             source_id=document["source_id"],
             environment="local",
@@ -295,7 +319,8 @@ def capture_case(root: Path, case: str) -> dict[str, Any]:
             run_id=f"order15-{case}",
             started_at=STARTED_AT,
             attributes={"trigger": "baseline"},
-        )
+        ),
+        case,
     )
 
     tables: dict[str, Any] = {}

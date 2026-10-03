@@ -106,7 +106,7 @@ sources:
         namespace: bronze__dados_abertos_catalog
         table_name: conjuntos_dados
         columns:
-          id: catalog_payload.id
+          id: entity_id
         distinct: true
       parameter_bindings:
         id:
