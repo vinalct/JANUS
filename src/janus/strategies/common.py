@@ -181,13 +181,17 @@ def _raw_run_path_prefix(
     return (
         Path("runs")
         / f"ingestion_date={ingestion_date}"
-        / f"run_id={_safe_raw_path_segment(plan.run_context.run_id)}"
+        / f"run_id={raw_run_path_segment(plan.run_context.run_id)}"
     )
 
 
-def _safe_raw_path_segment(value: str) -> str:
+def raw_run_path_segment(value: str) -> str:
+    """Normalize a run ID to its persisted raw-prefix segment (deliberately lossy)."""
     normalized = _RAW_PATH_SEGMENT_PATTERN.sub("-", value.strip()).strip("-")
     return normalized or "run"
+
+
+_safe_raw_path_segment = raw_run_path_segment
 
 
 def _default_storage_layout(plan: ExecutionPlan) -> StorageLayout:

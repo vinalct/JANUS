@@ -118,6 +118,7 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
         "UrllibApiTransport",
         "build_paginator",
     ),
+    "janus.strategies.common": ("raw_run_path_segment", "_safe_raw_path_segment"),
     "janus.strategies.api.core": (
         "ApiHook",
         "ApiPastEndConflictError",
