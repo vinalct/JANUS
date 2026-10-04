@@ -12,6 +12,7 @@ MODELS_ALL: tuple[str, ...] = (
     "AccessConfig",
     "AuthConfig",
     "BRONZE_WRITE_STRATEGIES",
+    "BronzeRetentionConfig",
     "BronzeWriteIntent",
     "CONCURRENT_PAGINATION_TYPES",
     "CombinedRequestInputsConfig",
@@ -77,6 +78,7 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     "janus.models.source_config": (
         "AccessConfig",
         "AuthConfig",
+        "BronzeRetentionConfig",
         "CONCURRENT_PAGINATION_TYPES",
         "CombinedRequestInputsConfig",
         "DEFAULT_PAST_END_STATUS_CODES",

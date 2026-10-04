@@ -248,6 +248,20 @@ class SparkConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class BronzeRetentionConfig:
+    """One source's override of the profile's bronze retention window."""
+
+    retain_last: int
+    older_than_days: int
+
+    def __post_init__(self) -> None:
+        if self.retain_last < 1:
+            raise ValueError("retain_last must be at least 1")
+        if self.older_than_days < 0:
+            raise ValueError("older_than_days must not be negative")
+
+
+@dataclass(frozen=True, slots=True)
 class OutputTarget:
     """One configured output zone, plus the Iceberg identity a bronze target carries."""
 
@@ -256,6 +270,7 @@ class OutputTarget:
     namespace: str | None = None
     table_name: str | None = None
     shared_with: tuple[str, ...] = ()
+    retention: BronzeRetentionConfig | None = None
 
     def __post_init__(self) -> None:
         """Reject a co-writer list that names nobody, or names somebody twice."""
