@@ -43,6 +43,10 @@ class MetadataZonePaths:
         return self.lineage_dir / f"{run_id}.json"
 
     @property
+    def validations_dir(self) -> Path:
+        return self.base_dir / "validations"
+
+    @property
     def checkpoint_state_path(self) -> Path:
         return self.checkpoints_dir / "current.json"
 
