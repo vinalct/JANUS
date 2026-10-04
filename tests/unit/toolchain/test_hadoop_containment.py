@@ -53,6 +53,11 @@ ALLOWED_SITES: dict[str, str] = {
         "Pins required local-hadoop degradation and proves it happens before "
         "either engine is imported. The test builds no Spark session."
     ),
+    "tests/unit/maintenance/test_maintenance_settings.py": (
+        "requires an explicit refusal on local-hadoop.yaml: "
+        "the quarantined profile has no maintenance policy and must never inherit one. "
+        "Reads the profile and asserts a configuration error; builds no Spark session."
+    ),
     "conf/environments/local-hadoop.yaml": (
         "The throwaway pre-migration profile itself, kept so the old commit path stays "
         "reproducible for the AC-4 baseline. Its header says it is not the supported local "

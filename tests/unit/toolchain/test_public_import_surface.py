@@ -68,6 +68,11 @@ MODELS_ALL: tuple[str, ...] = (
 
 #: Import paths that exist today and must keep working.
 PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
+    "janus.maintenance": (
+        "MaintenancePolicy",
+        "MaintenanceProfileError",
+        "resolve_maintenance_settings",
+    ),
     "janus.models": MODELS_ALL,
     "janus.models.source_config": (
         "AccessConfig",
