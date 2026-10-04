@@ -11,3 +11,7 @@ class MaintenanceProfileError(MaintenanceError, ValueError):
     A ``ValueError`` for the same reason ``OpenLineageProfileError`` is one: the CLI
     already maps it to the configuration exit code without learning a new exception.
     """
+
+
+class MaintenanceExecutionUnavailable(MaintenanceError):
+    """A planned action has no executor yet; it must never be reported as applied."""

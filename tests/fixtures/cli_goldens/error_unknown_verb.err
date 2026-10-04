@@ -1,2 +1,2 @@
 janus: unknown command 'frobnicate'
-choose from: run, run-all, contract, validate, list, dead-letters, checkpoint
+choose from: run, run-all, contract, validate, list, dead-letters, checkpoint, maintain

@@ -38,6 +38,7 @@ EXPECTED_CLI_MODULES = frozenset(
         "dead_letters",
         "checkpoint",
         "operator",
+        "maintain",
     }
 )
 
@@ -46,7 +47,7 @@ EXPECTED_CLI_MODULES = frozenset(
 EXPECTED_MAIN_MODULES = frozenset({"janus.cli.dispatch", "janus.cli.run_all", "janus.cli.contract"})
 
 EXPECTED_VERBS = frozenset(
-    {"run", "run-all", "contract", "validate", "list", "dead-letters", "checkpoint"}
+    {"run", "run-all", "contract", "validate", "list", "dead-letters", "checkpoint", "maintain"}
 )
 
 FORBIDDEN_MODULE_SCOPE_IMPORTS = ("pyspark", "pyiceberg", "pyarrow", "dagster")

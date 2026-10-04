@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import typing
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
 from janus.models import BronzeRetentionConfig
+
+if typing.TYPE_CHECKING:
+    from janus.maintenance.settings import MaintenancePolicy
+    from janus.registry import SourceRegistry
+    from janus.runtime.spark_lifecycle import SparkSessionProvider
+    from janus.utils.environment import RuntimeLocation
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,3 +79,18 @@ class MaintenanceInventory:
     lineage_events: tuple[EventFileEntry, ...] = ()
     runs_table: tuple[RunsTablePartitionEntry, ...] = ()
     raw: tuple[RawRunPrefixEntry, ...] = ()
+
+
+def collect_inventory(
+    registry: SourceRegistry,
+    config: Mapping[str, typing.Any],
+    resolved_paths: Mapping[str, RuntimeLocation],
+    policy: MaintenancePolicy,
+    now: datetime,
+    *,
+    zones: frozenset[str],
+    source_ids: frozenset[str] | None,
+    provider_factory: Callable[[], SparkSessionProvider],
+) -> MaintenanceInventory:
+    """Collect through one seam; subsequent tasks populate each declared zone."""
+    return MaintenanceInventory()

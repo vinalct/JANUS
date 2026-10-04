@@ -22,7 +22,6 @@ def _project(tmp_path, config):
     return root
 
 
-@pytest.mark.xfail(strict=True, reason="session-free maintain command absent")
 @pytest.mark.parametrize("zone", ["metadata", "lineage"])
 def test_file_zones_do_not_construct_or_acquire_provider(
     tmp_path, policy_config, monkeypatch, zone
@@ -81,7 +80,6 @@ def test_bronze_acquires_once_and_stops_in_finally(tmp_path, policy_config, monk
         assert calls == ["get", "stop"]
 
 
-@pytest.mark.xfail(strict=True, reason="maintain dry-run command absent")
 def test_missing_policy_refuses_with_exit_two(tmp_path, monkeypatch):
     import_module("janus.cli.maintain")
     from tests.support.semantics_fixtures import CLEAN, install_profile, materialize
