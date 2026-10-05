@@ -1,84 +1,206 @@
+"""Real command proof that expiration bounds history and reclaims data files."""
+
+from __future__ import annotations
+
 import json
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 import pytest
 
-from tests.integration.full_refresh_history.conftest import ENVIRONMENT_CONFIG
-from tests.support.retention_baseline import filesystem_state
+from janus.writers.identifiers import quote_identifier
 
-SOURCE = "full_refresh_history_unpartitioned"
-NOW = datetime(2030, 1, 1, 12, tzinfo=UTC)
-
-
-@pytest.mark.xfail(
-    strict=True, reason="snapshot maintenance command/executor absent"
+pytestmark = pytest.mark.parametrize(
+    "maintenance_harness",
+    ("full_refresh_history_unpartitioned", "full_refresh_history_partitioned"),
+    indirect=True,
+    ids=("unpartitioned", "partitioned"),
 )
-def test_three_runs_retain_two_and_preserve_time_travel(full_refresh_harness, run_maintenance):
-    harness = full_refresh_harness
-    session = harness.spark
-    ids, files, rows_by_run = [], [], []
+
+
+@dataclass(frozen=True)
+class ThreeRuns:
+    snapshot_ids: tuple[int, ...]
+    files: tuple[frozenset[Path], ...]
+    rows: tuple[list[tuple], ...]
+    columns: tuple[str, ...]
+    now: datetime
+
+
+def _snapshot_ids(harness) -> set[int]:
+    return {row.snapshot_id for row in harness.spark.table(f"{harness.table}.snapshots").collect()}
+
+
+def _current_snapshot(harness) -> int:
+    (main,) = harness.spark.table(f"{harness.table}.refs").filter("name = 'main'").collect()
+    return main.snapshot_id
+
+
+def _three_runs(harness) -> ThreeRuns:
+    partitioned = harness.source_id == "full_refresh_history_partitioned"
+    columns = ("id", "value", "partition_key") if partitioned else ("id", "value")
+    schema = ", ".join(f"{column} string" for column in columns)
+    ids, files, rows = [], [], []
     for index in range(3):
-        plan = harness.plan(SOURCE, run_id=f"retention-{index}")
-        rows = [(f"run-{index}", f"value-{index}")]
-        result = harness.write_rows(rows, "id string, value string", plan)
-        rows_by_run.append(rows)
-        ids.append(
-            session.table(f"{result.path}.history")
-            .orderBy("made_current_at")
-            .collect()[-1]
-            .snapshot_id
+        batch = (
+            [
+                (f"run-{index}-a", f"value-{index}", "first"),
+                (f"run-{index}-b", f"value-{index}", "second"),
+            ]
+            if partitioned
+            else [(f"run-{index}", f"value-{index}")]
         )
-        files.append(
-            {
-                Path(unquote(urlsplit(row.file_path).path))
-                for row in session.table(f"{result.path}.files").collect()
-            }
-        )
+        plan = harness.history.plan(harness.source_id, run_id=f"retention-{index}")
+        harness.history.write_rows(batch, schema, plan)
+        rows.append(batch)
+        ids.append(_current_snapshot(harness))
+        files.append(harness.data_files(harness.table))
     assert len(set(ids)) == 3
-    assert all(path.exists() for paths in files for path in paths)
-    location = next(
-        row.data_type
-        for row in session.sql(f"DESCRIBE TABLE EXTENDED {result.path}").collect()
-        if row.col_name == "Location"
-    )
-    warehouse = Path(unquote(urlsplit(location).path))
-    config = ENVIRONMENT_CONFIG
-    paths = {"metadata_dir": harness.project_root / "metadata"}
-    arguments = dict(now=NOW, zone="bronze", source_id=SOURCE, table_name=harness.table_name)
-    before = filesystem_state(warehouse)
-    dry = run_maintenance(session, config, paths, **arguments)
-    assert dry["dry_run"] is True
-    planned_ids = {
-        int(snapshot)
-        for item in dry["items"]
-        if item["action"] == "expire_snapshots"
-        for snapshot in json.loads(item["detail"]["snapshot_ids"])
-    }
-    assert planned_ids == {ids[0]}
-    assert {row.snapshot_id for row in session.table(f"{result.path}.snapshots").collect()} == set(
-        ids
-    )
-    assert filesystem_state(warehouse) == before
-    record = run_maintenance(session, config, paths, apply=True, **arguments)
-    assert record["dry_run"] is False
-    assert {row.snapshot_id for row in session.table(f"{result.path}.snapshots").collect()} == set(
-        ids[1:]
-    )
-    current = session.table(f"{result.path}.history").orderBy("made_current_at").collect()[-1]
-    assert current.snapshot_id == ids[-1]
-    previous = session.read.option("snapshot-id", str(ids[1])).table(result.path)
-    assert sorted(tuple(row) for row in previous.select("id", "value").collect()) == rows_by_run[1]
+    assert _snapshot_ids(harness) == set(ids)
+    assert all(len(paths) == (2 if partitioned else 1) for paths in files)
+    assert all(path.stat().st_size > 0 for paths in files for path in paths)
     assert files[0].isdisjoint(files[1] | files[2])
-    assert all(not path.exists() for path in files[0])
-    assert all(path.exists() for path in files[1] | files[2])
-    assert {snapshot for item in record["items"] for snapshot in item["expired_snapshot_ids"]} == {
-        ids[0]
-    }
-    assert dry["plan_digest"] == record["plan_digest"]
-    repeat = run_maintenance(session, config, paths, apply=True, **arguments)
-    assert repeat["items"] == []
-    assert {row.snapshot_id for row in session.table(f"{result.path}.snapshots").collect()} == set(
-        ids[1:]
+    committed = harness.spark.sql(
+        f"SELECT unix_millis(committed_at) AS committed_ms "
+        f"FROM {quote_identifier(harness.table + '.snapshots')}"
+    ).collect()
+
+    last_commit = datetime.fromtimestamp(max(row.committed_ms for row in committed) / 1000, UTC)
+    now = last_commit + timedelta(seconds=1)
+    assert all(datetime.fromtimestamp(row.committed_ms / 1000, UTC) < now for row in committed)
+    return ThreeRuns(tuple(ids), tuple(files), tuple(rows), columns, now)
+
+
+def _read_rows(harness, columns, *, snapshot_id=None) -> list[tuple]:
+    version = f" VERSION AS OF {snapshot_id}" if snapshot_id is not None else ""
+    frame = harness.spark.sql(f"SELECT * FROM {quote_identifier(harness.table)}{version}")
+    return sorted(tuple(row) for row in frame.select(*columns).collect())
+
+
+def _assert_retained(harness, runs) -> None:
+    assert _snapshot_ids(harness) == set(runs.snapshot_ids[1:])
+    assert _current_snapshot(harness) == runs.snapshot_ids[-1]
+    assert _read_rows(harness, runs.columns, snapshot_id=runs.snapshot_ids[1]) == sorted(
+        runs.rows[1]
     )
+    assert _read_rows(harness, runs.columns) == sorted(runs.rows[-1])
+    for path in runs.files[0]:
+        with pytest.raises(FileNotFoundError):
+            path.stat()
+    assert all(path.stat().st_size > 0 for path in runs.files[1] | runs.files[2])
+
+
+def test_three_runs_retain_two_and_preserve_time_travel(maintenance_harness, record_property):
+    harness = maintenance_harness
+    runs = _three_runs(harness)
+    current = _current_snapshot(harness)
+    sizes = {str(path): path.stat().st_size for paths in runs.files for path in paths}
+    before = harness.warehouse_digest()
+    policy = harness.policy(retain_last=2, older_than_days=0)
+
+    dry = harness.run_maintain(policy, apply=False, now=runs.now)
+    assert dry["dry_run"] is True
+    assert dry["policy_digest"] == policy.digest
+    assert dry["zones"] == ["bronze"]
+    assert dry["source_ids"] == [harness.source_id]
+    (planned,) = dry["items"]
+    assert planned["action"] == "expire_snapshots" and planned["status"] == "planned"
+    assert json.loads(planned["detail"]["snapshot_ids"]) == [runs.snapshot_ids[0]]
+    assert planned["detail"]["older_than"] == runs.now.isoformat()
+    assert planned["detail"]["retain_last"] == "2"
+    assert _snapshot_ids(harness) == set(runs.snapshot_ids)
+    assert _current_snapshot(harness) == current
+    after_dry = harness.warehouse_digest()
+    assert after_dry == before
+
+    applied = harness.run_maintain(policy, apply=True, now=runs.now)
+    assert applied["dry_run"] is False and applied["failures"] == []
+    (outcome,) = applied["items"]
+    assert outcome["status"] == "applied"
+    assert outcome["expired_snapshot_ids"] == [runs.snapshot_ids[0]]
+    assert json.loads(outcome["detail"]["predicted_but_retained_snapshot_ids"]) == []
+    assert json.loads(outcome["detail"]["unexpected_expired_snapshot_ids"]) == []
+    assert applied["plan_digest"] == dry["plan_digest"]
+    _assert_retained(harness, runs)
+
+    repeat = harness.run_maintain(policy, apply=True, now=runs.now)
+    assert repeat["items"] == [] and repeat["failures"] == []
+    assert all(summary["items_planned"] == 0 for summary in repeat["zone_summaries"])
+    _assert_retained(harness, runs)
+    after_apply = harness.warehouse_digest()
+    reclaimed = sum(sizes[str(path)] for path in runs.files[0])
+    assert reclaimed > 0
+    assert after_apply["bytes"] < before["bytes"]
+    record_property(
+        "snapshot_expiration",
+        json.dumps(
+            {
+                "source_id": harness.source_id,
+                "snapshots_before": runs.snapshot_ids,
+                "snapshots_after": sorted(_snapshot_ids(harness)),
+                "current_snapshot": current,
+                "cutoff": runs.now.isoformat(),
+                "dry_run": dry,
+                "applied": applied,
+                "repeat": repeat,
+                "warehouse_before": before,
+                "warehouse_after_dry_run": after_dry,
+                "warehouse_after_apply": after_apply,
+                "data_files": [
+                    {"path": path, "bytes_before": size, "exists_after": Path(path).exists()}
+                    for path, size in sorted(sizes.items())
+                ],
+                "data_bytes_reclaimed": reclaimed,
+                "warehouse_bytes_reclaimed": before["bytes"] - after_apply["bytes"],
+            },
+            sort_keys=True,
+        ),
+    )
+
+
+def test_second_apply_has_no_items(maintenance_harness):
+    harness = maintenance_harness
+    runs = _three_runs(harness)
+    policy = harness.policy(retain_last=2, older_than_days=0)
+    first = harness.run_maintain(policy, apply=True, now=runs.now)
+    assert len(first["items"]) == 1
+    _assert_retained(harness, runs)
+    before = harness.warehouse_digest()
+
+    second = harness.run_maintain(policy, apply=True, now=runs.now)
+    assert second["dry_run"] is False and second["failures"] == []
+    assert second["items"] == []
+    assert all(summary["items_planned"] == 0 for summary in second["zone_summaries"])
+    assert harness.warehouse_digest() == before
+    _assert_retained(harness, runs)
+
+
+def test_retain_three_preserves_history_time_travel_and_rollback(maintenance_harness):
+    harness = maintenance_harness
+    runs = _three_runs(harness)
+    before = harness.warehouse_digest()
+    record = harness.run_maintain(harness.policy(retain_last=3), apply=True, now=runs.now)
+    assert record["items"] == [] and record["failures"] == []
+    assert harness.warehouse_digest() == before
+
+    assert len(_snapshot_ids(harness)) >= 2
+    assert _snapshot_ids(harness) == set(runs.snapshot_ids)
+    assert _current_snapshot(harness) == runs.snapshot_ids[-1]
+    history = harness.spark.table(f"{harness.table}.history").collect()
+    assert {row.snapshot_id for row in history} == set(runs.snapshot_ids)
+    assert all(row.is_current_ancestor for row in history)
+    for snapshot_id, rows in zip(runs.snapshot_ids, runs.rows, strict=True):
+        assert _read_rows(harness, runs.columns, snapshot_id=snapshot_id) == sorted(rows)
+    assert all(path.stat().st_size > 0 for paths in runs.files for path in paths)
+
+    catalog = harness.spark.conf.get("spark.sql.defaultCatalog")
+    rollback = harness.spark.sql(
+        f"CALL {quote_identifier(catalog)}.system.rollback_to_snapshot("
+        f"table => '{harness.table}', snapshot_id => {runs.snapshot_ids[0]})"
+    ).first()
+    assert rollback.previous_snapshot_id == runs.snapshot_ids[-1]
+    assert rollback.current_snapshot_id == runs.snapshot_ids[0]
+    assert _current_snapshot(harness) == runs.snapshot_ids[0]
+    assert _read_rows(harness, runs.columns) == sorted(runs.rows[0])
+    assert _snapshot_ids(harness) == set(runs.snapshot_ids)
