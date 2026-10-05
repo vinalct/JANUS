@@ -152,7 +152,6 @@ def test_allowances_have_reasons_and_are_not_stale():
     assert len(ALLOWANCES) == 7
 
 
-@pytest.mark.xfail(strict=True, reason="maintenance procedure sweep is empty")
 def test_maintenance_procedure_sweep_is_not_vacuous():
     modules = {
         path: source for path, source in _modules().items() if path.startswith("maintenance/")

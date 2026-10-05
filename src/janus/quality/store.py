@@ -26,5 +26,5 @@ class ValidationReportStore:
         if report.run_id != plan.run_context.run_id:
             raise ValueError("report.run_id must match plan.run_context.run_id")
         metadata_paths = MetadataZonePaths.from_plan(plan)
-        target_path = metadata_paths.base_dir / self.directory_name / f"{report.run_id}.json"
+        target_path = metadata_paths.validations_dir / f"{report.run_id}.json"
         return write_json_atomic(target_path, report.to_dict())

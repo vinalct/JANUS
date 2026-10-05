@@ -393,7 +393,7 @@ def test_text_renders_arguments_snapshot_ids_skips_and_protected_items(project, 
     assert "bronze.example#3  retain_last" in result.stdout
 
 
-def test_apply_records_unavailable_metadata_executor_and_exits_one(project, monkeypatch):
+def test_apply_records_metadata_removal_failure_and_exits_one(project, monkeypatch):
     candidate = project / "data/metadata/example/lineage/orphan.json"
     candidate.parent.mkdir(parents=True)
     candidate.write_text('{"retained": true}\n')
@@ -413,6 +413,14 @@ def test_apply_records_unavailable_metadata_executor_and_exits_one(project, monk
         )
 
     monkeypatch.setattr(maintain, "collect_inventory", collect)
+    original_unlink = Path.unlink
+
+    def denied(path, *args, **kwargs):
+        if path == candidate:
+            raise PermissionError("scripted removal failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", denied)
     before = candidate.read_bytes()
     result = _invoke(project, "--zone", "metadata", "--apply", "--format", "json")
 
@@ -422,7 +430,7 @@ def test_apply_records_unavailable_metadata_executor_and_exits_one(project, monk
     assert record["dry_run"] is False
     failures = [item for item in record["items"] if item["status"] == "failed"]
     assert len(failures) == 1
-    assert failures[0]["failure_type"] == "MaintenanceExecutionUnavailable"
+    assert failures[0]["failure_type"] == "PermissionError"
     assert failures[0]["removed_count"] == failures[0]["removed_bytes"] == 0
     assert record["zone_summaries"][0]["items_failed"] == 1
     assert candidate.read_bytes() == before
@@ -430,6 +438,70 @@ def test_apply_records_unavailable_metadata_executor_and_exits_one(project, monk
         json.loads(line)["event"] for line in result.stderr.splitlines() if line.startswith("{")
     ]
     assert "maintenance_item_failed" in events
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_metadata_command_collects_and_applies_declared_source_history(project, monkeypatch, apply):
+    from janus.lineage.persistence import MetadataZonePaths
+    from janus.planner import Planner, PlanningRequest
+    from janus.registry import load_registry
+
+    now = datetime(2026, 10, 5, 12, tzinfo=UTC)
+
+    class Clock:
+        @staticmethod
+        def now(*, tz):
+            assert tz == UTC
+            return now
+
+    registry = load_registry(project)
+    planned = Planner().plan(
+        PlanningRequest.create(
+            source_id=CLEAN_PRODUCER,
+            environment="local",
+            project_root=project,
+            include_disabled=True,
+            started_at=now,
+        ),
+        registry=registry,
+    )
+    paths = MetadataZonePaths.from_plan(planned.plan)
+    paths.runs_dir.mkdir(parents=True)
+    for run_id, days in (("old", 200), ("newest", 100)):
+        (paths.runs_dir / f"{run_id}.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "started_at": (now - timedelta(days=days)).isoformat(),
+                }
+            )
+        )
+    paths.checkpoints_dir.mkdir(parents=True)
+    paths.checkpoint_state_path.write_text('{"state": "preserved"}\n')
+    _change_profile(project, lambda p: p["maintenance"]["metadata"].update(keep_last_runs=1))
+    monkeypatch.setattr(maintain, "datetime", Clock)
+    arm_spark_tripwire(monkeypatch)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("metadata history constructed a Spark provider")
+
+    monkeypatch.setattr(maintain, "SparkSessionProvider", forbidden)
+    result = _invoke(
+        project, "--zone", "metadata", "--format", "json", *(("--apply",) if apply else ())
+    )
+    assert result.exit_code == 0, result.output
+    path, record = _record(project)
+    assert result.stdout.encode() == path.read_bytes()
+    (item,) = record["items"]
+    assert item["target"] == str(paths.runs_dir / "old.json")
+    assert item["status"] == ("applied" if apply else "planned")
+    assert (paths.runs_dir / "old.json").exists() is not apply
+    assert (paths.runs_dir / "newest.json").is_file()
+    assert paths.checkpoint_state_path.read_text() == '{"state": "preserved"}\n'
+    if apply:
+        again = _invoke(project, "--zone", "metadata", "--apply", "--format", "json")
+        assert again.exit_code == 0, again.output
+        assert json.loads(again.stdout)["items"] == []
 
 
 def test_persistence_failure_still_prints_record_and_exits_one(project, monkeypatch):

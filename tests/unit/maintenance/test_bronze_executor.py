@@ -340,7 +340,7 @@ def test_skips_never_touch_spark():
 
 
 def test_unsupported_zone_is_a_recorded_failure():
-    item = PlannedItem("metadata", "history.json", "delete_file", {})
+    item = PlannedItem("unsupported", "history.json", "delete_file", {})
     outcome = _execute(None, item)
     assert outcome.status == "failed"
     assert outcome.failure_type == "MaintenanceExecutionUnavailable"

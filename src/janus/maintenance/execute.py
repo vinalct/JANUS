@@ -1,4 +1,4 @@
-"""Execute declared bronze procedures without deciding retention or opening compute.
+"""Execute declared retention without deciding policy or opening compute.
 
 Expiration precedes compaction in plan order. Compaction creates a snapshot, so an
 enabled rewrite can leave retain_last + 1 snapshots; that ordering is deliberate.
@@ -11,12 +11,17 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from threading import Thread
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from janus.maintenance.errors import MaintenanceExecutionUnavailable, MaintenanceItemTimeout
+from janus.maintenance.errors import (
+    MaintenanceExecutionUnavailable,
+    MaintenanceInvariantError,
+    MaintenanceItemTimeout,
+)
 from janus.maintenance.planning import PlannedItem, RetentionPlan
 from janus.maintenance.records import ItemOutcome
 from janus.maintenance.settings import MaintenancePolicy
@@ -66,6 +71,9 @@ def execute_retention(
     """Execute in plan order, updating an optional interruption-evidence ledger."""
     if outcomes is None:
         outcomes = [ItemOutcome.pending_apply(item) for item in plan.items]
+    protected_paths = frozenset(
+        Path(item.target) for item in plan.protected if item.zone == "metadata"
+    )
     for index, item in enumerate(plan.items):
         outcomes[index] = execute_item(
             session,
@@ -73,6 +81,7 @@ def execute_retention(
             catalog_name=catalog_name,
             timeout_seconds=policy.item_timeout_seconds,
             clock=clock,
+            protected_paths=protected_paths,
         )
     return tuple(outcomes)
 
@@ -84,12 +93,15 @@ def execute_item(
     catalog_name: str,
     timeout_seconds: float,
     clock: Callable[[], float] = perf_counter,
+    protected_paths: frozenset[Path] = frozenset(),
 ) -> ItemOutcome:
     """Record one failure and continue; process interruptions propagate unchanged."""
     if item.skipped_reason is not None:
         return ItemOutcome.from_planned_item(item)
     started = clock()
     try:
+        if item.zone == "metadata":
+            return execute_metadata_item(item, protected_paths=protected_paths, clock=clock)
         if item.zone != "bronze":
             raise MaintenanceExecutionUnavailable(
                 f"No maintenance executor is available for {item.zone}: {item.action}"
@@ -104,6 +116,52 @@ def execute_item(
         if isinstance(exc, MaintenanceExecutionUnavailable):
             return replace(outcome, removed_count=0, removed_bytes=0)
         return outcome
+
+
+def execute_metadata_item(
+    item: PlannedItem,
+    *,
+    protected_paths: frozenset[Path] = frozenset(),
+    clock: Callable[[], float] = perf_counter,
+) -> ItemOutcome:
+    """Remove one history file, refusing protected paths before touching the filesystem."""
+    path = Path(item.target)
+    state_file = path.name == "extraction_progress.json" or (
+        path.name == "current.json" and path.parent.name in {"checkpoints", "dead_letters"}
+    )
+    if state_file or path in protected_paths:
+        raise MaintenanceInvariantError(f"Refusing to delete protected metadata path: {path}")
+    if item.zone != "metadata" or item.action != "delete_file":
+        raise MaintenanceExecutionUnavailable(f"Unsupported metadata action: {item.action}")
+    if item.skipped_reason is not None:
+        return ItemOutcome.from_planned_item(item)
+    started = clock()
+    detail = dict(item.detail)
+    status = "applied"
+    removed_count = removed_bytes = 0
+    failure: OSError | None = None
+    try:
+        size = path.stat().st_size
+        path.unlink()
+        removed_count, removed_bytes = 1, size
+        # Leave empty directories: removing them races the next run's mkdir.
+    except FileNotFoundError:
+        status = "skipped"
+        detail["skipped_reason"] = "already_absent"
+    except OSError as exc:
+        status, failure = "failed", exc
+    return ItemOutcome(
+        zone=item.zone,
+        target=item.target,
+        action=item.action,
+        status=status,
+        detail=detail,
+        removed_count=removed_count,
+        removed_bytes=removed_bytes,
+        failure_type=type(failure).__name__ if failure is not None else None,
+        failure_message=str(failure) if failure is not None else None,
+        duration_seconds=clock() - started,
+    )
 
 
 def execute_bronze_item(

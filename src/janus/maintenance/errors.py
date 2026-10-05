@@ -17,6 +17,10 @@ class MaintenanceExecutionUnavailable(MaintenanceError):
     """A planned action has no executor yet; it must never be reported as applied."""
 
 
+class MaintenanceInvariantError(MaintenanceError):
+    """An executor was handed a protected path the planner must never select."""
+
+
 class MaintenanceItemTimeout(MaintenanceError):
     """The caller stopped waiting; Spark cancellation is only a request."""
 

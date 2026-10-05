@@ -7,12 +7,13 @@ A namespace listing only probes existence; it never adds a table to the inventor
 from __future__ import annotations
 
 import typing
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from janus.models import BronzeRetentionConfig
+from janus.lineage.persistence import MetadataZonePaths, read_json_mapping
+from janus.models import BronzeRetentionConfig, ExecutionPlan
 
 if typing.TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -21,6 +22,7 @@ if typing.TYPE_CHECKING:
     from janus.models import SourceConfig
     from janus.registry import SourceRegistry
     from janus.utils.environment import RuntimeLocation
+    from janus.utils.storage import StorageLayout
 
 MAX_EXCEPTION_CAUSES = 8
 
@@ -51,6 +53,20 @@ class RunArtifactEntry:
     run_id: str | None
     timestamp: datetime | None
     read_error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunArtifactKind:
+    kind: str
+    directory_attribute: str
+    timestamp_field: str
+
+RUN_ARTIFACT_KINDS = (
+    RunArtifactKind("runs", "runs_dir", "started_at"),
+    RunArtifactKind("lineage", "lineage_dir", "emitted_at"),
+    RunArtifactKind("checkpoint_history", "checkpoint_history_dir", "recorded_at"),
+    RunArtifactKind("validations", "validations_dir", "emitted_at"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +130,122 @@ def collect_inventory(
             source_ids=source_ids,
             session=session,
         )
-    return MaintenanceInventory(bronze=bronze)
+    metadata = None
+    if "metadata" in zones:
+        from janus.planner import Planner, PlanningRequest
+        from janus.utils.storage import StorageLayout
+
+        planner = Planner()
+        plans = (
+            planner.plan(
+                PlanningRequest.create(
+                    source_id=source.source_id,
+                    environment=config["name"],
+                    project_root=registry.project_root,
+                    run_id="maintenance-inventory",
+                    started_at=now,
+                    include_disabled=True,
+                ),
+                registry=registry,
+            ).plan
+            for source in registry.list_sources(enabled_only=False)
+            if source_ids is None or source.source_id in source_ids
+        )
+        metadata = collect_metadata_inventory(
+            plans,
+            StorageLayout.from_environment_config(config, registry.project_root),
+            source_ids=source_ids,
+        )
+    return MaintenanceInventory(bronze=bronze, metadata=metadata)
+
+
+def collect_metadata_inventory(
+    plans: Iterable[ExecutionPlan],
+    storage_layout: StorageLayout,
+    *,
+    source_ids: frozenset[str] | None,
+) -> MetadataZoneInventory:
+    """Read declared history roots, with state protected even when absent.
+
+    Only timestamps inside each record determine its age. A malformed record
+    remains inventory evidence for the planner to protect, never a candidate.
+    """
+    artifacts = []
+    protected_paths: set[Path] = set()
+    live: dict[str, str | None] = {}
+    for plan in plans:
+        source_id = plan.source.source_id
+        if source_ids is not None and source_id not in source_ids:
+            continue
+        paths = MetadataZonePaths.from_plan(plan)
+        progress_path = paths.base_dir / "extraction_progress.json"
+        protected_paths.update(
+            (paths.checkpoint_state_path, paths.dead_letter_state_path, progress_path)
+        )
+
+        progress = read_json_mapping(progress_path)
+        if progress is not None:
+            live[source_id] = _progress_run_segment(progress)
+        for kind in RUN_ARTIFACT_KINDS:
+            directory = getattr(paths, kind.directory_attribute)
+            for path in sorted(directory.glob("*.json")):
+                if path.is_file():
+                    artifacts.append(_read_run_artifact(path, kind, source_id))
+
+    for path in sorted((storage_layout.metadata_dir / "pipelines").glob("*/summary.json")):
+        if path.is_file():
+            artifacts.append(_read_pipeline_artifact(path))
+    return MetadataZoneInventory(tuple(artifacts), frozenset(protected_paths), live)
+
+
+def _progress_run_segment(progress: Mapping[str, typing.Any]) -> str | None:
+    prefix = progress.get("raw_path_prefix")
+    if not isinstance(prefix, str):
+        return None
+    return next(
+        (
+            part.removeprefix("run_id=")
+            for part in Path(prefix).parts
+            if part.startswith("run_id=") and part != "run_id="
+        ),
+        None,
+    )
+
+
+def _record_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        timestamp = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return timestamp.astimezone(UTC) if timestamp.utcoffset() is not None else None
+
+
+def _read_run_artifact(path: Path, kind: RunArtifactKind, source_id: str) -> RunArtifactEntry:
+    entry = RunArtifactEntry(kind.kind, path, source_id, path.stem, None)
+    try:
+        payload = read_json_mapping(path)
+        if payload is None:
+            return replace(entry, read_error="already_absent")
+        if payload.get("run_id") != path.stem:
+            return replace(entry, read_error="run_id_mismatch")
+        return replace(entry, timestamp=_record_timestamp(payload.get(kind.timestamp_field)))
+    except (OSError, ValueError) as exc:
+        return replace(entry, read_error=type(exc).__name__)
+
+
+def _read_pipeline_artifact(path: Path) -> RunArtifactEntry:
+    entry = RunArtifactEntry("pipelines", path, None, path.parent.name, None)
+    try:
+        payload = read_json_mapping(path)
+        if payload is None:
+            return replace(entry, read_error="already_absent")
+        pipeline = payload.get("pipeline")
+        timestamp = pipeline.get("started_at") if isinstance(pipeline, Mapping) else None
+        return replace(entry, timestamp=_record_timestamp(timestamp))
+    except (OSError, ValueError) as exc:
+        return replace(entry, read_error=type(exc).__name__)
 
 
 def collect_bronze_inventory(
