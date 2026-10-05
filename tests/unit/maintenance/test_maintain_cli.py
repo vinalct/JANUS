@@ -393,16 +393,13 @@ def test_text_renders_arguments_snapshot_ids_skips_and_protected_items(project, 
     assert "bronze.example#3  retain_last" in result.stdout
 
 
-@pytest.mark.parametrize("zone", ["bronze", "metadata"])
-def test_apply_records_each_unavailable_executor_and_exits_one(project, monkeypatch, zone):
+def test_apply_records_unavailable_metadata_executor_and_exits_one(project, monkeypatch):
     candidate = project / "data/metadata/example/lineage/orphan.json"
     candidate.parent.mkdir(parents=True)
     candidate.write_text('{"retained": true}\n')
 
     def collect(*args, **kwargs):
         now = args[4]
-        if zone == "bronze":
-            return _bronze_inventory(now)
         return MaintenanceInventory(
             metadata=MetadataZoneInventory(
                 (
@@ -417,7 +414,7 @@ def test_apply_records_each_unavailable_executor_and_exits_one(project, monkeypa
 
     monkeypatch.setattr(maintain, "collect_inventory", collect)
     before = candidate.read_bytes()
-    result = _invoke(project, "--zone", zone, "--apply", "--format", "json")
+    result = _invoke(project, "--zone", "metadata", "--apply", "--format", "json")
 
     assert result.exit_code == 1, result.output
     path, record = _record(project)
@@ -581,13 +578,14 @@ def test_source_filter_does_not_filter_shared_lineage_events(project, monkeypatc
     assert json.loads(result.stdout)["items"][0]["target"] == "/metadata/events-old.ndjson"
 
 
-def test_text_apply_renders_failed_items_and_zero_empty_zones(project, monkeypatch):
+def test_text_apply_renders_failed_items_and_zero_empty_zones(project, monkeypatch, fake_compute):
+    fake_compute.sql.side_effect = RuntimeError("catalog unavailable")
     monkeypatch.setattr(maintain, "collect_inventory", lambda *a, **kw: _bronze_inventory(a[4]))
     result = _invoke(project, "--apply")
 
     assert result.exit_code == 1
     assert "janus maintain — APPLY" in result.stdout
-    assert "failed: MaintenanceExecutionUnavailable" in result.stdout
+    assert "failed: RuntimeError: catalog unavailable" in result.stdout
     assert "nothing was deleted in: metadata" in result.stdout
     assert maintain.LOCK_WARNING in result.stdout
 

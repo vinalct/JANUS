@@ -26,6 +26,7 @@ from janus.maintenance.records import (
 from janus.maintenance.settings import MaintenancePolicy, resolve_maintenance_settings
 from janus.registry import SourceNotFoundError, SourceRegistry, load_registry
 from janus.runtime.spark_lifecycle import SparkSessionProvider
+from janus.utils.catalog_properties import derive_pyiceberg_catalog_name
 from janus.utils.environment import RuntimeLocation, load_environment_config, prepare_runtime
 from janus.utils.logging import StructuredLogger, build_structured_logger
 from janus.utils.storage import StorageLayout
@@ -38,6 +39,7 @@ OPERATIONAL_ERROR = 1
 ZONES = ("bronze", "metadata", "lineage", "runs-table", "raw")
 COMPUTE_ZONES = frozenset({"bronze", "runs-table"})
 LOCK_WARNING = "maintain must not overlap a run of the same source (no lock is held)"
+ORPHAN_WARNING = "do not remove orphan files while an extraction is in flight"
 
 _UNSUPPORTED_OPTIONS = {
     "execute": True,
@@ -238,6 +240,8 @@ def _run(
     failures = []
     plan = RetentionPlan((), (), now, prepared.policy.digest)
     items = None
+    pending: list[ItemOutcome] = []
+    interruption: KeyboardInterrupt | SystemExit | None = None
     try:
         if prepared.zones & {"metadata", "raw"}:
             source_ids = prepared.source_ids or frozenset(
@@ -264,6 +268,7 @@ def _run(
             zones=prepared.zones,
             source_ids=prepared.source_ids,
         )
+        pending = [ItemOutcome.pending_apply(item) for item in plan.items]
         # Validate the generated identity and its destination before an apply can act.
         record = MaintenanceRecord.from_plan(
             plan,
@@ -276,7 +281,11 @@ def _run(
         )
         prepared.store.record_path(record.maintenance_run_id)
         if not args.dry_run:
-            plan, items = _apply(plan, prepared, compute)
+            plan, items = _apply(plan, prepared, compute, pending)
+    except (KeyboardInterrupt, SystemExit) as exc:
+        interruption = exc
+        items = tuple(pending)
+        failures.append(RecordFailure("interrupted", type(exc).__name__, str(exc)))
     except ValueError:
         raise
     except Exception as exc:
@@ -292,20 +301,36 @@ def _run(
     record = MaintenanceRecord.from_plan(
         plan,
         environment=args.environment,
-        dry_run=args.dry_run,
+        dry_run=args.dry_run or interruption is not None,
         zones=prepared.zones,
         source_ids=prepared.source_ids or (),
         started_at=now,
         ended_at=now + timedelta(seconds=perf_counter() - started),
-        items=items,
+        items=None if interruption is not None else items,
     )
-    return plan, replace(record, lock=lock.name, failures=tuple(failures))
+    record = replace(record, lock=lock.name, failures=tuple(failures))
+    if interruption is not None:
+        record = record if args.dry_run else record.with_interrupted_outcomes(plan, tuple(pending))
+        _persist_partial(prepared.store, record)
+        raise interruption
+    return plan, record
+
+
+def _persist_partial(store: MaintenanceRecordStore, record: MaintenanceRecord) -> None:
+    # No completed summary is published after a process interruption.
+    try:
+        store.persist(record)
+    except OSError as exc:
+        print(
+            f"janus maintain: could not persist partial maintenance record: {exc}", file=sys.stderr
+        )
 
 
 def _apply(
     plan: RetentionPlan,
     prepared: _PreparedMaintenance,
     compute: _Compute,
+    pending: list[ItemOutcome],
 ) -> tuple[RetentionPlan, tuple[ItemOutcome, ...]]:
     if plan.is_empty:
         return plan, tuple(ItemOutcome.from_planned_item(item) for item in plan.items)
@@ -314,6 +339,8 @@ def _apply(
             plan,
             policy=prepared.policy,
             session=compute.session,
+            catalog_name=derive_pyiceberg_catalog_name(prepared.config),
+            outcomes=pending,
         )
     except Exception as exc:
         # A dispatcher failure still needs evidence for every planned item.
@@ -348,6 +375,8 @@ def _render_text(plan: RetentionPlan, record: MaintenanceRecord) -> str:
     ]
     if record.lock == "none":
         lines.append(f"warning: {LOCK_WARNING}")
+    if record.dry_run and any(item.action == "remove_orphan_files" for item in record.items):
+        lines.append(f"⚠ {ORPHAN_WARNING}")
     lines.append("")
     for zone in record.zones:
         items = [item for item in record.items if item.zone == zone]
@@ -372,7 +401,8 @@ def _render_text(plan: RetentionPlan, record: MaintenanceRecord) -> str:
                 for key, value in sorted(item.detail.items())
                 if key not in {"snapshot_ids", "source_ids", "selected_source_ids"}
             )
-            lines.append(f"    {item.action}  {arguments}".rstrip())
+            caution = "⚠ " if item.action == "remove_orphan_files" else ""
+            lines.append(f"    {caution}{item.action}  {arguments}".rstrip())
             if item.status == "failed":
                 lines.append(f"      failed: {item.failure_type}: {item.failure_message}")
             elif record.dry_run and item.expired_snapshot_ids:

@@ -6,7 +6,7 @@ import json
 import math
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -171,6 +171,13 @@ class ItemOutcome:
             expired_snapshot_ids=snapshot_ids,
         )
 
+    @classmethod
+    def pending_apply(cls, item: PlannedItem) -> Self:
+        """Pending execution has unknown measurements, rather than dry-run estimates."""
+        if item.skipped_reason is not None:
+            return cls.from_planned_item(item)
+        return cls(item.zone, item.target, item.action, "planned", item.detail)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "zone": self.zone,
@@ -329,6 +336,20 @@ class MaintenanceRecord:
             items=items,
         )
 
+    def with_interrupted_outcomes(
+        self, plan: RetentionPlan, items: tuple[ItemOutcome, ...]
+    ) -> Self:
+        """Keep partial apply evidence, including every still-planned operation."""
+        if self.plan_digest != plan.digest or self.policy_digest != plan.policy_digest:
+            raise ValueError("interrupted outcomes must belong to this record's plan")
+        _validate_outcomes(plan, items, dry_run=False, interrupted=True)
+        return replace(
+            self,
+            dry_run=False,
+            items=items,
+            zone_summaries=tuple(ZoneSummary.from_items(zone, items) for zone in self.zones),
+        )
+
     @property
     def has_failures(self) -> bool:
         return bool(self.failures) or any(item.status == "failed" for item in self.items)
@@ -354,18 +375,31 @@ class MaintenanceRecord:
 
 
 def _validate_outcomes(
-    plan: RetentionPlan, items: tuple[ItemOutcome, ...], *, dry_run: bool
+    plan: RetentionPlan,
+    items: tuple[ItemOutcome, ...],
+    *,
+    dry_run: bool,
+    interrupted: bool = False,
 ) -> None:
     if len(items) != len(plan.items):
         raise ValueError("the record requires exactly one outcome per planned item")
     allowed = {"planned", "skipped"} if dry_run else {"applied", "skipped", "failed"}
+    if interrupted:
+        allowed.add("planned")
     for planned, outcome in zip(plan.items, items, strict=True):
-        if (planned.zone, planned.target, planned.action, _planned_detail(planned)) != (
+        arguments = _planned_detail(planned)
+        # Execution measurements may extend detail, but every declared argument
+        # must remain identical so the plan digest continues to identify the action.
+        detail_matches = (
+            dict(outcome.detail) == arguments
+            if dry_run
+            else arguments.items() <= outcome.detail.items()
+        )
+        if (planned.zone, planned.target, planned.action) != (
             outcome.zone,
             outcome.target,
             outcome.action,
-            dict(outcome.detail),
-        ):
+        ) or not detail_matches:
             raise ValueError("outcomes must match every planned item and its arguments in order")
         if outcome.status not in allowed:
             raise ValueError(f"status {outcome.status!r} is invalid for dry_run={dry_run}")
