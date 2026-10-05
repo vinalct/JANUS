@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -17,7 +17,12 @@ from janus.maintenance.execute import execute_retention
 from janus.maintenance.inventory import collect_inventory
 from janus.maintenance.locking import NullMaintenanceLock
 from janus.maintenance.planning import RetentionPlan, plan_retention
-from janus.maintenance.records import ItemOutcome, MaintenanceRecord, MaintenanceRecordStore
+from janus.maintenance.records import (
+    ItemOutcome,
+    MaintenanceRecord,
+    MaintenanceRecordStore,
+    RecordFailure,
+)
 from janus.maintenance.settings import MaintenancePolicy, resolve_maintenance_settings
 from janus.registry import SourceNotFoundError, SourceRegistry, load_registry
 from janus.runtime.spark_lifecycle import SparkSessionProvider
@@ -25,9 +30,13 @@ from janus.utils.environment import RuntimeLocation, load_environment_config, pr
 from janus.utils.logging import StructuredLogger, build_structured_logger
 from janus.utils.storage import StorageLayout
 
+if TYPE_CHECKING:
+    from pyspark.sql import SparkSession
+
 ARGUMENT_ERROR = 2
 OPERATIONAL_ERROR = 1
 ZONES = ("bronze", "metadata", "lineage", "runs-table", "raw")
+COMPUTE_ZONES = frozenset({"bronze", "runs-table"})
 LOCK_WARNING = "maintain must not overlap a run of the same source (no lock is held)"
 
 _UNSUPPORTED_OPTIONS = {
@@ -102,17 +111,25 @@ class _PreparedMaintenance:
 class _Compute:
     prepared: _PreparedMaintenance
     provider: SparkSessionProvider | None = None
+    session: SparkSession | None = None
 
-    def get_provider(self) -> SparkSessionProvider:
+    def get_session(self) -> SparkSession:
         if self.provider is None:
             self.provider = SparkSessionProvider(
                 self.prepared.config, self.prepared.resolved_paths, self.prepared.logger
             )
-        return self.provider
+            self.session = self.provider.get()
+        assert self.session is not None
+        return self.session
 
-    def stop(self) -> None:
-        if self.provider is not None:
-            self.provider.stop()
+    def stop(self) -> tuple[RecordFailure, ...]:
+        if self.provider is None:
+            return ()
+        self.provider.stop()
+        return tuple(
+            RecordFailure("spark_cleanup", type(exc).__name__, str(exc))
+            for exc in self.provider.take_cleanup_failures()
+        )
 
 
 def maintain_command(args: argparse.Namespace) -> int:
@@ -143,6 +160,10 @@ def maintain_command(args: argparse.Namespace) -> int:
         print(_render_text(plan, record))
     for item in record.items:
         item.log(prepared.logger, maintenance_run_id=record.maintenance_run_id)
+    for failure in record.failures:
+        prepared.logger.error(
+            "maintenance_failed", maintenance_run_id=record.maintenance_run_id, **failure.to_dict()
+        )
     try:
         prepared.store.persist(record)
     except OSError as exc:
@@ -214,6 +235,9 @@ def _run(
     compute = _Compute(prepared)
     lock = NullMaintenanceLock()
     acquired = []
+    failures = []
+    plan = RetentionPlan((), (), now, prepared.policy.digest)
+    items = None
     try:
         if prepared.zones & {"metadata", "raw"}:
             source_ids = prepared.source_ids or frozenset(
@@ -222,6 +246,7 @@ def _run(
             for source_id in sorted(source_ids):
                 if lock.acquire(source_id):
                     acquired.append(source_id)
+        session = compute.get_session() if prepared.zones & COMPUTE_ZONES else None
         inventory = collect_inventory(
             prepared.registry,
             prepared.config,
@@ -230,7 +255,7 @@ def _run(
             now,
             zones=prepared.zones,
             source_ids=prepared.source_ids,
-            provider_factory=compute.get_provider,
+            session=session,
         )
         plan = plan_retention(
             inventory,
@@ -250,12 +275,17 @@ def _run(
             ended_at=now,
         )
         prepared.store.record_path(record.maintenance_run_id)
-        items = None
         if not args.dry_run:
             plan, items = _apply(plan, prepared, compute)
+    except ValueError:
+        raise
+    except Exception as exc:
+        failures.append(RecordFailure("maintenance", type(exc).__name__, str(exc)))
+        if not args.dry_run:
+            items = _failed_outcomes(plan, exc)
     finally:
         try:
-            compute.stop()
+            failures.extend(compute.stop())
         finally:
             for source_id in reversed(acquired):
                 lock.release(source_id)
@@ -269,7 +299,7 @@ def _run(
         ended_at=now + timedelta(seconds=perf_counter() - started),
         items=items,
     )
-    return plan, replace(record, lock=lock.name)
+    return plan, replace(record, lock=lock.name, failures=tuple(failures))
 
 
 def _apply(
@@ -283,26 +313,29 @@ def _apply(
         return plan, execute_retention(
             plan,
             policy=prepared.policy,
-            provider_factory=compute.get_provider,
+            session=compute.session,
         )
     except Exception as exc:
         # A dispatcher failure still needs evidence for every planned item.
         # Unknown partial results remain unknown; do not invent removed counts.
-        outcomes = tuple(
-            ItemOutcome.from_planned_item(item)
-            if item.skipped_reason is not None
-            else ItemOutcome(
-                zone=item.zone,
-                target=item.target,
-                action=item.action,
-                status="failed",
-                detail=item.detail,
-                failure_type=type(exc).__name__,
-                failure_message=str(exc),
-            )
-            for item in plan.items
+        return plan, _failed_outcomes(plan, exc)
+
+
+def _failed_outcomes(plan: RetentionPlan, failure: Exception) -> tuple[ItemOutcome, ...]:
+    return tuple(
+        ItemOutcome.from_planned_item(item)
+        if item.skipped_reason is not None
+        else ItemOutcome(
+            zone=item.zone,
+            target=item.target,
+            action=item.action,
+            status="failed",
+            detail=item.detail,
+            failure_type=type(failure).__name__,
+            failure_message=str(failure),
         )
-        return plan, outcomes
+        for item in plan.items
+    )
 
 
 def _render_text(plan: RetentionPlan, record: MaintenanceRecord) -> str:
@@ -325,13 +358,19 @@ def _render_text(plan: RetentionPlan, record: MaintenanceRecord) -> str:
         lines.append(zone)
         for item in items:
             lines.append(f"  {item.target}")
+            if "selected_source_ids" in item.detail:
+                selected = ", ".join(json.loads(item.detail["selected_source_ids"]))
+                writers = ", ".join(json.loads(item.detail["source_ids"]))
+                lines.append(
+                    f"    included via shared_with: selected {selected}; writers {writers}"
+                )
             if item.status == "skipped":
                 lines.append(f"    skipped: {item.detail['skipped_reason']}")
                 continue
             arguments = "  ".join(
                 f"{key}={value}"
                 for key, value in sorted(item.detail.items())
-                if key != "snapshot_ids"
+                if key not in {"snapshot_ids", "source_ids", "selected_source_ids"}
             )
             lines.append(f"    {item.action}  {arguments}".rstrip())
             if item.status == "failed":
@@ -348,4 +387,6 @@ def _render_text(plan: RetentionPlan, record: MaintenanceRecord) -> str:
     if plan.protected:
         lines.extend(("", "protected (not candidates)"))
         lines.extend(f"  {item.zone}  {item.target}  {item.reason}" for item in plan.protected)
+    for failure in record.failures:
+        lines.append(f"failed ({failure.stage}): {failure.failure_type}: {failure.failure_message}")
     return "\n".join(lines)

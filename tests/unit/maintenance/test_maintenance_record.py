@@ -449,6 +449,7 @@ def test_json_shape_is_complete_round_trippable_and_byte_stable(plan):
         "duration_seconds",
         "zone_summaries",
         "items",
+        "failures",
     }
     assert payload["schema_version"] == MAINTENANCE_RECORD_SCHEMA_VERSION == 1
     encoded = json.dumps(payload, sort_keys=True, allow_nan=False)

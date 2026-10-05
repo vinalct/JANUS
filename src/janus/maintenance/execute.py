@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from janus.maintenance.errors import MaintenanceExecutionUnavailable
@@ -11,14 +10,14 @@ from janus.maintenance.records import ItemOutcome
 from janus.maintenance.settings import MaintenancePolicy
 
 if TYPE_CHECKING:
-    from janus.runtime.spark_lifecycle import SparkSessionProvider
+    from pyspark.sql import SparkSession
 
 
 def execute_retention(
     plan: RetentionPlan,
     *,
     policy: MaintenancePolicy,
-    provider_factory: Callable[[], SparkSessionProvider],
+    session: SparkSession | None,
 ) -> tuple[ItemOutcome, ...]:
     """Preserve skips and refuse actions until their zone executor is available.
 

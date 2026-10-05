@@ -416,14 +416,69 @@ def test_policy_dataclasses_are_frozen_and_slotted(policy_config, block):
         setattr(instance, fields(instance)[0].name, None)
 
 
-def test_maintenance_package_has_no_engine_imports():
+def _runtime_engine_imports(source):
+    class Detector(ast.NodeVisitor):
+        def __init__(self):
+            self.imports = []
+
+        def visit_If(self, node):
+            test = node.test
+            type_checking = (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+                isinstance(test, ast.Attribute)
+                and isinstance(test.value, ast.Name)
+                and test.value.id == "typing"
+                and test.attr == "TYPE_CHECKING"
+            )
+            if type_checking:
+                for child in node.orelse:
+                    self.visit(child)
+            else:
+                self.generic_visit(node)
+
+        def visit_Import(self, node):
+            self.imports.extend(
+                alias.name
+                for alias in node.names
+                if alias.name.split(".")[0] in {"pyspark", "pyiceberg"}
+            )
+
+        def visit_ImportFrom(self, node):
+            if (node.module or "").split(".")[0] in {"pyspark", "pyiceberg"}:
+                self.imports.append(node.module)
+
+    detector = Detector()
+    detector.visit(ast.parse(source))
+    return detector.imports
+
+
+def test_maintenance_package_has_no_runtime_engine_imports():
     modules = sorted((PROJECT_ROOT / "src/janus/maintenance").rglob("*.py"))
     assert modules
     for module in modules:
-        for node in ast.walk(ast.parse(module.read_text())):
-            if isinstance(node, ast.Import):
-                assert all(
-                    alias.name.split(".")[0] not in {"pyspark", "pyiceberg"} for alias in node.names
-                )
-            elif isinstance(node, ast.ImportFrom):
-                assert (node.module or "").split(".")[0] not in {"pyspark", "pyiceberg"}
+        assert _runtime_engine_imports(module.read_text()) == [], module
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import pyspark.sql",
+        "from pyiceberg.catalog import load_catalog",
+        "def collect():\n    import pyspark",
+        "if TYPE_CHECKING:\n    pass\nelse:\n    import pyspark",
+        "if enabled:\n    import pyiceberg",
+    ],
+)
+def test_runtime_engine_detector_rejects_executable_imports(source):
+    assert _runtime_engine_imports(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "if TYPE_CHECKING:\n    from pyspark.sql import SparkSession",
+        "if typing.TYPE_CHECKING:\n    import pyiceberg",
+        "from janus.models import BronzeRetentionConfig",
+    ],
+)
+def test_runtime_engine_detector_allows_type_annotations_and_plain_imports(source):
+    assert _runtime_engine_imports(source) == []

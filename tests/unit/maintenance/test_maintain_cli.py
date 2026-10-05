@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
@@ -20,7 +22,7 @@ from janus.maintenance.inventory import (
     SnapshotEntry,
 )
 from janus.maintenance.planning import PlannedItem, ProtectedItem, RetentionPlan
-from janus.maintenance.records import MaintenanceRecordStore
+from janus.maintenance.records import ItemOutcome, MaintenanceRecordStore
 from tests.support.operator_cli import arm_spark_tripwire, run_janus
 from tests.support.semantics_fixtures import (
     CLEAN,
@@ -29,6 +31,29 @@ from tests.support.semantics_fixtures import (
     install_profile,
     materialize,
 )
+
+
+@pytest.fixture(autouse=True)
+def fake_compute(monkeypatch):
+    """Keep command tests independent of Spark; lifecycle cases install their own spy."""
+    session = MagicMock()
+    session.sql.return_value.collect.return_value = []
+
+    class Provider:
+        def __init__(self, *args):
+            pass
+
+        def get(self):
+            return session
+
+        def stop(self):
+            pass
+
+        def take_cleanup_failures(self):
+            return ()
+
+    monkeypatch.setattr(maintain, "SparkSessionProvider", Provider)
+    return session
 
 
 @pytest.fixture
@@ -59,20 +84,20 @@ def _change_profile(project: Path, update):
 
 def test_no_flags_default_to_dry_run_and_persist_evidence(project, monkeypatch):
     monkeypatch.chdir(project)
-    arm_spark_tripwire(monkeypatch)
 
     result = run_janus(["maintain"])
 
     assert result.exit_code == 0, result.output
     _, record = _record(project)
     assert record["dry_run"] is True
-    assert record["items"] == []
+    assert len(record["items"]) == 2
+    assert all(item["detail"]["skipped_reason"] == "absent_table" for item in record["items"])
     assert record["zones"] == ["bronze", "lineage", "metadata", "runs-table"]
     assert record["lock"] == "none"
     assert "DRY RUN (nothing will be deleted)" in result.stdout
     assert maintain.LOCK_WARNING in result.stdout
-    assert "nothing would be deleted in: bronze" in result.stdout
-    assert all(summary["items_planned"] == 0 for summary in record["zone_summaries"])
+    assert "skipped: absent_table" in result.stdout
+    assert record["zone_summaries"][0]["items_skipped"] == 2
 
 
 @pytest.mark.parametrize("mode", [(), ("--dry-run",), ("--apply",)])
@@ -84,7 +109,7 @@ def test_json_is_byte_identical_to_persisted_record(project, mode):
     assert result.stdout.encode() == path.read_bytes()
     assert json.loads(result.stdout) == record
     assert record["dry_run"] is (mode != ("--apply",))
-    assert record["items"] == []
+    assert all(item["status"] == "skipped" for item in record["items"])
     assert maintain.LOCK_WARNING in result.stderr
 
 
@@ -275,7 +300,7 @@ def test_file_zones_never_construct_provider(project, monkeypatch, zone, mode):
     assert result.exit_code == 0, result.output
 
 
-@pytest.mark.parametrize("stage", ["success", "collect-failure", "apply-failure"])
+@pytest.mark.parametrize("stage", ["success", "collect-failure", "apply-failure", "apply-success"])
 def test_one_deferred_provider_stops_on_every_path(project, monkeypatch, stage):
     calls = []
     providers = []
@@ -285,30 +310,51 @@ def test_one_deferred_provider_stops_on_every_path(project, monkeypatch, stage):
             calls.append("build")
             providers.append(self)
 
+        def get(self):
+            calls.append("get")
+            return live_session
+
         def stop(self):
             calls.append("stop")
 
-    def collect(*args, provider_factory, **kwargs):
-        assert provider_factory() is provider_factory()
+        def take_cleanup_failures(self):
+            calls.append("cleanup")
+            return ()
+
+    live_session = object()
+
+    def collect(*args, session, **kwargs):
+        calls.append("collect")
+        assert session is live_session
         if stage == "collect-failure":
             raise RuntimeError("inventory unavailable")
-        if stage == "apply-failure":
+        if stage in {"apply-failure", "apply-success"}:
             return _bronze_inventory(args[4])
         return MaintenanceInventory()
 
-    def execute(*args, provider_factory, **kwargs):
-        assert provider_factory() is providers[0]
+    def execute(*args, session, **kwargs):
+        calls.append("execute")
+        assert session is live_session
         if stage == "apply-failure":
             raise RuntimeError("scripted apply failure")
-        return ()
+        return tuple(
+            ItemOutcome.from_planned_item(item)
+            if item.skipped_reason is not None
+            else replace(ItemOutcome.from_planned_item(item), status="applied")
+            for item in args[0].items
+        )
 
     monkeypatch.setattr(maintain, "SparkSessionProvider", Provider)
     monkeypatch.setattr(maintain, "collect_inventory", collect)
     monkeypatch.setattr(maintain, "execute_retention", execute)
     result = _invoke(project, "--zone", "bronze", "--apply")
 
-    assert result.exit_code == (0 if stage == "success" else 1), result.output
-    assert calls == ["build", "stop"]
+    assert result.exit_code == (0 if stage in {"success", "apply-success"} else 1), result.output
+    assert len(providers) == 1
+    expected = ["build", "get", "collect"]
+    if stage in {"apply-failure", "apply-success"}:
+        expected.append("execute")
+    assert calls == [*expected, "stop", "cleanup"]
     if stage == "apply-failure":
         _, record = _record(project)
         failed = next(item for item in record["items"] if item["status"] == "failed")
@@ -397,7 +443,7 @@ def test_persistence_failure_still_prints_record_and_exits_one(project, monkeypa
     result = _invoke(project, "--format", "json")
 
     assert result.exit_code == 1
-    assert json.loads(result.stdout)["items"] == []
+    assert all(item["status"] == "skipped" for item in json.loads(result.stdout)["items"])
     assert "could not persist maintenance record" in result.stderr
 
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 from janus.maintenance.inventory import (
@@ -130,8 +130,9 @@ def _plan_bronze(
     for table in inventory.bronze:
         if source_ids is not None and source_ids.isdisjoint(table.source_ids):
             continue
+        selected = _Decisions()
         if table.unavailable_reason is not None:
-            decisions.items.append(
+            selected.items.append(
                 PlannedItem(
                     "bronze",
                     table.table_identifier,
@@ -140,8 +141,18 @@ def _plan_bronze(
                     skipped_reason=table.unavailable_reason,
                 )
             )
-            continue
-        _bronze_table(table, policy, now, decisions)
+        else:
+            _bronze_table(table, policy, now, selected)
+        context = {}
+        if table.selected_source_ids and set(table.selected_source_ids) != set(table.source_ids):
+            context = {
+                "source_ids": json.dumps(table.source_ids),
+                "selected_source_ids": json.dumps(table.selected_source_ids),
+            }
+        decisions.items.extend(
+            replace(item, detail={**item.detail, **context}) for item in selected.items
+        )
+        decisions.protected.extend(selected.protected)
     return decisions
 
 

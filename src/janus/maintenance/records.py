@@ -38,7 +38,7 @@ _ITEM_EVENTS = {
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _PLAN_DIGEST = re.compile(r"[0-9a-f]{64}")
 _ID_DIGEST_LENGTH = 8
-_MAX_ID_LENGTH = 96 
+_MAX_ID_LENGTH = 96
 _URI = re.compile(r"\b(?:jdbc:|[a-z][a-z0-9+.-]*://)[^\s\"'<>]+", re.IGNORECASE)
 _SENSITIVE_KEY = "|".join(
     re.escape(marker).replace(r"\-", "[-_]") for marker in SENSITIVE_FIELD_MARKERS
@@ -239,6 +239,25 @@ class ZoneSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordFailure:
+    """A command or session failure independent of any retention item."""
+
+    stage: str
+    failure_type: str
+    failure_message: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "failure_message", _bounded_failure_message(self.failure_message))
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "stage": self.stage,
+            "failure_type": self.failure_type,
+            "failure_message": self.failure_message,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class MaintenanceRecord:
     maintenance_run_id: str
     schema_version: int
@@ -254,6 +273,7 @@ class MaintenanceRecord:
     duration_seconds: float
     zone_summaries: tuple[ZoneSummary, ...]
     items: tuple[ItemOutcome, ...]
+    failures: tuple[RecordFailure, ...] = ()
 
     def __post_init__(self) -> None:
         validate_maintenance_run_id(self.maintenance_run_id)
@@ -311,7 +331,7 @@ class MaintenanceRecord:
 
     @property
     def has_failures(self) -> bool:
-        return any(item.status == "failed" for item in self.items)
+        return bool(self.failures) or any(item.status == "failed" for item in self.items)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -329,6 +349,7 @@ class MaintenanceRecord:
             "duration_seconds": self.duration_seconds,
             "zone_summaries": [summary.to_dict() for summary in self.zone_summaries],
             "items": [item.to_dict() for item in self.items],
+            "failures": [failure.to_dict() for failure in self.failures],
         }
 
 
