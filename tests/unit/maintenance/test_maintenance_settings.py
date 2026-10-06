@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from janus.maintenance import (
     MaintenancePolicy,
@@ -19,6 +20,12 @@ from janus.maintenance import (
 )
 from janus.maintenance.errors import MaintenanceError
 from janus.maintenance.settings import (
+    SUPPORTED_AGE_KEYS,
+    SUPPORTED_BRONZE_KEYS,
+    SUPPORTED_COMPACT_KEYS,
+    SUPPORTED_MAINTENANCE_KEYS,
+    SUPPORTED_METADATA_KEYS,
+    SUPPORTED_RAW_KEYS,
     BronzeRetentionPolicy,
     LineageEventsRetentionPolicy,
     MetadataRetentionPolicy,
@@ -132,17 +139,8 @@ def test_required_subblock_is_not_defaulted(policy_config, block):
     _assert_error(policy_config, f"maintenance.{block}", "must set")
 
 
-@pytest.mark.parametrize(
-    ("profile", "overlay"),
-    [
-        ("local", None),
-        ("cluster", None),
-        ("cluster", "cluster-rest.env.example"),
-        ("local-hadoop", None),
-    ],
-    ids=["local", "cluster", "cluster-rest", "local-hadoop"],
-)
-def test_shipped_profile_has_no_policy_and_is_refused(monkeypatch, profile, overlay):
+def _shipped_environment(monkeypatch, overlay=None):
+    """Read profiles as the repository ships them, not as this shell's JANUS_* says."""
     for key in list(os.environ):
         if key.startswith("JANUS_"):
             monkeypatch.delenv(key)
@@ -152,9 +150,92 @@ def test_shipped_profile_has_no_policy_and_is_refused(monkeypatch, profile, over
             key, separator, value = line.partition("=")
             if separator and not key.startswith("#"):
                 monkeypatch.setenv(key, value)
+
+
+#: The D-1 values the supported profiles ship (PRD order-21 §8 Q1).
+SHIPPED_POLICY = MaintenancePolicy(
+    bronze=BronzeRetentionPolicy(
+        retain_last=3,
+        older_than_days=30,
+        remove_orphan_files=False,
+        orphan_older_than_days=3,
+        compact_enabled=False,
+        compact_target_file_size_mb=512,
+    ),
+    metadata=MetadataRetentionPolicy(keep_last_runs=20, older_than_days=90),
+    lineage_events=LineageEventsRetentionPolicy(older_than_days=90),
+    runs_table=RunsTableRetentionPolicy(older_than_days=365),
+    raw=RawRetentionPolicy(enabled=False, keep_last_runs=3, older_than_days=365),
+    item_timeout_seconds=1800.0,
+)
+DECLARED_KEYS = {
+    "maintenance": SUPPORTED_MAINTENANCE_KEYS,
+    "maintenance.bronze": SUPPORTED_BRONZE_KEYS,
+    "maintenance.bronze.compact": SUPPORTED_COMPACT_KEYS,
+    "maintenance.metadata": SUPPORTED_METADATA_KEYS,
+    "maintenance.lineage_events": SUPPORTED_AGE_KEYS,
+    "maintenance.runs_table": SUPPORTED_AGE_KEYS,
+    "maintenance.raw": SUPPORTED_RAW_KEYS,
+}
+
+
+def _leaves(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _leaves(item)
+    else:
+        yield value
+
+
+def test_every_shipped_profile_has_a_maintenance_decision():
+    """A new profile must be classified here: given a policy, or refused like local-hadoop."""
+    shipped = {path.stem for path in (PROJECT_ROOT / "conf/environments").glob("*.yaml")}
+    assert shipped == {"local", "cluster", "local-hadoop"}
+
+
+@pytest.mark.parametrize(
+    ("profile", "overlay"),
+    [("local", None), ("cluster", None), ("cluster", "cluster-rest.env.example")],
+    ids=["local", "cluster", "cluster-rest"],
+)
+def test_supported_shipped_profiles_declare_the_explicit_policy(monkeypatch, profile, overlay):
+    _shipped_environment(monkeypatch, overlay)
     config = load_environment_config(profile, PROJECT_ROOT)
     if overlay is not None:
         assert config["spark"]["iceberg"]["catalog_type"] == "rest"
+    policy = resolve_maintenance_settings(config)
+    assert policy == SHIPPED_POLICY
+    # The file-deleting options ship off, and enabling raw would not trip the bronze floor.
+    assert not policy.raw.enabled
+    assert not (policy.bronze.remove_orphan_files or policy.bronze.compact_enabled)
+    assert policy.raw.keep_last_runs >= policy.bronze.retain_last
+    # Nothing is inherited silently: every supported key is written out as a typed literal.
+    # An expansion would resolve to a string, which the resolver refuses.
+    document = yaml.safe_load((PROJECT_ROOT / f"conf/environments/{profile}.yaml").read_text())
+    for path, keys in DECLARED_KEYS.items():
+        target, key = _target(document, path)
+        assert set(target[key]) == keys, path
+    assert not any(isinstance(leaf, str) for leaf in _leaves(document["maintenance"]))
+
+
+def test_a_fixture_profile_without_the_block_is_refused(tmp_path, monkeypatch):
+    """The absent case, on a fixture: the supported shipped profiles now declare a policy."""
+    _shipped_environment(monkeypatch)
+    profile = yaml.safe_load((PROJECT_ROOT / "conf/environments/local.yaml").read_text())
+    assert "maintenance" in profile
+    del profile["maintenance"]
+    fixture = tmp_path / "conf/environments/no-policy.yaml"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(yaml.safe_dump(profile))
+    config = load_environment_config("no-policy", tmp_path)
+    assert "maintenance" not in config
+    _assert_error(config, "maintenance", "no 'maintenance' block")
+
+
+def test_quarantined_local_hadoop_profile_has_no_policy_and_is_refused(monkeypatch):
+    """The one real shipped profile that still refuses (README D-13)."""
+    _shipped_environment(monkeypatch)
+    config = load_environment_config("local-hadoop", PROJECT_ROOT)
     assert "maintenance" not in config
     _assert_error(config, "maintenance", "no 'maintenance' block")
 

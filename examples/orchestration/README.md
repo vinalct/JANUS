@@ -384,6 +384,8 @@ The expected terminal status is the same successful A/B/C summary shown above.
 ## Snapshot maintenance follow-up
 
 Full-refresh overwrite preserves Iceberg history under the order-09 contract. This example does
-not expire snapshots, compact files, or delete orphans. Before enabling any of those operations,
-the deployment needs an explicit retention window, maintenance schedule, validation/recovery
-procedure, and safe-deletion policy. That work is separate from ingestion and orchestration.
+not expire snapshots, compact files, or delete orphans: its `example` profile declares no
+`maintenance:` block, so `janus maintain` refuses on it. A deployment that wants retention
+declares the window in its profile and schedules `janus maintain`, dry run first, serialized with
+ingestion through the same `janus_source_execution` pool. That work stays separate from
+ingestion and orchestration; see [retention and maintenance](../../docs/maintenance.md).

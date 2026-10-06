@@ -312,15 +312,22 @@ def collect_metadata_inventory(
 
     Only timestamps inside each record determine its age. A malformed record
     remains inventory evidence for the planner to protect, never a candidate.
+    Sources may declare one metadata directory together: it is read once, and a
+    record belongs to the source it names, so keep_last_runs stays per source.
     """
+    shared: dict[Path, tuple[MetadataZonePaths, list[str]]] = {}
+    for plan in plans:
+        paths = MetadataZonePaths.from_plan(plan)
+        shared.setdefault(paths.base_dir.resolve(), (paths, []))[1].append(plan.source.source_id)
+
     artifacts = []
     protected_paths: set[Path] = set()
     live: dict[str, str | None] = {}
-    for plan in plans:
-        source_id = plan.source.source_id
-        if source_ids is not None and source_id not in source_ids:
+    for paths, declared_by in shared.values():
+        owners = tuple(sorted(declared_by))
+        selected = [owner for owner in owners if source_ids is None or owner in source_ids]
+        if not selected:
             continue
-        paths = MetadataZonePaths.from_plan(plan)
         progress_path = paths.base_dir / "extraction_progress.json"
         protected_paths.update(
             (paths.checkpoint_state_path, paths.dead_letter_state_path, progress_path)
@@ -328,12 +335,12 @@ def collect_metadata_inventory(
 
         progress = read_json_mapping(progress_path)
         if progress is not None:
-            live[source_id] = _progress_run_segment(progress)
+            live.update(dict.fromkeys(selected, _progress_run_segment(progress)))
         for kind in RUN_ARTIFACT_KINDS:
             directory = getattr(paths, kind.directory_attribute)
             for path in sorted(directory.glob("*.json")):
                 if path.is_file():
-                    artifacts.append(_read_run_artifact(path, kind, source_id))
+                    artifacts.append(_read_run_artifact(path, kind, owners))
 
     for path in sorted((storage_layout.metadata_dir / "pipelines").glob("*/summary.json")):
         if path.is_file():
@@ -365,14 +372,24 @@ def _record_timestamp(value: object) -> datetime | None:
     return timestamp.astimezone(UTC) if timestamp.utcoffset() is not None else None
 
 
-def _read_run_artifact(path: Path, kind: RunArtifactKind, source_id: str) -> RunArtifactEntry:
-    entry = RunArtifactEntry(kind.kind, path, source_id, path.stem, None)
+def _read_run_artifact(
+    path: Path, kind: RunArtifactKind, owners: tuple[str, ...]
+) -> RunArtifactEntry:
+
+    entry = RunArtifactEntry(
+        kind.kind, path, owners[0] if len(owners) == 1 else None, path.stem, None
+    )
     try:
         payload = read_json_mapping(path)
         if payload is None:
             return replace(entry, read_error="already_absent")
         if payload.get("run_id") != path.stem:
             return replace(entry, read_error="run_id_mismatch")
+        named = payload.get("source_id")
+        if len(owners) > 1:
+            if named not in owners:
+                return replace(entry, read_error="source_unattributed")
+            entry = replace(entry, source_id=named)
         return replace(entry, timestamp=_record_timestamp(payload.get(kind.timestamp_field)))
     except (OSError, ValueError) as exc:
         return replace(entry, read_error=type(exc).__name__)

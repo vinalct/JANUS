@@ -581,9 +581,12 @@ bumped and the run a full refresh — replaces the table with `REPLACE TABLE`, a
 `spark.partition_by`; both record `history_reset_reason` in the run metadata so the cut is visible rather
 than assumed. On the pinned Iceberg version a replacement keeps the old snapshots readable with
 `VERSION AS OF` but no longer lets you roll back to them. Any other difference fails the run before it
-writes. See [The evolution matrix](data-contracts.md#the-evolution-matrix). Second, snapshots are retained
-indefinitely — nothing expires them today — so the storage a full-refresh source occupies grows with each
-run.
+writes. See [The evolution matrix](data-contracts.md#the-evolution-matrix). Second, the writer never
+expires a snapshot, so the storage a full-refresh source occupies grows with each run until `janus maintain`
+applies the environment's declared `maintenance.bronze` policy: the shipped profiles keep the newest three
+snapshots and anything younger than 30 days. Time travel and rollback reach only the snapshots retention
+kept, so roll back before maintenance, not after. A source that needs a longer or shorter window declares
+`outputs.bronze.retention` (see [`outputs`](#outputs) and [retention and maintenance](maintenance.md)).
 
 ### `outputs`
 
@@ -592,6 +595,17 @@ run.
 - Only `outputs.bronze` may define `namespace`, `table_name` and `shared_with`.
 - `namespace`, `table_name` and `shared_with` are only valid when `outputs.bronze.format` is `iceberg`.
 - Two sources may write the same bronze table only if each names the other in `outputs.bronze.shared_with`. The declaration must be mutual and complete: every co-writer names all the others and only those, and a source that declares a co-writer it does not actually share a table with is rejected.
+- `outputs.bronze.retention` optionally replaces the environment's snapshot window for this table. It takes exactly two keys, both required: `retain_last`, a positive integer, and `older_than_days`, a non-negative integer. It is only valid on `outputs.bronze` with `format: iceberg`. It changes what `janus maintain` keeps, never what the writer does, and orphan removal and compaction still follow the profile. Co-writers named in `shared_with` must declare the same override, or none; otherwise `maintain` skips that table as `retention_conflict`. See [retention and maintenance](maintenance.md#per-source-bronze-override).
+
+```yaml
+outputs:
+  bronze:
+    path: data/bronze/receita_federal/cnpj_estabelecimentos
+    format: iceberg
+    retention:
+      retain_last: 10
+      older_than_days: 90
+```
 
 ### `quality`
 

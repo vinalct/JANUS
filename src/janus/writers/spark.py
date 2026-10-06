@@ -10,7 +10,10 @@ expired here.** Every full refresh keeps the previous run's data files until som
 them, so the bronze zone now grows per run where it previously did not. For the current source
 set — small daily API refreshes plus periodic archives — that is negligible; at CNPJ scale it
 is the first thing to revisit. Expiration needs a retention window, a schedule and somewhere to
-run, which makes it an operational policy rather than a writer concern.
+run, which makes it an operational policy rather than a writer concern. That somewhere is
+``janus maintain``: it applies a declared ``maintenance.bronze`` policy (and a source's
+``outputs.bronze.retention``), as a dry run unless told to apply, and this writer still never
+expires anything (see docs/maintenance.md).
 """
 
 from __future__ import annotations

@@ -323,6 +323,105 @@ def test_source_filter_keeps_other_sources_and_shared_summaries(planted, policy_
     assert any(item.reason == "source_filter" for item in plan.protected)
 
 
+def _shared_directory_plans(planted, directory):
+    """Both fixture sources declare one metadata directory, as the two cartões sources do."""
+    models = import_module("janus.models")
+    registry = import_module("janus.registry").load_registry(
+        Path(__file__).resolve().parents[3] / "tests/fixtures/full_refresh_history"
+    )
+    template = registry.get_source("full_refresh_history_unpartitioned")
+    context = models.RunContext.create(
+        run_id="maintenance-fixture",
+        environment="local",
+        project_root=planted.root.parent,
+        started_at=planted.now,
+    )
+    metadata = replace(template.outputs.metadata, path=str(directory))
+    return tuple(
+        models.ExecutionPlan.from_source_config(
+            replace(
+                template,
+                source_id=source_id,
+                outputs=replace(template.outputs, metadata=metadata),
+            ),
+            context,
+        )
+        for source_id in SOURCES
+    )
+
+
+def _plan_shared(planted, policy_config, directory, source_ids=None):
+    api = import_module("janus.maintenance.inventory")
+    inventory = api.collect_metadata_inventory(
+        _shared_directory_plans(planted, directory), zone_layout(planted), source_ids=source_ids
+    )
+    policy = import_module("janus.maintenance.settings").resolve_maintenance_settings(policy_config)
+    plan = import_module("janus.maintenance.planning").plan_retention(
+        api.MaintenanceInventory(metadata=inventory),
+        policy,
+        planted.now,
+        zones=frozenset({"metadata"}),
+        source_ids=source_ids,
+    )
+    return inventory, plan
+
+
+@pytest.mark.parametrize(("keep_last_runs", "kept"), [(20, 20), (5, 5)])
+def test_a_shared_directory_keeps_the_latest_runs_of_each_source(
+    planted, policy_config, keep_last_runs, kept
+):
+    # The shipped cartões pair: 17 and 8 old runs in one directory, read once, owned per record.
+    directory = planted.root.parent / "shared"
+    counts = {SOURCES[0]: 17, SOURCES[1]: 8}
+    for source, count in counts.items():
+        for index in range(count):
+            run_id = f"{source}-shared-{index:02d}"
+            started = (planted.now - timedelta(days=200 - index)).isoformat()
+            for family, field in FAMILIES.items():
+                _write(
+                    directory / family / f"{run_id}.json",
+                    {"source_id": source, "run_id": run_id, field: started},
+                )
+    policy_config["maintenance"]["metadata"]["keep_last_runs"] = keep_last_runs
+
+    inventory, plan = _plan_shared(planted, policy_config, directory)
+
+    history = [entry for entry in inventory.artifacts if entry.kind != "pipelines"]
+    assert len({entry.path for entry in history}) == len(history) == 25 * len(FAMILIES)
+    assert {entry.source_id for entry in history} == set(SOURCES)
+    candidates = {item.target for item in plan.items if str(directory) in item.target}
+    assert len(candidates) == len([item for item in plan.items if str(directory) in item.target])
+    assert candidates == {
+        str(directory / family / f"{source}-shared-{index:02d}.json")
+        for source, count in counts.items()
+        for index in range(max(count - kept, 0))
+        for family in FAMILIES
+    }
+
+
+def test_a_shared_directory_record_naming_no_declaring_source_is_protected(planted, policy_config):
+    directory = planted.root.parent / "shared"
+    started = (planted.now - timedelta(days=400)).isoformat()
+    for name, owner in {"unnamed": {}, "foreign": {"source_id": "another_source"}}.items():
+        _write(
+            directory / "runs" / f"{name}.json", {"run_id": name, "started_at": started, **owner}
+        )
+
+    inventory, plan = _plan_shared(planted, policy_config, directory)
+    entries = {entry.path.stem: entry for entry in inventory.artifacts if entry.kind == "runs"}
+    assert {stem: (entry.source_id, entry.read_error) for stem, entry in entries.items()} == {
+        "unnamed": (None, "source_unattributed"),
+        "foreign": (None, "source_unattributed"),
+    }
+    assert not [item for item in plan.items if str(directory) in item.target]
+    reasons = {item.target: item.reason for item in plan.protected}
+    assert reasons[str(directory / "runs/unnamed.json")] == "unreadable"
+
+    _, filtered = _plan_shared(planted, policy_config, directory, frozenset({SOURCES[1]}))
+    reasons = {item.target: item.reason for item in filtered.protected}
+    assert reasons[str(directory / "runs/foreign.json")] == "source_filter"
+
+
 def test_executor_checks_the_full_protected_set(planted, policy_config):
     execute = import_module("janus.maintenance.execute")
     planning = import_module("janus.maintenance.planning")

@@ -6,6 +6,7 @@
 # object-store warehouse — renames are not atomic on S3/GCS/ADLS. `pyiceberg` implements no
 # Hadoop catalog at all, so nothing but Spark can read what this profile writes.
 
+
 name: local-hadoop
 
 runtime:
