@@ -1,5 +1,33 @@
 # Maintenance
 
+## Source locks and scheduling
+
+Do not run `janus maintain` while a run of the same source is in flight. This is
+an operational requirement until order-24 provides source-state locking. Cron
+and other schedulers must serialise maintenance with extraction and replay for
+the same sources; separate schedules alone do not prevent a long run from
+overlapping maintenance.
+
+The current `NullMaintenanceLock` acquires nothing. Every maintenance record
+reports `lock: "none"`, and both dry-run and apply output show this warning when
+`metadata` or `raw` is selected (on stderr for JSON output):
+
+```text
+warning: no source lock is held — do not run maintain while a run of the same source is in flight
+```
+
+The command accepts an injected `MaintenanceLock` by argument. It acquires each
+source before collecting metadata/raw inventory, holds acquired locks through
+execution, and releases them in `finally`. A refused acquisition leaves that
+source unread and untouched, with one skipped item per selected metadata/raw
+zone carrying `source_id` and `skipped_reason: "source_locked"`. Other sources
+proceed, and contention alone exits 0. Shared pipeline summaries are preserved
+when any source is locked. The record reports the injected lock's `name`.
+
+Bronze, shared lineage event files and the runs table do not acquire source
+locks. The scheduling requirement for concurrent back-dated lineage emission
+below still applies when a real source lock becomes available.
+
 ## OpenLineage event files
 
 Declare `maintenance.lineage_events.older_than_days` in the environment's maintenance
@@ -48,5 +76,5 @@ The filename comes from the event's own `eventTime`. A run emitting an event wit
 back-dated `eventTime` into a day file older than the retention window, concurrently
 with maintenance, can lose that event when the file is neither today's nor the
 most recent. Maintenance does not inspect payloads or detect every active append.
-Do not run `maintain` during an extraction. The per-source lock integration planned
-in TASK-15 is a further mitigation; it is not provided by lineage file retention.
+Do not run `maintain` during an extraction. The metadata/raw lock seam does not
+lock shared lineage event files.

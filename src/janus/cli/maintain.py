@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
@@ -14,9 +15,14 @@ import yaml
 
 from janus.cli.common import format_runtime_permission_error
 from janus.maintenance.execute import execute_retention
-from janus.maintenance.inventory import collect_inventory
-from janus.maintenance.locking import NullMaintenanceLock
-from janus.maintenance.planning import RetentionPlan, plan_retention
+from janus.maintenance.inventory import MaintenanceInventory, collect_inventory
+from janus.maintenance.locking import (
+    LOCKED_SOURCE_REASON,
+    MaintenanceLock,
+    NullMaintenanceLock,
+    source_lock,
+)
+from janus.maintenance.planning import PlannedItem, RetentionPlan, plan_retention
 from janus.maintenance.records import (
     ItemOutcome,
     MaintenanceRecord,
@@ -38,7 +44,10 @@ ARGUMENT_ERROR = 2
 OPERATIONAL_ERROR = 1
 ZONES = ("bronze", "metadata", "lineage", "runs-table", "raw")
 COMPUTE_ZONES = frozenset({"bronze", "runs-table"})
-LOCK_WARNING = "maintain must not overlap a run of the same source (no lock is held)"
+SOURCE_SCOPED_ZONES = frozenset({"metadata", "raw"})
+LOCK_WARNING = (
+    "no source lock is held — do not run maintain while a run of the same source is in flight"
+)
 ORPHAN_WARNING = "do not remove orphan files while an extraction is in flight"
 
 _UNSUPPORTED_OPTIONS = {
@@ -134,7 +143,11 @@ class _Compute:
         )
 
 
-def maintain_command(args: argparse.Namespace) -> int:
+def maintain_command(
+    args: argparse.Namespace,
+    *,
+    lock: MaintenanceLock = NullMaintenanceLock(),
+) -> int:
     """Exit 2 before an attempt, 1 for operational failures, or 0 including empty plans."""
     now = datetime.now(tz=UTC)
     started = perf_counter()
@@ -147,7 +160,7 @@ def maintain_command(args: argparse.Namespace) -> int:
         return _refuse(str(exc))
 
     try:
-        plan, record = _run(prepared, args, now, started)
+        plan, record = _run(prepared, args, now, started, lock)
     except ValueError as exc:
         return _refuse(str(exc))
     except Exception as exc:
@@ -155,7 +168,7 @@ def maintain_command(args: argparse.Namespace) -> int:
         return OPERATIONAL_ERROR
 
     if args.format == "json":
-        if record.lock == "none":
+        if _warn_unlocked(record):
             print(f"warning: {LOCK_WARNING}", file=sys.stderr)
         print(json.dumps(record.to_dict(), indent=2, sort_keys=True))
     else:
@@ -233,41 +246,28 @@ def _run(
     args: argparse.Namespace,
     now: datetime,
     started: float,
+    lock: MaintenanceLock,
 ) -> tuple[RetentionPlan, MaintenanceRecord]:
     compute = _Compute(prepared)
-    lock = NullMaintenanceLock()
-    acquired = []
+    locks = ExitStack()
+    refused: set[str] = set()
     failures = []
     plan = RetentionPlan((), (), now, prepared.policy.digest)
     items = None
     pending: list[ItemOutcome] = []
     interruption: KeyboardInterrupt | SystemExit | None = None
     try:
-        if prepared.zones & {"metadata", "raw"}:
-            source_ids = prepared.source_ids or frozenset(
-                source.source_id for source in prepared.registry.list_sources(enabled_only=False)
-            )
-            for source_id in sorted(source_ids):
-                if lock.acquire(source_id):
-                    acquired.append(source_id)
+        if prepared.zones & SOURCE_SCOPED_ZONES:
+            for source_id in sorted(_selected_sources(prepared)):
+                if not locks.enter_context(source_lock(lock, source_id)):
+                    refused.add(source_id)
+        skipped = _locked_items(prepared.zones, refused)
+        plan = replace(plan, items=skipped)
+        pending = [ItemOutcome.pending_apply(item) for item in skipped]
         session = compute.get_session() if prepared.zones & COMPUTE_ZONES else None
-        inventory = collect_inventory(
-            prepared.registry,
-            prepared.config,
-            prepared.resolved_paths,
-            prepared.policy,
-            now,
-            zones=prepared.zones,
-            source_ids=prepared.source_ids,
-            session=session,
-        )
-        plan = plan_retention(
-            inventory,
-            prepared.policy,
-            now,
-            zones=prepared.zones,
-            source_ids=prepared.source_ids,
-        )
+        inventory = _collect_inventory(prepared, now, session, refused)
+        plan = _plan_inventory(inventory, prepared, now, refused)
+        plan = replace(plan, items=(*plan.items, *skipped))
         pending = [ItemOutcome.pending_apply(item) for item in plan.items]
         # Validate the generated identity and its destination before an apply can act.
         record = MaintenanceRecord.from_plan(
@@ -296,8 +296,7 @@ def _run(
         try:
             failures.extend(compute.stop())
         finally:
-            for source_id in reversed(acquired):
-                lock.release(source_id)
+            locks.close()
     record = MaintenanceRecord.from_plan(
         plan,
         environment=args.environment,
@@ -314,6 +313,83 @@ def _run(
         _persist_partial(prepared.store, record)
         raise interruption
     return plan, record
+
+
+def _locked_items(zones: frozenset[str], refused: set[str]) -> tuple[PlannedItem, ...]:
+    # Refused sources are never inspected, so evidence identifies the source and zone.
+    return tuple(
+        PlannedItem(
+            zone,
+            source_id,
+            "delete_file" if zone == "metadata" else "delete_prefix",
+            {"source_id": source_id},
+            skipped_reason=LOCKED_SOURCE_REASON,
+        )
+        for zone in sorted(zones & SOURCE_SCOPED_ZONES)
+        for source_id in sorted(refused)
+    )
+
+
+def _selected_sources(prepared: _PreparedMaintenance) -> frozenset[str]:
+    return prepared.source_ids or frozenset(
+        source.source_id for source in prepared.registry.list_sources(enabled_only=False)
+    )
+
+
+def _collect_inventory(
+    prepared: _PreparedMaintenance,
+    now: datetime,
+    session: SparkSession | None,
+    refused: set[str],
+) -> MaintenanceInventory:
+    def collect(zones: frozenset[str], source_ids: frozenset[str] | None) -> MaintenanceInventory:
+        return collect_inventory(
+            prepared.registry,
+            prepared.config,
+            prepared.resolved_paths,
+            prepared.policy,
+            now,
+            zones=zones,
+            source_ids=source_ids,
+            session=session,
+        )
+
+    if not refused:
+        return collect(prepared.zones, prepared.source_ids)
+    allowed = _selected_sources(prepared) - refused
+    scoped = (
+        collect(prepared.zones & SOURCE_SCOPED_ZONES, allowed)
+        if allowed
+        else MaintenanceInventory()
+    )
+    shared_zones = prepared.zones - SOURCE_SCOPED_ZONES
+    shared = collect(shared_zones, prepared.source_ids) if shared_zones else MaintenanceInventory()
+    return replace(shared, metadata=scoped.metadata, raw=scoped.raw)
+
+
+def _plan_inventory(
+    inventory: MaintenanceInventory,
+    prepared: _PreparedMaintenance,
+    now: datetime,
+    refused: set[str],
+) -> RetentionPlan:
+    def plan(zones: frozenset[str], source_ids: frozenset[str] | None) -> RetentionPlan:
+        return plan_retention(inventory, prepared.policy, now, zones=zones, source_ids=source_ids)
+
+    if not refused:
+        return plan(prepared.zones, prepared.source_ids)
+
+    scoped = plan(prepared.zones & SOURCE_SCOPED_ZONES, _selected_sources(prepared) - refused)
+    shared = plan(prepared.zones - SOURCE_SCOPED_ZONES, prepared.source_ids)
+    return replace(
+        shared,
+        items=(*shared.items, *scoped.items),
+        protected=(*shared.protected, *scoped.protected),
+    )
+
+
+def _warn_unlocked(record: MaintenanceRecord) -> bool:
+    return record.lock == "none" and bool(SOURCE_SCOPED_ZONES.intersection(record.zones))
 
 
 def _persist_partial(store: MaintenanceRecordStore, record: MaintenanceRecord) -> None:
@@ -373,7 +449,7 @@ def _render_text(plan: RetentionPlan, record: MaintenanceRecord) -> str:
         f"lock: {record.lock}",
         f"zones: {', '.join(record.zones)}",
     ]
-    if record.lock == "none":
+    if _warn_unlocked(record):
         lines.append(f"warning: {LOCK_WARNING}")
     if record.dry_run and any(item.action == "remove_orphan_files" for item in record.items):
         lines.append(f"⚠ {ORPHAN_WARNING}")
