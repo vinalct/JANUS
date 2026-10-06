@@ -303,20 +303,32 @@ def _plan_lineage(
 ) -> _Decisions:
     # Shared day files are aged as a whole; EventFileEntry has no source attribution.
     decisions = _Decisions()
-    if not inventory.lineage_events:
-        return decisions
-    latest = max(entry.day for entry in inventory.lineage_events)
+    latest = max(
+        (entry.day for entry in inventory.lineage_events if entry.day is not None), default=None
+    )
     cutoff = now.date() - timedelta(days=policy.lineage_events.older_than_days)
     for entry in inventory.lineage_events:
-        reason = None
+        if entry.skipped_reason is not None or entry.day is None:
+            decisions.items.append(
+                PlannedItem(
+                    "lineage",
+                    str(entry.path),
+                    "delete_file",
+                    {},
+                    skipped_reason=entry.skipped_reason or "invalid_event_filename",
+                )
+            )
+            continue
+        reasons = []
         if entry.day == now.date():
-            reason = "today"
-        elif entry.day == latest:
-            reason = "latest_file"
-        elif entry.day >= cutoff:
-            reason = "within_window"
-        if reason is not None:
-            decisions.protect("lineage", str(entry.path), reason)
+            reasons.append("todays_file")
+        if entry.day == latest:
+            reasons.append("most_recent_file")
+        if not reasons and entry.day >= cutoff:
+            reasons.append("within_window")
+        if reasons:
+            for reason in reasons:
+                decisions.protect("lineage", str(entry.path), reason)
         else:
             decisions.items.append(PlannedItem("lineage", str(entry.path), "delete_file", {}))
     return decisions

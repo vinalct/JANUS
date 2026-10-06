@@ -556,7 +556,7 @@ def test_lineage_event_boundary_and_today_are_protected(policy_config, now, olde
     )
     plan = plan_retention(inventory, policy, now, zones=frozenset({"lineage"}))
     assert _targets(plan) == {str(older_than_days + 1)}
-    assert _reasons(plan)["0"] == "today"
+    assert _reasons(plan)["0"] == "todays_file"
 
 
 def test_all_files_on_most_recent_event_day_are_protected_even_if_ancient(policy_config, now):
@@ -570,7 +570,7 @@ def test_all_files_on_most_recent_event_day_are_protected_even_if_ancient(policy
     )
     plan = plan_retention(inventory, policy, now, zones=frozenset({"lineage"}))
     assert _targets(plan) == {"alpha/older"}
-    assert _reasons(plan) == {"alpha/latest": "latest_file", "beta/latest": "latest_file"}
+    assert _reasons(plan) == {"alpha/latest": "most_recent_file", "beta/latest": "most_recent_file"}
 
 
 def test_event_day_and_partition_cutoffs_use_utc_day(policy_config):
@@ -595,7 +595,7 @@ def test_event_day_and_partition_cutoffs_use_utc_day(policy_config):
     plan = plan_retention(inventory, policy, local_now, zones=frozenset({"lineage", "runs-table"}))
     assert _targets(plan, "delete_file") == {"yesterday"}
     assert _targets(plan, "delete_partition") == {"2026-10-04"}
-    assert _reasons(plan)["today"] == "today"
+    assert _reasons(plan)["today"] == "todays_file"
     assert plan.now == utc_now
 
 

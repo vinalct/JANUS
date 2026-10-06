@@ -72,7 +72,7 @@ def execute_retention(
     if outcomes is None:
         outcomes = [ItemOutcome.pending_apply(item) for item in plan.items]
     protected_paths = frozenset(
-        Path(item.target) for item in plan.protected if item.zone == "metadata"
+        Path(item.target) for item in plan.protected if item.zone in {"metadata", "lineage"}
     )
     for index, item in enumerate(plan.items):
         outcomes[index] = execute_item(
@@ -100,7 +100,7 @@ def execute_item(
         return ItemOutcome.from_planned_item(item)
     started = clock()
     try:
-        if item.zone == "metadata":
+        if item.zone in {"metadata", "lineage"}:
             return execute_metadata_item(item, protected_paths=protected_paths, clock=clock)
         if item.zone != "bronze":
             raise MaintenanceExecutionUnavailable(
@@ -124,14 +124,14 @@ def execute_metadata_item(
     protected_paths: frozenset[Path] = frozenset(),
     clock: Callable[[], float] = perf_counter,
 ) -> ItemOutcome:
-    """Remove one history file, refusing protected paths before touching the filesystem."""
+    """Remove one history or event file, refusing protected paths before any I/O."""
     path = Path(item.target)
     state_file = path.name == "extraction_progress.json" or (
         path.name == "current.json" and path.parent.name in {"checkpoints", "dead_letters"}
     )
     if state_file or path in protected_paths:
         raise MaintenanceInvariantError(f"Refusing to delete protected metadata path: {path}")
-    if item.zone != "metadata" or item.action != "delete_file":
+    if item.zone not in {"metadata", "lineage"} or item.action != "delete_file":
         raise MaintenanceExecutionUnavailable(f"Unsupported metadata action: {item.action}")
     if item.skipped_reason is not None:
         return ItemOutcome.from_planned_item(item)

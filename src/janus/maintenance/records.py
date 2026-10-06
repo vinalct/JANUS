@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Any, Self
 
 from janus.lineage.persistence import write_json_atomic
-from janus.maintenance.planning import PlannedItem, RetentionPlan
+from janus.maintenance.planning import PlannedItem, ProtectedItem, RetentionPlan
 from janus.strategies.http.errors import RESPONSE_BODY_EXCERPT_LIMIT
 from janus.utils.logging import (
     REDACTED_VALUE,
@@ -281,6 +281,7 @@ class MaintenanceRecord:
     zone_summaries: tuple[ZoneSummary, ...]
     items: tuple[ItemOutcome, ...]
     failures: tuple[RecordFailure, ...] = ()
+    protected: tuple[ProtectedItem, ...] = ()
 
     def __post_init__(self) -> None:
         validate_maintenance_run_id(self.maintenance_run_id)
@@ -334,6 +335,7 @@ class MaintenanceRecord:
             duration_seconds=(ended_at - started_at).total_seconds(),
             zone_summaries=tuple(ZoneSummary.from_items(zone, items) for zone in selected_zones),
             items=items,
+            protected=plan.protected,
         )
 
     def with_interrupted_outcomes(
@@ -355,6 +357,9 @@ class MaintenanceRecord:
         return bool(self.failures) or any(item.status == "failed" for item in self.items)
 
     def to_dict(self) -> dict[str, Any]:
+        protected: dict[tuple[str, str], set[str]] = {}
+        for item in self.protected:
+            protected.setdefault((item.zone, item.target), set()).add(item.reason)
         return {
             "maintenance_run_id": self.maintenance_run_id,
             "schema_version": self.schema_version,
@@ -371,6 +376,10 @@ class MaintenanceRecord:
             "zone_summaries": [summary.to_dict() for summary in self.zone_summaries],
             "items": [item.to_dict() for item in self.items],
             "failures": [failure.to_dict() for failure in self.failures],
+            "protected": [
+                {"zone": zone, "target": target, "reasons": sorted(reasons)}
+                for (zone, target), reasons in sorted(protected.items())
+            ],
         }
 
 

@@ -416,7 +416,10 @@ def _render_text(plan: RetentionPlan, record: MaintenanceRecord) -> str:
                 )
     if plan.protected:
         lines.extend(("", "protected (not candidates)"))
-        lines.extend(f"  {item.zone}  {item.target}  {item.reason}" for item in plan.protected)
+        lines.extend(
+            f"  {item['zone']}  {item['target']}  {', '.join(item['reasons'])}"
+            for item in record.to_dict()["protected"]
+        )
     for failure in record.failures:
         lines.append(f"failed ({failure.stage}): {failure.failure_type}: {failure.failure_message}")
     return "\n".join(lines)

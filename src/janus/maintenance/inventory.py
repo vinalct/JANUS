@@ -14,6 +14,13 @@ from pathlib import Path
 
 from janus.lineage.persistence import MetadataZonePaths, read_json_mapping
 from janus.models import BronzeRetentionConfig, ExecutionPlan
+from janus.observability.openlineage.settings import OpenLineageSettings
+from janus.observability.openlineage.transport import (
+    EVENTS_FILE_PREFIX,
+    EVENTS_FILE_SUFFIX,
+    FileOpenLineageTransport,
+    resolve_openlineage_transport,
+)
 
 if typing.TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -61,6 +68,7 @@ class RunArtifactKind:
     directory_attribute: str
     timestamp_field: str
 
+
 RUN_ARTIFACT_KINDS = (
     RunArtifactKind("runs", "runs_dir", "started_at"),
     RunArtifactKind("lineage", "lineage_dir", "emitted_at"),
@@ -79,7 +87,8 @@ class MetadataZoneInventory:
 @dataclass(frozen=True, slots=True)
 class EventFileEntry:
     path: Path
-    day: date
+    day: date | None
+    skipped_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +165,62 @@ def collect_inventory(
             StorageLayout.from_environment_config(config, registry.project_root),
             source_ids=source_ids,
         )
-    return MaintenanceInventory(bronze=bronze, metadata=metadata)
+    events: tuple[EventFileEntry, ...] = ()
+    if "lineage" in zones:
+        from janus.observability.openlineage.settings import resolve_openlineage_settings
+
+        events = collect_lineage_event_files(
+            (),
+            resolve_openlineage_settings(config),
+            now=now,
+            resolved_paths=resolved_paths,
+        )
+    return MaintenanceInventory(bronze=bronze, metadata=metadata, lineage_events=events)
+
+
+def collect_lineage_event_files(
+    plans: Iterable[ExecutionPlan],
+    settings: OpenLineageSettings,
+    *,
+    now: datetime,
+    resolved_paths: Mapping[str, RuntimeLocation] | None = None,
+) -> tuple[EventFileEntry, ...]:
+    """List day files without reading payloads or aging by mtime.
+
+    The command supplies the shared runtime paths used by the emitting transport.
+    Plan-owned metadata roots are also supported for independently scoped inventories.
+    Invalid filenames remain skipped evidence; only the planner decides file age.
+    """
+    del now  # Collection is independent of the retention clock.
+    if settings.file is None:
+        return ()
+    roots = (
+        (resolved_paths,)
+        if resolved_paths is not None
+        else ({"metadata_dir": MetadataZonePaths.from_plan(plan).base_dir} for plan in plans)
+    )
+    directories = set()
+    for paths in roots:
+        transport = resolve_openlineage_transport(settings, paths)
+        assert isinstance(transport, FileOpenLineageTransport)
+        directories.add(transport.directory)
+    entries = []
+    for directory in sorted(directories):
+        for path in sorted(directory.glob(f"{EVENTS_FILE_PREFIX}*{EVENTS_FILE_SUFFIX}")):
+            if not path.is_file():
+                continue
+            filename_day = path.name.removeprefix(EVENTS_FILE_PREFIX).removesuffix(
+                EVENTS_FILE_SUFFIX
+            )
+            try:
+                day = date.fromisoformat(filename_day)
+                if day.isoformat() != filename_day:
+                    raise ValueError("event filenames require YYYY-MM-DD")
+            except ValueError:
+                entries.append(EventFileEntry(path, None, "invalid_event_filename"))
+            else:
+                entries.append(EventFileEntry(path, day))
+    return tuple(entries)
 
 
 def collect_metadata_inventory(
