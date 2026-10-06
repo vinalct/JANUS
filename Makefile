@@ -3,6 +3,7 @@ PODMAN_COMPOSE_FILE := docker/docker-compose.podman.yml
 SERVICE := janus
 ENVIRONMENT ?= local
 RUN_ARGS ?=
+MAINTAIN_ARGS ?=
 PYTHON ?= python
 JANUS_UID := $(shell id -u)
 JANUS_GID := $(shell id -g)
@@ -22,6 +23,9 @@ DAGSTER_VERSION := 1.13.22
 DAGSTER_TEST_REPORT := data/metadata/test-reports/dagster.xml
 FAST_TEST_REPORT := data/metadata/test-reports/fast.xml
 CI_TEST_REPORT := data/metadata/test-reports/ci.xml
+MAINTENANCE_TEST_REPORT := data/metadata/test-reports/maintenance.xml
+MAINTENANCE_SMOKE_ROOT := data/metadata/maintenance-smoke
+MAINTENANCE_SMOKE_OUTPUT := data/metadata/test-reports/maintenance-dry-run.json
 DAGSTER_TESTS := tests/unit/adapters/test_dagster_adapter.py \
 	tests/integration/dagster \
 	tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
@@ -88,6 +92,9 @@ CONTRACTS_GOLDEN_CLASS := tests.integration.contracts.test_bronze_unchanged_afte
 PRE_WRITE_GATE_CLASS := tests.integration.contracts.test_pre_write_gate
 MALFORMED_ROWS_CLASS := tests.integration.contracts.test_malformed_rows
 EVOLUTION_MATRIX_CLASS := tests.integration.contracts.test_evolution_matrix
+MAINTENANCE_SNAPSHOT_CLASS := tests.integration.maintenance.test_snapshot_expiration
+MAINTENANCE_RUNS_CLASS := tests.integration.maintenance.test_runs_table_retention
+MAINTENANCE_SWEEP_CLASS := tests.unit.toolchain.test_no_deletion_outside_maintenance
 AC1_TEST := test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources
 AC2_TEST := test_published_ac2_queries_execute_verbatim_with_retry_and_window_boundaries
 CROSS_ENGINE_TEST := test_spark_reads_the_row_pyiceberg_committed
@@ -126,7 +133,12 @@ define RUN_COMPOSE
 	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-contract-schema test-adapter ci validate run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
+.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-contract-schema test-adapter test-maintenance test-maintenance-smoke ci require-environment maintain-dry-run maintain-apply validate run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
+
+# Guard every setup prerequisite too, so even `make -j` refuses before touching containers.
+ifneq ($(filter maintain-dry-run maintain-apply,$(MAKECMDGOALS)),)
+check-compose check-env seed-ivy ensure-up: require-environment
+endif
 
 seed-ivy:
 	@mkdir -p "$(IVY_JAR_DEST_DIR)" "$(ICEBERG_CATALOG_DIR)"; \
@@ -250,6 +262,7 @@ test-fast:
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
+	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63
 
 test-contract-schema:
 	$(PYTHON) -m pytest -q $(CONTRACT_SCHEMA_TESTS)
@@ -260,30 +273,65 @@ test-adapter:
 	$(PYTHON) -m pytest -ra $(DAGSTER_TESTS) --junitxml="$(DAGSTER_TEST_REPORT)"
 	$(PYTHON) -m tests.support.required_test_gate "$(DAGSTER_TEST_REPORT)" --minimum-passed 13
 
+# Counts from the local, non-cluster cases: 3 snapshot cases x 2 layouts, 2 runs cases.
+test-maintenance: ensure-up
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m pytest -ra -m 'not cluster' tests/integration/maintenance/test_snapshot_expiration.py tests/integration/maintenance/test_runs_table_retention.py --junitxml=$(MAINTENANCE_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(MAINTENANCE_TEST_REPORT) --class-name $(MAINTENANCE_SNAPSHOT_CLASS) --minimum-passed 6)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(MAINTENANCE_TEST_REPORT) --class-name $(MAINTENANCE_RUNS_CLASS) --minimum-passed 2)
+
+# Persist a dedicated catalog across container invocations. Only skip the already-run
+# setup when capturing stdout, so the actual maintenance target emits parseable JSON.
+test-maintenance-smoke: ensure-up
+	@mkdir -p "$(dir $(MAINTENANCE_SMOKE_OUTPUT))"
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.maintenance_smoke prepare $(MAINTENANCE_SMOKE_ROOT))
+	@$(MAKE) --no-print-directory --silent -o ensure-up maintain-dry-run ENVIRONMENT=local \
+		MAINTAIN_ARGS="--zone bronze --source-id full_refresh_history_unpartitioned --format json --project-root $(MAINTENANCE_SMOKE_ROOT)" \
+		> "$(MAINTENANCE_SMOKE_OUTPUT)" || { cat "$(MAINTENANCE_SMOKE_OUTPUT)"; exit 1; }
+	@cat "$(MAINTENANCE_SMOKE_OUTPUT)"
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.maintenance_smoke verify $(MAINTENANCE_SMOKE_ROOT) $(MAINTENANCE_SMOKE_OUTPUT))
+
 # Reproduce CI locally: same lint + type check + full suite the container CI job runs,
 # in the container so the Spark/Iceberg path is exercised. Keep in lockstep with .github/workflows/ci.yml.
 ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m ruff check src tests)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
 	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage $(SERVICE) python -m pytest -ra -m 'not cluster' --cov=janus --cov-report=term-missing --cov-report=xml:data/coverage.xml --junitxml=$(CI_TEST_REPORT))
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(DEAD_LETTER_REPLAY_CLASS) --minimum-passed 7)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63)
+	@$(MAKE) --no-print-directory test-maintenance
+	@$(MAKE) --no-print-directory test-maintenance-smoke
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_SINK_CLASS) --minimum-passed 4)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_DECLARATION_CLASS) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(PREFLIGHT_REAL_CATALOG_CLASS) --minimum-passed 10)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(PRE_WRITE_GATE_CLASS) --minimum-passed 13)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(MALFORMED_ROWS_CLASS) --minimum-passed 9)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(EVOLUTION_MATRIX_CLASS) --minimum-passed 59)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CONTRACTS_GOLDEN_CLASS) --minimum-passed 23)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CONTRACTS_GOLDEN_CLASS) --minimum-passed 23)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(DEAD_LETTER_REPLAY_CLASS) --minimum-passed 7)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main validate --environment $(ENVIRONMENT))
 
 # Registry semantics and profile wiring, with no Spark session and no writes.
 # `run-local-config` stays what it is: the environment profile only.
 validate: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main validate --environment $(ENVIRONMENT))
+
+# GNU make's origin distinguishes an operator's choice from the local file default.
+require-environment:
+	@case "$(origin ENVIRONMENT)" in \
+		"command line"|environment|"environment override") \
+			if [ -n "$(strip $(ENVIRONMENT))" ]; then exit 0; fi ;; \
+	esac; \
+	echo "ENVIRONMENT must be set explicitly for maintenance targets, e.g. make maintain-apply ENVIRONMENT=local" >&2; \
+	exit 2
+
+maintain-dry-run: require-environment ensure-up
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main maintain --environment $(ENVIRONMENT) --dry-run $(MAINTAIN_ARGS))
+
+maintain-apply: require-environment ensure-up
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main maintain --environment $(ENVIRONMENT) --apply $(MAINTAIN_ARGS))
 
 run-local: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main --environment $(ENVIRONMENT) --with-spark)

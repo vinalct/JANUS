@@ -15,7 +15,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Thread
 from time import perf_counter
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from janus.maintenance.errors import (
@@ -415,12 +415,15 @@ def _run_worker(
         # Spark local properties belong to the worker/JVM thread that set them.
         # Cleanup must not replace a completed deletion or a process interruption.
         try:
+            set_local_property = cast(
+                Callable[[str, str | None], None], session.sparkContext.setLocalProperty
+            )
             for key in (
                 "spark.jobGroup.id",
                 "spark.job.description",
                 "spark.job.interruptOnCancel",
             ):
-                session.sparkContext.setLocalProperty(key, None)
+                set_local_property(key, None)
         except (KeyboardInterrupt, SystemExit) as exc:
             result.failures.append(exc)
         except Exception as exc:

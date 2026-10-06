@@ -29,6 +29,7 @@ x-janus-service: &janus-service
 
 x-janus-environment: &janus-environment
   PYTHONPATH: /workspace/src:/workspace
+  PYTHONPYCACHEPREFIX: /tmp/janus-pycache
   MYPY_CACHE_DIR: /tmp/janus-mypy-cache
   RUFF_CACHE_DIR: /tmp/janus-ruff-cache
   PYTEST_ADDOPTS: "-o cache_dir=/tmp/janus-pytest-cache"
