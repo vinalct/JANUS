@@ -9,6 +9,7 @@ Timeout cancellation is best effort: a failed item may still be running in Spark
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -45,6 +46,7 @@ _COMPACTION_COUNTS = (
     "failed_data_files_count",
     "removed_delete_files_count",
 )
+_RAW_PREFIX_PARTS = 3
 
 
 @dataclass(slots=True)
@@ -72,7 +74,7 @@ def execute_retention(
     if outcomes is None:
         outcomes = [ItemOutcome.pending_apply(item) for item in plan.items]
     protected_paths = frozenset(
-        Path(item.target) for item in plan.protected if item.zone in {"metadata", "lineage"}
+        Path(item.target) for item in plan.protected if item.zone in {"metadata", "lineage", "raw"}
     )
     completed: set[int] = set()
     for index, item in enumerate(plan.items):
@@ -83,7 +85,6 @@ def execute_retention(
             and item.action == "delete_partition"
             and item.skipped_reason is None
         ):
-
             indices = [
                 position
                 for position, candidate in enumerate(plan.items)
@@ -155,6 +156,17 @@ def execute_item(
     try:
         if item.zone in {"metadata", "lineage"}:
             return execute_metadata_item(item, protected_paths=protected_paths, clock=clock)
+        if item.zone == "raw":
+            if "raw_root" not in item.detail:
+                raise MaintenanceInvariantError(
+                    "Raw deletion requires the source's declared raw root"
+                )
+            return delete_prefix(
+                item,
+                raw_root=Path(item.detail["raw_root"]),
+                protected_paths=protected_paths,
+                clock=clock,
+            )
         if item.zone not in {"bronze", "runs-table"}:
             raise MaintenanceExecutionUnavailable(
                 f"No maintenance executor is available for {item.zone}: {item.action}"
@@ -212,6 +224,98 @@ def execute_metadata_item(
         detail=detail,
         removed_count=removed_count,
         removed_bytes=removed_bytes,
+        failure_type=type(failure).__name__ if failure is not None else None,
+        failure_message=str(failure) if failure is not None else None,
+        duration_seconds=clock() - started,
+    )
+
+
+def _prefix_files(path: Path) -> dict[Path, int]:
+    """Measure files and sidecars together; never traverse or stat a symlink target."""
+    return {
+        entry: entry.lstat().st_size
+        for entry in path.rglob("*")
+        if entry.is_symlink() or entry.is_file()
+    }
+
+
+def delete_prefix(
+    item: PlannedItem,
+    *,
+    raw_root: Path,
+    protected_paths: frozenset[Path] = frozenset(),
+    clock: Callable[[], float] = perf_counter,
+) -> ItemOutcome:
+    """Remove exactly one run directory, preserving evidence of every partial failure."""
+    path, root = Path(item.target), raw_root.resolve()
+    resolved = path.resolve()
+    if resolved == root or not resolved.is_relative_to(root):
+        raise MaintenanceInvariantError(f"Raw prefix escapes the source's raw root: {path}")
+    relative = path.absolute().relative_to(raw_root.absolute())
+    if (
+        len(relative.parts) != _RAW_PREFIX_PARTS
+        or relative.parts[0] != "runs"
+        or not relative.parts[1].startswith("ingestion_date=")
+        or not relative.parts[2].startswith("run_id=")
+    ):
+        raise MaintenanceInvariantError(f"Refusing to delete a non-run raw path: {path}")
+    if any(protected.resolve().is_relative_to(resolved) for protected in protected_paths):
+        raise MaintenanceInvariantError(f"Refusing to delete protected raw prefix: {path}")
+    if item.zone != "raw" or item.action != "delete_prefix":
+        raise MaintenanceExecutionUnavailable(f"Unsupported raw action: {item.action}")
+    if item.skipped_reason is not None:
+        return ItemOutcome.from_planned_item(item)
+    started = clock()
+    before: dict[Path, int] = {}
+    failures: list[dict[str, str]] = []
+    failure: OSError | None = None
+    status = "applied"
+    detail = dict(item.detail)
+
+    def onerror(function: Any, failed_path: str, exc_info: Any) -> None:
+        nonlocal failure
+        error = exc_info[1]
+        failure = failure or error
+        failures.append(
+            {
+                "path": str(failed_path),
+                "operation": function.__name__,
+                "failure_type": type(error).__name__,
+            }
+        )
+
+    try:
+        path.stat()
+        before = _prefix_files(path)
+
+        shutil.rmtree(path, onerror=onerror)
+    except FileNotFoundError:
+        status = "skipped" if not before else "applied"
+        detail["skipped_reason"] = "already_absent"
+    except OSError as exc:
+        failure = exc
+    removed = {
+        entry: size
+        for entry, size in before.items()
+        if not entry.exists() and not entry.is_symlink()
+    }
+    surviving = path.exists() or path.is_symlink()
+    if surviving:
+        try:
+            detail["surviving_count"] = str(len(_prefix_files(path)))
+        except OSError as exc:
+            failure = failure or exc
+        failure = failure or OSError(f"Raw prefix survives recursive removal: {path}")
+    if failures:
+        detail["file_failures"] = json.dumps(failures, sort_keys=True)
+    return ItemOutcome(
+        zone=item.zone,
+        target=item.target,
+        action=item.action,
+        status="failed" if failure is not None else status,
+        detail=detail,
+        removed_count=len(removed),
+        removed_bytes=sum(removed.values()),
         failure_type=type(failure).__name__ if failure is not None else None,
         failure_message=str(failure) if failure is not None else None,
         duration_seconds=clock() - started,

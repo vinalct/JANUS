@@ -104,8 +104,10 @@ class RawRunPrefixEntry:
     path: Path
     source_id: str
     run_segment: str
-    ingestion_date: date
+    ingestion_date: date | None
     run_succeeded: bool | None
+    raw_root: Path | None = None
+    skipped_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,12 +144,14 @@ def collect_inventory(
             session=session,
         )
     metadata = None
-    if "metadata" in zones:
+    raw_enabled = "raw" in zones and policy.raw.enabled
+    raw: tuple[RawRunPrefixEntry, ...] = ()
+    if "metadata" in zones or raw_enabled:
         from janus.planner import Planner, PlanningRequest
         from janus.utils.storage import StorageLayout
 
         planner = Planner()
-        plans = (
+        plans = tuple(
             planner.plan(
                 PlanningRequest.create(
                     source_id=source.source_id,
@@ -167,6 +171,15 @@ def collect_inventory(
             StorageLayout.from_environment_config(config, registry.project_root),
             source_ids=source_ids,
         )
+        if raw_enabled:
+            from janus.maintenance.raw_inventory import collect_raw_run_statuses
+
+            raw = collect_raw_inventory(
+                plans,
+                StorageLayout.from_environment_config(config, registry.project_root),
+                source_ids=source_ids,
+                run_status_by_segment=collect_raw_run_statuses(plans),
+            )
     events: tuple[EventFileEntry, ...] = ()
     if "lineage" in zones:
         from janus.observability.openlineage.settings import resolve_openlineage_settings
@@ -188,7 +201,22 @@ def collect_inventory(
             session, catalog_name=target.catalog_name, identifier=target.identifier
         )
     return MaintenanceInventory(
-        bronze=bronze, metadata=metadata, lineage_events=events, runs_table=runs_table
+        bronze=bronze, metadata=metadata, lineage_events=events, runs_table=runs_table, raw=raw
+    )
+
+
+def collect_raw_inventory(
+    plans: Iterable[ExecutionPlan],
+    storage_layout: StorageLayout,
+    *,
+    source_ids: frozenset[str] | None,
+    run_status_by_segment: Mapping[str, Mapping[str, str | None]],
+) -> tuple[RawRunPrefixEntry, ...]:
+    """Collect run-scoped raw paths. The neighbour keeps this module below its ceiling."""
+    from janus.maintenance.raw_inventory import collect_raw_prefixes
+
+    return collect_raw_prefixes(
+        plans, storage_layout, source_ids=source_ids, run_status_by_segment=run_status_by_segment
     )
 
 

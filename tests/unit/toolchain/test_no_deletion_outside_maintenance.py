@@ -152,6 +152,18 @@ def test_allowances_have_reasons_and_are_not_stale():
     assert len(ALLOWANCES) == 7
 
 
+def test_recursive_removal_is_only_the_guarded_raw_prefix_executor():
+    # FR-8 permits recursion only for one contained, unprotected run directory,
+    # including its data/checksum companions. Other maintenance paths remove files.
+    observed = {
+        (path, scope, operation)
+        for path, source in _modules().items()
+        for scope, operation in _deletions(source)
+        if operation == "rmtree"
+    }
+    assert observed == {("maintenance/execute.py", "delete_prefix", "rmtree")}
+
+
 def test_maintenance_procedure_sweep_is_not_vacuous():
     modules = {
         path: source for path, source in _modules().items() if path.startswith("maintenance/")

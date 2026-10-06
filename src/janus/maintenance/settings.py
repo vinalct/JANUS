@@ -123,6 +123,7 @@ def resolve_maintenance_settings(config: Mapping[str, Any]) -> MaintenancePolicy
         older_than_days=_integer(runs_block, "older_than_days", "maintenance.runs_table")
     )
     raw = _raw_policy(_subblock(block, "raw", SUPPORTED_RAW_KEYS))
+    # FR-8: retained bronze snapshots need their raw input to remain rebuildable.
     # The raw builder cannot see bronze: this cross-zone guard belongs after both resolve.
     if raw.enabled and raw.keep_last_runs < bronze.retain_last:
         raise MaintenanceProfileError(

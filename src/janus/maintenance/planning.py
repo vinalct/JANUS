@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
+from janus.maintenance.errors import MaintenanceInvariantError
 from janus.maintenance.inventory import (
     BronzeTableInventory,
     MaintenanceInventory,
@@ -390,13 +391,13 @@ def _plan_runs_table(
 
 
 def _raw_source(
+    source: str,
     entries: list[RawRunPrefixEntry],
     policy: MaintenancePolicy,
     now: datetime,
     live: Mapping[str, str | None],
     decisions: _Decisions,
 ) -> None:
-    source = entries[0].source_id
     if source in live and live[source] is None:
         decisions.items.append(
             PlannedItem("raw", source, "delete_prefix", {}, skipped_reason="legacy_progress_prefix")
@@ -405,7 +406,11 @@ def _raw_source(
             decisions.protect("raw", str(entry.path), "legacy_progress_prefix")
         return
     successful = sorted(
-        (entry for entry in entries if entry.run_succeeded is True),
+        (
+            entry
+            for entry in entries
+            if entry.run_succeeded is True and entry.ingestion_date is not None
+        ),
         key=lambda entry: (entry.ingestion_date, entry.run_segment, str(entry.path)),
         reverse=True,
     )
@@ -413,7 +418,9 @@ def _raw_source(
     cutoff = now.date() - timedelta(days=policy.raw.older_than_days)
     for entry in entries:
         reason = None
-        if entry.run_succeeded is None:
+        if entry.ingestion_date is None:
+            reason = "unaged"
+        elif entry.run_succeeded is None:
             reason = "unknown_run_status"
         elif entry.run_segment == live.get(source):
             reason = "live_progress"
@@ -424,7 +431,10 @@ def _raw_source(
         if reason is not None:
             decisions.protect("raw", str(entry.path), reason)
         else:
-            decisions.items.append(PlannedItem("raw", str(entry.path), "delete_prefix", {}))
+            detail = {"source_id": source}
+            if entry.raw_root is not None:
+                detail["raw_root"] = str(entry.raw_root)
+            decisions.items.append(PlannedItem("raw", str(entry.path), "delete_prefix", detail))
 
 
 def _plan_raw(
@@ -436,11 +446,31 @@ def _plan_raw(
     decisions = _Decisions()
     if not policy.raw.enabled:
         return decisions
+    if policy.raw.keep_last_runs < policy.bronze.retain_last:
+        raise MaintenanceInvariantError(
+            "raw.keep_last_runs must be at least bronze.retain_last to preserve rebuild inputs"
+        )
     by_source: dict[str, list[RawRunPrefixEntry]] = {}
     for entry in inventory.raw:
         if _selected(entry.source_id, source_ids):
-            by_source.setdefault(entry.source_id, []).append(entry)
+            entries = by_source.setdefault(entry.source_id, [])
+            if entry.skipped_reason is not None:
+                decisions.items.append(
+                    PlannedItem(
+                        "raw",
+                        str(entry.path),
+                        "delete_prefix",
+                        {"source_id": entry.source_id},
+                        skipped_reason=entry.skipped_reason,
+                    )
+                )
+                decisions.protect("raw", str(entry.path), entry.skipped_reason)
+            else:
+                entries.append(entry)
     live = inventory.metadata.live_raw_run_segments if inventory.metadata is not None else {}
-    for entries in by_source.values():
-        _raw_source(entries, policy, now, live, decisions)
+    for source, segment in live.items():
+        if segment is None and _selected(source, source_ids):
+            by_source.setdefault(source, [])
+    for source, entries in by_source.items():
+        _raw_source(source, entries, policy, now, live, decisions)
     return decisions
