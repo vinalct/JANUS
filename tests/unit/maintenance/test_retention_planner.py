@@ -611,8 +611,15 @@ def test_runs_table_partitions_and_expiration_carry_partition_aligned_arguments(
     deletes = [item for item in plan.items if item.action == "delete_partition"]
     assert len(deletes) == 2
     cutoff = datetime.combine(now.date() - timedelta(days=90), datetime.min.time(), tzinfo=UTC)
-    assert deletes[0].detail == {"older_than": cutoff.isoformat(), "row_count": "12"}
-    assert deletes[1].detail == {"older_than": cutoff.isoformat()}
+    assert deletes[0].detail == {
+        "older_than": cutoff.isoformat(),
+        "row_count": "12",
+        "table_identifier": "metadata.runs",
+    }
+    assert deletes[1].detail == {
+        "older_than": cutoff.isoformat(),
+        "table_identifier": "metadata.runs",
+    }
     assert plan.items[-1].action == "expire_snapshots"
     assert plan.items[-1].target == "metadata.runs"
     assert plan.items[-1].detail["retain_last"] == str(policy.bronze.retain_last)

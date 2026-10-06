@@ -90,7 +90,8 @@ def test_no_flags_default_to_dry_run_and_persist_evidence(project, monkeypatch):
     assert result.exit_code == 0, result.output
     _, record = _record(project)
     assert record["dry_run"] is True
-    assert len(record["items"]) == 2
+    assert len(record["items"]) == 3
+    assert [item["zone"] for item in record["items"]] == ["bronze", "bronze", "runs-table"]
     assert all(item["detail"]["skipped_reason"] == "absent_table" for item in record["items"])
     assert record["zones"] == ["bronze", "lineage", "metadata", "runs-table"]
     assert record["lock"] == "none"

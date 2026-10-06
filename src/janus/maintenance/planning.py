@@ -102,7 +102,15 @@ def plan_retention(
         decisions.protected.extend(result.protected)
     return RetentionPlan(
         items=tuple(
-            sorted(decisions.items, key=lambda item: (item.zone, item.target, item.action))
+            sorted(
+                decisions.items,
+                key=lambda item: (
+                    item.zone,
+                    item.zone == "runs-table" and item.action == "expire_snapshots",
+                    item.target,
+                    item.action,
+                ),
+            )
         ),
         protected=tuple(
             sorted(set(decisions.protected), key=lambda item: (item.zone, item.target, item.reason))
@@ -343,22 +351,34 @@ def _plan_runs_table(
     decisions = _Decisions()
     cutoff_day = now.date() - timedelta(days=policy.runs_table.older_than_days)
     cutoff = datetime.combine(cutoff_day, datetime.min.time(), tzinfo=UTC).isoformat()
+    tables = set()
     for entry in inventory.runs_table:
+        if entry.unavailable_reason is not None or entry.emitted_at_day is None:
+            decisions.items.append(
+                PlannedItem(
+                    "runs-table",
+                    entry.table_identifier,
+                    "delete_partition",
+                    {},
+                    skipped_reason=entry.unavailable_reason or "unaged_partition",
+                )
+            )
+            continue
         day = entry.emitted_at_day.isoformat()
         if entry.emitted_at_day >= cutoff_day:
             decisions.protect("runs-table", day, "within_window")
             continue
-        detail = {"older_than": cutoff}
+        detail = {"older_than": cutoff, "table_identifier": entry.table_identifier}
         if entry.row_count is not None:
             detail["row_count"] = str(entry.row_count)
         decisions.items.append(PlannedItem("runs-table", day, "delete_partition", detail))
-    if decisions.items:
-        # Logical target: the executor resolves the configured identifier/catalog (D-12).
+        tables.add(entry.table_identifier)
+    for identifier in sorted(tables):
         # Expire only after a partition delete; with no candidates a repeated plan is empty.
         decisions.items.append(
             PlannedItem(
                 "runs-table",
-                "metadata.runs",
+                identifier,
                 "expire_snapshots",
                 {
                     "older_than": cutoff,

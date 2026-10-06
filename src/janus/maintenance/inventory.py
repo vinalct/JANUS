@@ -93,8 +93,10 @@ class EventFileEntry:
 
 @dataclass(frozen=True, slots=True)
 class RunsTablePartitionEntry:
-    emitted_at_day: date
+    emitted_at_day: date | None
     row_count: int | None = None
+    table_identifier: str = "metadata.runs"
+    unavailable_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +177,56 @@ def collect_inventory(
             now=now,
             resolved_paths=resolved_paths,
         )
-    return MaintenanceInventory(bronze=bronze, metadata=metadata, lineage_events=events)
+    runs_table: tuple[RunsTablePartitionEntry, ...] = ()
+    if "runs-table" in zones:
+        from janus.observability.runs_table import resolve_runs_table
+
+        if session is None:
+            raise ValueError("runs-table inventory requires a Spark session")
+        target = resolve_runs_table(config)
+        runs_table = collect_runs_table_inventory(
+            session, catalog_name=target.catalog_name, identifier=target.identifier
+        )
+    return MaintenanceInventory(
+        bronze=bronze, metadata=metadata, lineage_events=events, runs_table=runs_table
+    )
+
+
+def collect_runs_table_inventory(
+    session: SparkSession, *, catalog_name: str, identifier: str
+) -> tuple[RunsTablePartitionEntry, ...]:
+    """Read partition days/counts from Iceberg metadata, without scanning run rows."""
+    from janus.writers.identifiers import quote_identifier
+
+    namespace, name = identifier.rsplit(".", 1)
+    existing = _existing_tables(session, f"{catalog_name}.{namespace}")
+    reason = (
+        existing if isinstance(existing, str) else "absent_table" if name not in existing else None
+    )
+    if reason is not None:
+        return (
+            RunsTablePartitionEntry(None, table_identifier=identifier, unavailable_reason=reason),
+        )
+    try:
+        rows = session.sql(
+            "SELECT partition.emitted_at_day AS day, SUM(record_count) AS rows\n"
+            f"FROM {quote_identifier(f'{catalog_name}.{identifier}.partitions')}\n"
+            "GROUP BY 1 ORDER BY 1"
+        ).collect()
+        entries = []
+        for row in rows:
+            if not isinstance(row.day, date) or isinstance(row.day, datetime):
+                raise ValueError("runs-table partitions must have a non-null emitted_at_day")
+            entries.append(RunsTablePartitionEntry(row.day, int(row.rows), identifier))
+        return tuple(entries)
+    except Exception as exc:
+        return (
+            RunsTablePartitionEntry(
+                None,
+                table_identifier=identifier,
+                unavailable_reason=f"partition_read_failed: {type(exc).__name__}",
+            ),
+        )
 
 
 def collect_lineage_event_files(

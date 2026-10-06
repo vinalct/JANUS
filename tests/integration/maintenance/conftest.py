@@ -62,6 +62,7 @@ def run_maintenance(tmp_path, monkeypatch):
         policy=None,
     ):
         command = import_module("janus.cli.maintain")
+        paths = {**paths, "metadata_dir": paths.get("metadata_dir", root / "data/metadata")}
         profile = json.loads((PROJECT_ROOT / "tests/fixtures/maintenance/policy.json").read_text())
         config = {**config, **profile}
         catalog_name = session.conf.get("spark.sql.defaultCatalog")
@@ -86,6 +87,9 @@ def run_maintenance(tmp_path, monkeypatch):
             config["maintenance"]["bronze"].update(
                 retain_last=policy.bronze.retain_last,
                 older_than_days=policy.bronze.older_than_days,
+            )
+            config["maintenance"]["runs_table"]["older_than_days"] = (
+                policy.runs_table.older_than_days
             )
             assert resolve_maintenance_settings(config) == policy
         if table_name:

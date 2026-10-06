@@ -74,7 +74,60 @@ def execute_retention(
     protected_paths = frozenset(
         Path(item.target) for item in plan.protected if item.zone in {"metadata", "lineage"}
     )
+    completed: set[int] = set()
     for index, item in enumerate(plan.items):
+        if index in completed:
+            continue
+        if (
+            item.zone == "runs-table"
+            and item.action == "delete_partition"
+            and item.skipped_reason is None
+        ):
+
+            indices = [
+                position
+                for position, candidate in enumerate(plan.items)
+                if candidate.zone == item.zone
+                and candidate.action == item.action
+                and candidate.skipped_reason is None
+                and candidate.detail.get("table_identifier") == item.detail.get("table_identifier")
+                and candidate.detail.get("older_than") == item.detail.get("older_than")
+            ]
+            result = execute_item(
+                session,
+                item,
+                catalog_name=catalog_name,
+                timeout_seconds=policy.item_timeout_seconds,
+                clock=clock,
+            )
+            for position in indices:
+                candidate = plan.items[position]
+                count = candidate.detail.get("row_count")
+                outcomes[position] = replace(
+                    result,
+                    target=candidate.target,
+                    detail={**result.detail, **candidate.detail},
+                    removed_count=(int(count) if count is not None else None)
+                    if result.status == "applied"
+                    else result.removed_count,
+                )
+            completed.update(indices)
+            continue
+        if (
+            item.zone == "runs-table"
+            and item.action == "expire_snapshots"
+            and any(
+                outcome.zone == item.zone
+                and outcome.action == "delete_partition"
+                and outcome.detail.get("table_identifier") == item.target
+                and outcome.status != "applied"
+                for outcome in outcomes
+            )
+        ):
+            outcomes[index] = ItemOutcome.from_planned_item(
+                replace(item, skipped_reason="partition_delete_failed")
+            )
+            continue
         outcomes[index] = execute_item(
             session,
             item,
@@ -102,13 +155,14 @@ def execute_item(
     try:
         if item.zone in {"metadata", "lineage"}:
             return execute_metadata_item(item, protected_paths=protected_paths, clock=clock)
-        if item.zone != "bronze":
+        if item.zone not in {"bronze", "runs-table"}:
             raise MaintenanceExecutionUnavailable(
                 f"No maintenance executor is available for {item.zone}: {item.action}"
             )
         if session is None:
-            raise MaintenanceExecutionUnavailable("bronze execution requires a Spark session")
-        return execute_bronze_item(
+            raise MaintenanceExecutionUnavailable(f"{item.zone} execution requires a Spark session")
+        executor = execute_runs_table_item if item.zone == "runs-table" else execute_bronze_item
+        return executor(
             session, item, catalog_name=catalog_name, timeout_seconds=timeout_seconds, clock=clock
         )
     except Exception as exc:
@@ -172,7 +226,34 @@ def execute_bronze_item(
     timeout_seconds: float,
     clock: Callable[[], float] = perf_counter,
 ) -> ItemOutcome:
-    """Bound the CALL and its verification under one uniquely assigned job group."""
+    return _execute_compute_item(
+        session, item, catalog_name=catalog_name, timeout_seconds=timeout_seconds, clock=clock
+    )
+
+
+def execute_runs_table_item(
+    session: SparkSession,
+    item: PlannedItem,
+    *,
+    catalog_name: str,
+    timeout_seconds: float,
+    clock: Callable[[], float] = perf_counter,
+) -> ItemOutcome:
+    """Execute a grouped partition delete or the subsequent snapshot expiration."""
+    return _execute_compute_item(
+        session, item, catalog_name=catalog_name, timeout_seconds=timeout_seconds, clock=clock
+    )
+
+
+def _execute_compute_item(
+    session: SparkSession,
+    item: PlannedItem,
+    *,
+    catalog_name: str,
+    timeout_seconds: float,
+    clock: Callable[[], float],
+) -> ItemOutcome:
+    """Bound the Spark operation and verification under one assigned job group."""
     started = clock()
     measured = _Measurements(dict(item.detail))
     result = _WorkerResult()
@@ -216,9 +297,11 @@ def _run_worker(
             "remove_orphan_files": _orphans,
             "rewrite_data_files": _compact,
         }
+        if item.zone == "runs-table":
+            actions = {"delete_partition": _delete_partition, "expire_snapshots": _expire}
         action = actions.get(item.action)
         if action is None:
-            raise MaintenanceExecutionUnavailable(f"Unsupported bronze action: {item.action}")
+            raise MaintenanceExecutionUnavailable(f"Unsupported {item.zone} action: {item.action}")
         action(session, item, catalog_name, measured)
     except (KeyboardInterrupt, SystemExit) as exc:
         result.failures.append(exc)
@@ -285,7 +368,9 @@ def _expire(
     session: SparkSession, item: PlannedItem, catalog_name: str, measured: _Measurements
 ) -> None:
     qualified = f"{catalog_name}.{item.target}"
-    predicted = frozenset(json.loads(item.detail["snapshot_ids"]))
+    predicted = (
+        frozenset(json.loads(item.detail["snapshot_ids"])) if item.zone == "bronze" else None
+    )
     older_than = item.detail["older_than"]
     retain_last = int(item.detail["retain_last"])
     before = _snapshot_ids(session, qualified)
@@ -303,9 +388,24 @@ def _expire(
     measured.detail = {
         **measured.detail,
         "surviving_snapshot_ids": json.dumps(sorted(surviving)),
-        "predicted_but_retained_snapshot_ids": json.dumps(sorted(predicted - expired)),
-        "unexpected_expired_snapshot_ids": json.dumps(sorted(expired - predicted)),
     }
+    if predicted is not None:
+        measured.detail.update(
+            predicted_but_retained_snapshot_ids=json.dumps(sorted(predicted - expired)),
+            unexpected_expired_snapshot_ids=json.dumps(sorted(expired - predicted)),
+        )
+
+
+def _delete_partition(
+    session: SparkSession, item: PlannedItem, catalog_name: str, measured: _Measurements
+) -> None:
+    identifier = item.detail["table_identifier"]
+    session.sql(
+        f"DELETE FROM {quote_identifier(f'{catalog_name}.{identifier}')} "
+        f"WHERE emitted_at < TIMESTAMP {_literal(item.detail['older_than'])}"
+    ).collect()
+    count = item.detail.get("row_count")
+    measured.removed_count = int(count) if count is not None else None
 
 
 def _orphans(
