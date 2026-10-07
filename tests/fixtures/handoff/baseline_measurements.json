@@ -1,0 +1,43 @@
+{
+  "page_count": 10000,
+  "records_per_page": 15,
+  "seed": 22,
+  "generation_seconds": 1.528894720000153,
+  "payload_bytes": 69837566,
+  "sidecar_bytes": 650000,
+  "total_raw_bytes": 70487566,
+  "baseline_read_partitions": 313,
+  "baseline_materialize_seconds": [
+    14.444989016999898,
+    13.822326201000124,
+    13.740293049999764
+  ],
+  "baseline_materialize_spread_seconds": 0.7046959670001343,
+  "baseline_materialize_median_seconds": 13.822326201000124,
+  "baseline_bronze_file_count": [
+    1,
+    1,
+    1
+  ],
+  "baseline_bronze_row_count": [
+    10000,
+    10000,
+    10000
+  ],
+  "inferred_late_field_type": "string",
+  "spark_version": "4.0.1",
+  "spark_master": "local[4]",
+  "spark_config": {
+    "spark.sql.files.maxPartitionBytes": "134217728",
+    "spark.sql.files.openCostInBytes": "4194304b",
+    "spark.sql.shuffle.partitions": "256",
+    "spark.sql.adaptive.enabled": "true",
+    "spark.sql.session.timeZone": "UTC"
+  },
+  "baseline_synthetic_golden": {
+    "identifier": "bronze.synthetic_pages_run_3",
+    "schema_digest": "f4ce202915b3ced3ebfbd4aabd23f8ee4e5fe01c541a4adcb90bfcb97f6b22f1",
+    "row_digest": "3616a5a0016d6ec0efb7a3345c6395e99d127c35e6440631facb5f2a3b64a4a7",
+    "row_count": "10000"
+  }
+}

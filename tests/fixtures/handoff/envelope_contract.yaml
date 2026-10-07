@@ -1,0 +1,47 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: tests.synthetic
+name: synthetic page envelopes
+version: 1.0.0
+status: active
+domain: tests
+description:
+  purpose: Preserve the JSON page envelopes read by the uncompacted baseline.
+team:
+  - username: janus-tests
+    role: owner
+schema:
+  - name: synthetic_pages
+    physicalType: table
+    properties:
+      - name: data
+        logicalType: array
+        physicalType: array
+        items:
+          name: element
+          logicalType: object
+          physicalType: struct
+          properties:
+            - {name: id, logicalType: integer, physicalType: long}
+            - {name: codigoOrgao, logicalType: string, physicalType: string}
+            - {name: nomeOrgao, logicalType: string, physicalType: string}
+            - {name: cpf, logicalType: string, physicalType: string}
+            - {name: nomeServidor, logicalType: string, physicalType: string}
+            - {name: ano, logicalType: integer, physicalType: long}
+            - {name: valor, logicalType: number, physicalType: double}
+            - {name: ativo, logicalType: boolean, physicalType: boolean}
+            - {name: dataReferencia, logicalType: string, physicalType: string}
+            - {name: categoria, logicalType: string, physicalType: string}
+            - name: orgao
+              logicalType: object
+              physicalType: struct
+              properties:
+                - {name: codigo, logicalType: string, physicalType: string}
+                - {name: nome, logicalType: string, physicalType: string}
+                - {name: uf, logicalType: string, physicalType: string}
+            - {name: observacaoTardia, logicalType: string, physicalType: string}
+      - {name: pagina, logicalType: integer, physicalType: long}
+      - {name: totalPaginas, logicalType: integer, physicalType: long}
+customProperties:
+  - {property: janus.compatibility, value: additive}
+  - {property: janus.enforcement, value: strict}
