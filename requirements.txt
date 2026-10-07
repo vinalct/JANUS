@@ -6,4 +6,4 @@ mypy==2.2.0
 pyiceberg[pyarrow,pyiceberg-core,sql-postgres,sql-sqlite,s3fs]==0.12.0
 pytest==9.0.3
 pytest-cov==7.0.0
-ruff==0.11.6
+ruff==0.16.10
