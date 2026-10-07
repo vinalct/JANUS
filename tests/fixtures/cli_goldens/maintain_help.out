@@ -1,0 +1,29 @@
+usage: janus maintain [-h] [--environment ENVIRONMENT]
+                      [--project-root PROJECT_ROOT] [--dry-run | --apply]
+                      [--zone {bronze,metadata,lineage,runs-table,raw}]
+                      [--source-id SOURCE_ID] [--format {text,json}]
+
+Plan declared retention policies by default, or apply them with recorded
+evidence.
+
+options:
+  -h, --help            show this help message and exit
+  --environment ENVIRONMENT
+                        Environment profile name under conf/environments
+                        without the .yaml suffix.
+  --project-root PROJECT_ROOT
+                        Project root used to resolve conf/ and data/ paths.
+  --dry-run             Print and record the retention plan without deleting
+                        anything (the default).
+  --apply               Apply the declared retention plan and record each
+                        item's outcome.
+  --zone {bronze,metadata,lineage,runs-table,raw}
+                        Limit maintenance to this zone; repeat to select
+                        several. Defaults to all declared zones, with raw
+                        included only when enabled.
+  --source-id SOURCE_ID
+                        Restrict bronze, metadata and raw to these sources;
+                        repeat to select several. Shared lineage files and
+                        runs-table partitions cannot be filtered by source.
+  --format {text,json}  Report format. JSON is exactly the persisted
+                        maintenance record.

@@ -251,3 +251,17 @@ def test_the_test_container_mounts_every_infrastructure_sweep_input():
         "the full-suite container hides infrastructure guardrail inputs: "
         f"{sorted(required - destinations)}"
     )
+
+
+def test_the_test_container_never_reads_host_bytecode():
+    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    environment = compose.get("x-janus-environment") or {}
+    prefix = str(environment.get("PYTHONPYCACHEPREFIX") or "")
+
+    assert prefix.startswith("/tmp/"), (
+        "x-janus-environment must set PYTHONPYCACHEPREFIX to a container-local /tmp path, "
+        f"got {prefix!r}"
+    )
+    for name in ("janus", "janus-cluster", "janus-cluster-rest"):
+        service = compose["services"][name]
+        assert service["environment"].get("PYTHONPYCACHEPREFIX") == prefix, name

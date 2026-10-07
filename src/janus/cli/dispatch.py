@@ -7,7 +7,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from janus.cli import checkpoint, dead_letters, list_sources, run, run_all, validate
+from janus.cli import checkpoint, dead_letters, list_sources, maintain, run, run_all, validate
 from janus.cli.common import build_parent_parser
 
 PROG = "janus"
@@ -104,6 +104,12 @@ def verbs() -> tuple[Verb, ...]:
             "reason. Nothing runs.",
             checkpoint.configure,
             checkpoint.checkpoint_command,
+        ),
+        Verb(
+            "maintain",
+            "Plan declared retention policies by default, or apply them with recorded evidence.",
+            maintain.configure,
+            maintain.maintain_command,
         ),
     )
 

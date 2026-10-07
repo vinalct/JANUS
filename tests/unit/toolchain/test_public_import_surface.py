@@ -12,6 +12,7 @@ MODELS_ALL: tuple[str, ...] = (
     "AccessConfig",
     "AuthConfig",
     "BRONZE_WRITE_STRATEGIES",
+    "BronzeRetentionConfig",
     "BronzeWriteIntent",
     "CONCURRENT_PAGINATION_TYPES",
     "CombinedRequestInputsConfig",
@@ -68,10 +69,16 @@ MODELS_ALL: tuple[str, ...] = (
 
 #: Import paths that exist today and must keep working.
 PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
+    "janus.maintenance": (
+        "MaintenancePolicy",
+        "MaintenanceProfileError",
+        "resolve_maintenance_settings",
+    ),
     "janus.models": MODELS_ALL,
     "janus.models.source_config": (
         "AccessConfig",
         "AuthConfig",
+        "BronzeRetentionConfig",
         "CONCURRENT_PAGINATION_TYPES",
         "CombinedRequestInputsConfig",
         "DEFAULT_PAST_END_STATUS_CODES",
@@ -111,6 +118,7 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
         "UrllibApiTransport",
         "build_paginator",
     ),
+    "janus.strategies.common": ("raw_run_path_segment", "_safe_raw_path_segment"),
     "janus.strategies.api.core": (
         "ApiHook",
         "ApiPastEndConflictError",

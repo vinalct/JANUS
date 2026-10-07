@@ -46,9 +46,10 @@ FROM ranked_runs
 WHERE row_rank = 1;
 ```
 
-There is no retention, snapshot expiry, or compaction policy for this table. It grows by one row per
-successful terminal emission, plus any duplicate emissions. Storage and metadata growth must be
-monitored externally until JANUS defines a maintenance schedule.
+The writer never deletes or expires anything in this table. It grows by one row per successful
+terminal emission, plus any duplicate emissions, until `janus maintain` applies the profile's
+declared `maintenance.runs_table` policy; see [Retention](#retention) for what that removes and
+what it does to query windows.
 
 The only partition field is Iceberg's hidden `day(emitted_at)` transform, named
 `emitted_at_day`. `emitted_at` is when the terminal lineage record was emitted; `started_at` is when
@@ -177,8 +178,10 @@ documented in [OpenLineage mapping contract](openlineage.md). Lifecycle mapping 
 The file transport is the shipped default. It appends one JSON event per line to
 `<metadata_dir>/<JANUS_OPENLINEAGE_EVENTS_DIR>/events-YYYY-MM-DD.ndjson`; by default that is
 `data/metadata/lineage/openlineage/events-YYYY-MM-DD.ndjson`. The date is the event's UTC
-`eventTime`. These files are append-only and unbounded: JANUS defines no rotation beyond the daily
-file boundary and no expiry.
+`eventTime`. These files are append-only, and the transport never rotates or removes them beyond the
+daily file boundary. `janus maintain --zone lineage` removes day files older than
+`maintenance.lineage_events.older_than_days`, never today's file or the most recent one; see
+[retention and maintenance](maintenance.md#zone-by-zone).
 
 To opt a local or cluster profile into HTTP without editing tracked YAML, export:
 
@@ -205,6 +208,43 @@ metadata-zone evidence paths, and declared input provenance. Standard facets car
 source-code/config version, job type, error message, and output row counts. A consumer should use
 the custom facet for JANUS-specific operational detail and the standard datasets/facets for
 cross-platform lineage.
+
+## Retention
+
+The table is retained only by an explicit `janus maintain` (the `runs-table` zone, selected by
+default), under the profile's `maintenance.runs_table.older_than_days`: 365 days in the shipped
+`local` and `cluster` profiles. The full policy, the dry run and the evidence record are in
+[retention and maintenance](maintenance.md).
+
+- **Whole partitions only.** One Spark `DELETE … WHERE emitted_at < TIMESTAMP '<cutoff>'`, where
+  the cutoff is UTC midnight of today minus `older_than_days`. The predicate is the partition
+  source column, so it drops whole `emitted_at_day` partitions and rewrites no surviving file. A
+  dry run lists every day it would delete, with its row count. The delete goes through Spark;
+  the PyIceberg sink stays append-only.
+- **No de-duplication.** Retention removes days, not rows. Retried `run_id` rows stay until their
+  day ages out, and selecting the latest row stays the queries' job.
+- **Snapshot expiry reuses the bronze floor.** After the delete, the table's own snapshots expire
+  with the same cutoff, keeping at least `maintenance.bronze.retain_last`. The runs table has no
+  `retain_last` of its own. Snapshots committed after the cutoff are kept too, so more than
+  `retain_last` can remain.
+- **The row can outlive its JSON.** `run_metadata_path`, `lineage_path`, `checkpoint_history_path`
+  and `validation_report_path` point into the metadata zone, which `maintenance.metadata` retains
+  separately: 90 days in the shipped profiles, except each source's latest 20 runs. For an older run
+  the row can then be the only record left, and those paths no longer resolve. That is by design; see
+  [reproducibility](reproducibility.md#retention-and-what-stays-authoritative).
+
+**Retention silently shortens a query's window.** A published query asks for a window; it cannot
+know the table has forgotten part of it. After retention, a query over the last 400 days returns
+the rows of the last 365 at most, with no error and no warning row. On the order-21 runs-table
+fixture, with `older_than_days: 3`, the published September window of
+[failed runs in a window](queries/observability/failed-runs-in-window.sql) returned 4 runs instead
+of 7 after the apply. Before reading a short or empty answer as "nothing happened", compare the
+window's lower bound with the oldest day still present:
+
+```sql
+SELECT MIN(partition.emitted_at_day) AS oldest_retained_day
+FROM janus.metadata.runs.partitions;
+```
 
 ## Batch and replay behavior
 
@@ -235,6 +275,7 @@ terminal `outcome=failed` or `skipped` does not change the ingestion outcome.
 | Emission exceeded its budget | `run_event_emission_finished` reports `reason=budget_failed`, `stage=budget`, normally with `exception_type=EmissionTimeoutError`. The total START or terminal fan-out budget is five seconds; investigate a slow catalog or endpoint. |
 | Table exists but a query returns no rows | Confirm the catalog name and `observability.runs_table` override, then confirm the half-open `started_at` window. `emitted_at` is the partition-pruning timestamp, not a substitute for the operator's run-start window. |
 | One `run_id` has several rows | This is the append-only retry/re-emission consequence. Use the published `ROW_NUMBER() ... PARTITION BY run_id ORDER BY emitted_at DESC` pattern; do not de-duplicate in the writer. |
+| A window returns fewer runs than it used to | `janus maintain` has deleted the days older than `maintenance.runs_table.older_than_days`, without any error or warning row. Check the oldest retained day with the query under [Retention](#retention), and the `metadata/maintenance/` records for the apply that removed them. |
 | No OpenLineage events by design | The nested result shows `transport=disabled`, `reason=transport_not_configured`, `step=transport_selection`. Select `file` or `http`. This intentionally produces no degradation warning. |
 | The transport was misspelled | Profile loading reports `Environment config has an unsupported observability.openlineage.transport` and lists `disabled, file, http`. If encountered inside a run, `openlineage_transport_unavailable` reports `reason=transport_profile_error` and emission degrades to disabled. |
 | HTTP receiver gets no auth header | An unset or empty `JANUS_OPENLINEAGE_API_KEY` deliberately produces no header. Export a non-empty token in the runtime environment; never put it in tracked YAML. |

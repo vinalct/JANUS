@@ -214,6 +214,7 @@ verb's options.
 | `janus list` | Lists sources with family, variant, mode, enabled state, hook, tags and upstreams. `--graph` prints the dependency order. | [Operator commands](docs/reproducibility.md#operator-commands) |
 | `janus dead-letters list\|release\|replay` | Shows the items a run gave up on, releases them with a recorded reason, or releases them and resumes. | [Troubleshooting](docs/orchestration.md#a-source-failed-and-its-dependents-were-skipped) |
 | `janus checkpoint show\|set\|clear` | Shows where a source's next run starts, or moves or clears that point with a recorded reason. | [Troubleshooting](docs/orchestration.md#a-run-started-from-the-wrong-position) |
+| `janus maintain` | Plans the profile's declared retention for bronze snapshots, metadata history, OpenLineage files and the runs table, and applies it only with `--apply`, recording every deletion. | [Retention and maintenance](docs/maintenance.md) |
 
 `validate`, `list`, `dead-letters list`/`release` and `checkpoint` start no Spark session and
 send no request. They plan disabled sources too, so they work on the checked-in registry, where
@@ -231,5 +232,6 @@ reason, and what it replaced: the released entries, or the previous checkpoint v
 - [Batch orchestration guide](docs/orchestration.md): `run-all`, the source DAG, pipeline summaries, and the Dagster adapter.
 - [Orchestration example](examples/orchestration/README.md): a runnable dependency graph and an operations runbook.
 - [Queryable observability guide](docs/queryable-observability.md): `metadata.runs`, tested SQL, OpenLineage, and operational limits.
+- [Retention and maintenance](docs/maintenance.md): the `maintenance:` policy, the protected set, dry runs, the maintenance record, and scheduling `janus maintain`.
 - [Reproducibility guide](docs/reproducibility.md): environment profiles, container workflow, and cluster-shaped runs.
 - [Implementation notes](docs/implementations/): component-level notes for planner, strategies, Spark I/O, quality, lineage, and source integrations.

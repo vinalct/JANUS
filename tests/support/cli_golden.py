@@ -86,6 +86,12 @@ INVOCATIONS: tuple[Invocation, ...] = (
         documented_at="docs/orchestration.md:58-66",
     ),
     Invocation(
+        "maintain_help",
+        ("maintain", "--help"),
+        "repository",
+        documented_at="docs/tasks/retention-and-maintenance/maintain_command_dry_run.md",
+    ),
+    Invocation(
         "contract_help",
         ("contract", "--help"),
         "repository",

@@ -59,6 +59,10 @@ select = ["B", "E", "F", "I", "PL", "RUF", "SIM", "UP"]
 [tool.ruff.lint.isort]
 known-first-party = ["tests"]
 
+[tool.ruff.lint.flake8-bugbear]
+# The injected default is a frozen, stateless value rather than a mutable lock.
+extend-immutable-calls = ["janus.maintenance.locking.NullMaintenanceLock"]
+
 [tool.ruff.lint.pylint]
 max-branches = 12    # PLR0912 — ruff's default
 max-statements = 50  # PLR0915 — ruff's default

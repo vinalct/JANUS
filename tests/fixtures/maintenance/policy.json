@@ -1,0 +1,9 @@
+{
+  "maintenance": {
+    "bronze": {"retain_last": 3, "older_than_days": 30, "remove_orphan_files": false, "orphan_older_than_days": 3, "compact": {"enabled": false}},
+    "metadata": {"keep_last_runs": 20, "older_than_days": 90},
+    "lineage_events": {"older_than_days": 90},
+    "runs_table": {"older_than_days": 90},
+    "raw": {"enabled": false, "keep_last_runs": 3, "older_than_days": 90}
+  }
+}

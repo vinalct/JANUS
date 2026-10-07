@@ -25,6 +25,7 @@ from janus.models.config.constants import (
 )
 from janus.models.config.issues import ValidationIssue
 from janus.models.config.types import (
+    BronzeRetentionConfig,
     OutputsConfig,
     OutputTarget,
     QualityConfig,
@@ -88,6 +89,7 @@ def _build_output_target(
     namespace = _optional_string(data, "namespace", issues, field_path)
     table_name = _optional_string(data, "table_name", issues, field_path)
     shared_with = _build_shared_with(data, field_path, format_name, issues)
+    retention = _build_bronze_retention(data, field_path, format_name, issues)
 
     if "table" in data and data["table"] is not None:
         issues.append(
@@ -135,6 +137,59 @@ def _build_output_target(
         namespace=namespace,
         table_name=table_name,
         shared_with=shared_with,
+        retention=retention,
+    )
+
+
+def _build_bronze_retention(
+    data: Any,
+    field_path: str,
+    format_name: str,
+    issues: list[ValidationIssue],
+) -> BronzeRetentionConfig | None:
+    """Validate one complete override; shared-table consistency belongs to maintenance."""
+    if "retention" not in data:
+        return None
+    issue_count = len(issues)
+    retention_path = f"{field_path}.retention"
+    if field_path != "outputs.bronze":
+        issues.append(ValidationIssue(retention_path, "is only supported for outputs.bronze"))
+    elif format_name != "iceberg":
+        issues.append(ValidationIssue(retention_path, "requires format='iceberg'"))
+
+    if data["retention"] is None:
+        issues.append(ValidationIssue(retention_path, "must be a mapping"))
+        return None
+    mapping_issue_count = len(issues)
+    retention = _require_mapping(data["retention"], retention_path, issues)
+    if len(issues) != mapping_issue_count:
+        return None
+
+    for key in sorted(retention, key=str):
+        if key not in {"retain_last", "older_than_days"}:
+            issues.append(
+                ValidationIssue(
+                    f"{retention_path}.{key}",
+                    "is not supported; supported keys: older_than_days, retain_last",
+                )
+            )
+
+    values: dict[str, int] = {}
+    for key, minimum, message in (
+        ("retain_last", 1, "must be a positive integer"),
+        ("older_than_days", 0, "must be a non-negative integer"),
+    ):
+        integer_issues: list[ValidationIssue] = []
+        value = _optional_int(retention, key, integer_issues, retention_path, minimum=minimum)
+        if value is None or integer_issues:
+            issues.append(ValidationIssue(f"{retention_path}.{key}", message))
+        else:
+            values[key] = value
+
+    if len(issues) != issue_count:
+        return None
+    return BronzeRetentionConfig(
+        retain_last=values["retain_last"], older_than_days=values["older_than_days"]
     )
 
 

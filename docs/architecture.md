@@ -155,9 +155,13 @@ start Spark, write an authoritative JSON artifact, or raise into the run. The fa
 bounded budget and records a redacted warning on degradation.
 
 The table is append-only and partitioned by `day(emitted_at)`. Retried run ids can therefore have
-more than one row, and published queries select the latest row. There is no retention or expiry
-job. JSON remains authoritative for a single run, so best-effort emission means a missing row is
-not evidence that no run occurred. See [queryable observability](queryable-observability.md) for
+more than one row, and published queries select the latest row. Nothing on the write path expires
+it. Retention is a separate, explicit step: `janus maintain` applies the profile's declared
+`maintenance:` policy, dry-run by default, deleting whole old `emitted_at_day` partitions and,
+under the same command, old bronze snapshots and metadata-zone history (see
+[retention and maintenance](maintenance.md)). JSON remains authoritative for a single run while
+retention keeps it, so best-effort emission means a missing row is not evidence that no run
+occurred. See [queryable observability](queryable-observability.md) for
 the schema, executable queries, transports, and operator guidance.
 
 ### 9. Batch orchestration
@@ -235,6 +239,7 @@ The main implementation areas are:
 - `src/janus/quality/`: reusable validation checks and persisted reports.
 - `src/janus/checkpoints/`: rerun-safe data checkpoints, dead-letter state, and per-page extraction progress.
 - `src/janus/lineage/`: run metadata and lineage artifacts.
+- `src/janus/maintenance/`: declared retention for `janus maintain`: the policy block, inventory collectors, the pure planner, the only executors that expire or delete, and the maintenance record.
 - `src/janus/utils/`: runtime config, storage resolution, Spark bootstrap, and logging.
 
 ## Extension boundaries

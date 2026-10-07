@@ -58,3 +58,25 @@ observability:
     timeout_seconds: ${JANUS_OPENLINEAGE_TIMEOUT_SECONDS:-}
     auth:
       token: ${JANUS_OPENLINEAGE_API_KEY:-}
+
+maintenance:
+  item_timeout_seconds: 1800
+  bronze:
+    retain_last: 3
+    older_than_days: 30
+    remove_orphan_files: false
+    orphan_older_than_days: 3
+    compact:
+      enabled: false
+      target_file_size_mb: 512
+  metadata:
+    keep_last_runs: 20
+    older_than_days: 90
+  lineage_events:
+    older_than_days: 90
+  runs_table:
+    older_than_days: 365
+  raw:
+    enabled: false
+    keep_last_runs: 3
+    older_than_days: 365

@@ -568,15 +568,18 @@ def cloned_api_source_config(project_root: Path) -> SourceConfig:
     copied_contract_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
     if "sources" in payload:
         for entry in payload["sources"]:
             if entry.get("source_id") == API_SOURCE_ID:
                 entry["access"]["pagination"]["page_size"] = PAGE_SIZE
+                entry["access"]["rate_limit"]["concurrency"] = 1
                 break
         else:
             raise AssertionError(f"Source {API_SOURCE_ID!r} was not found in the copied config")
     else:
         payload["access"]["pagination"]["page_size"] = PAGE_SIZE
+        payload["access"]["rate_limit"]["concurrency"] = 1
 
     copied_config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     copied_contract_path.write_bytes(contract_path.read_bytes())
@@ -587,6 +590,7 @@ def cloned_api_source_config(project_root: Path) -> SourceConfig:
         access=replace(
             source_config.access,
             pagination=replace(source_config.access.pagination, page_size=PAGE_SIZE),
+            rate_limit=replace(source_config.access.rate_limit, concurrency=1),
         ),
     )
 

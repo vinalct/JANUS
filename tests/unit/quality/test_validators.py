@@ -88,6 +88,27 @@ def test_quality_gate_persists_successful_validation_report(spark: SparkSession,
     assert payload["checks"][7]["outcome"] == "skipped"
 
 
+def test_validation_store_keeps_the_declared_metadata_path_without_spark(tmp_path):
+    plan = _build_plan(
+        tmp_path,
+        run_id="run-validation-path",
+        started_at=datetime(2026, 10, 5, 12, tzinfo=UTC),
+        data_contract=_example_contract(),
+    )
+    report = QualityGate().validate(plan)
+
+    path = ValidationReportStore().write(plan, report)
+
+    assert path == (
+        tmp_path
+        / "data/metadata/example/federal_open_data_example/validations"
+        / "run-validation-path.json"
+    )
+    assert path.read_text(encoding="utf-8") == (
+        json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n"
+    )
+
+
 def test_quality_gate_raises_with_actionable_dataset_errors(spark: SparkSession, tmp_path):
     plan = _build_plan(
         tmp_path,

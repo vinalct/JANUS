@@ -151,6 +151,15 @@ jobs:
               --cov-report=xml:data/coverage.xml \
               --junitxml=data/metadata/test-reports/ci.xml \
             | tee data/pytest-output.txt
+      - name: Assert the maintenance deletion boundary executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml \
+              --class-name tests.unit.toolchain.test_no_deletion_outside_maintenance --minimum-passed 63
+      - name: Maintenance snapshot and runs-table suites with required-test gates
+        run: make test-maintenance
+      - name: Exercise make maintain-dry-run against a populated fixture catalog
+        run: make test-maintenance-smoke
       - name: Prove both runtime engines are importable in the image
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \

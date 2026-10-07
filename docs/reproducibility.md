@@ -382,7 +382,9 @@ proof that the protocol swap is configuration, not a deployment blueprint.
 ## Re-materializing bronze after a catalog change
 
 Local bronze data is disposable. There is **no migration** from the old Hadoop catalog to the
-JDBC one, by decision: the raw zone is the reproducible artifact, and bronze is a function of it.
+JDBC one, by decision: the raw zone is the reproducible artifact, and bronze is a function of it
+for every run whose raw is retained (see
+[Retention and what stays authoritative](#retention-and-what-stays-authoritative)).
 If your `data/bronze/iceberg` predates the catalog switch, the tables are still on disk but the
 new catalog has no rows describing them, so a run will not find them.
 
@@ -448,7 +450,7 @@ extraction: copied between machines, restored from a backup, or edited by hand.
 
 Be explicit about the current project state.
 
-`janus` is one command with seven verbs. `src/janus/main.py` only delegates to the verb table in
+`janus` is one command with eight verbs. `src/janus/main.py` only delegates to the verb table in
 `src/janus/cli/dispatch.py`, and a command line that starts with an option is the `run` verb, so
 every form in this guide works as it did before the other verbs existed.
 
@@ -485,7 +487,7 @@ python -m janus.main \
   --bronze-table bronze_inep.censo_escolar_microdados
 ```
 
-The other six verbs:
+The other seven verbs:
 
 | Verb | What it is for | Runs a source? |
 |---|---|---|
@@ -495,6 +497,7 @@ The other six verbs:
 | `janus list` | listing sources, their dispatch, their state and the dependency graph | no |
 | `janus dead-letters` | inspecting, releasing or replaying the items a run gave up on | only `replay --execute` |
 | `janus checkpoint` | showing, setting or clearing where a source's next run starts | no |
+| `janus maintain` | planning, and with `--apply` applying, the profile's declared retention ([retention and maintenance](maintenance.md)) | no |
 
 Cross-source scheduling is `janus run-all`: it runs one batch in dependency order and
 exits. Inspecting and correcting what a run leaves behind is the operator verbs below.
@@ -578,7 +581,8 @@ JANUS already enforces several pieces of that:
 - raw, bronze, and metadata zones are resolved through `StorageLayout`;
 - checkpoints are persisted through a monotonic checkpoint store, which only an operator's
   recorded `janus checkpoint set|clear` can move backwards;
-- run metadata and lineage artifacts are written under the metadata zone;
+- run metadata and lineage artifacts are written under the metadata zone, and stay there until
+  `janus maintain` applies a declared retention policy;
 - logs are structured and redact secret-bearing fields by default.
 
 If you are comparing runs across environments, compare:
@@ -588,6 +592,40 @@ If you are comparing runs across environments, compare:
 - the run id and start time;
 - the resolved storage roots;
 - the source config path and version.
+
+## Retention and what stays authoritative
+
+Two claims this guide rests on hold for exactly as long as declared retention keeps their
+evidence. That is a precise bound, not a hole: only `janus maintain` removes anything, only
+under a policy written in the environment profile, never as a side effect of a run, and every
+removal is itself recorded under `<metadata>/maintenance/`. See
+[retention and maintenance](maintenance.md).
+
+**The per-run JSON is authoritative for as long as `maintenance.metadata` keeps it, and the
+runs-table row outlives it by design.** A run's metadata, lineage, checkpoint-history and
+validation JSON are the record of what happened. `maintenance.metadata.keep_last_runs` keeps
+every file of each source's newest runs at any age (20 in the shipped profiles), and
+`maintenance.metadata.older_than_days` keeps everything younger (90 days). Outside those runs,
+each file goes once its own timestamp is older than the window. The run's row in `metadata.runs`,
+which
+`maintenance.runs_table.older_than_days` keeps for 365 days, is then the record that remains:
+what ran, under which config and contract version, how it ended and what it wrote. The row's
+links to the removed files stop resolving. Checkpoint, dead-letter and extraction-progress state
+is never a retention candidate, so resuming and the next run never depend on retention.
+
+**Bronze can be rebuilt from raw for every run whose raw is retained.** The re-materialization
+above, and every `--ingest-raw-to-bronze` replay, reads the run's raw prefix. Raw retention is
+off in every shipped profile (`maintenance.raw.enabled: false`), so today every extracted run
+stays rebuildable. An operator who enables it decides how far back that holds with
+`maintenance.raw.keep_last_runs` and `maintenance.raw.older_than_days`. The first is validated to
+be at least `maintenance.bronze.retain_last`, so the raw behind each retained bronze snapshot
+stays. A run whose raw was removed can no longer be rebuilt locally; re-extracting it is the only
+way back, and the upstream may have changed since.
+
+**Time travel reaches the snapshots `maintenance.bronze` keeps.** `VERSION AS OF` and rollback
+work for the newest `retain_last` snapshots and anything younger than `older_than_days` (three
+snapshots and 30 days in the shipped profiles), unless a source declares its own
+`outputs.bronze.retention`. Roll back before running maintenance, not after.
 
 ## Known limits at this stage
 

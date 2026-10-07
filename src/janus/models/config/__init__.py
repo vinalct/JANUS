@@ -52,6 +52,7 @@ from janus.models.config.strategy_registry import STRATEGY_REGISTRY, StrategyReg
 from janus.models.config.types import (
     AccessConfig,
     AuthConfig,
+    BronzeRetentionConfig,
     CombinedRequestInputsConfig,
     DateWindowRequestInputsConfig,
     ExtractionConfig,
@@ -95,6 +96,7 @@ __all__ = [
     "SUPPORTED_WRITE_MODES",
     "AccessConfig",
     "AuthConfig",
+    "BronzeRetentionConfig",
     "CombinedRequestInputsConfig",
     "DateWindowRequestInputsConfig",
     "ExtractionConfig",
