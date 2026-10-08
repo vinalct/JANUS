@@ -29,6 +29,7 @@ from janus.runtime.spark_lifecycle import SparkSessionProvider, scoped_request_i
 from janus.scripts.checksums import _artifact_format_for_path, _resolve_raw_checksum
 from janus.scripts.replay_plan import _freeze_string_mapping, _plan_with_active_raw_root
 from janus.strategies.api import ApiRequest, build_paginator
+from janus.strategies.api.handoff import HANDOFF_DIRECTORY_NAME
 from janus.strategies.api.request_inputs import load_request_inputs
 from janus.strategies.catalog.artifacts import (
     _persist_normalized_records,
@@ -103,6 +104,16 @@ def _verification_metadata(verify_checksums: bool) -> dict[str, str]:
     return {CHECKSUMS_VERIFIED_KEY: "true"} if verify_checksums else {}
 
 
+def _is_derived_handoff_artifact(raw_root: Path, candidate: Path) -> bool:
+    """Identify derived handoffs by an exact path component within the raw root.
+
+    Rehydrating pages and their own compaction mixes formats or doubles JSONL
+    records. Replay rebuilds the handoff deterministically from the raw pages,
+    so existing handoff files must be excluded before checksum resolution.
+    """
+    return HANDOFF_DIRECTORY_NAME in candidate.relative_to(raw_root).parts
+
+
 def _rediscover_raw_artifacts(
     plan: ExecutionPlan, *, verify_checksums: bool = False
 ) -> tuple[ExtractedArtifact, ...]:
@@ -121,6 +132,7 @@ def _rediscover_raw_artifacts(
             for candidate in raw_root.rglob("*")
             if candidate.is_file()
             and candidate.suffix != SIDECAR_SUFFIX
+            and not _is_derived_handoff_artifact(raw_root, candidate)
             and PARTIAL_SUFFIX_MARKER not in candidate.name
             and STAGING_DIRNAME not in candidate.parts
         )

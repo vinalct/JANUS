@@ -70,15 +70,27 @@ def _excludes_handoff(function, call):
     }
     # Tie the exclusion to this walker, not an unrelated path elsewhere in the function.
     return any(
-        isinstance(node, ast.Compare)
-        and len(node.ops) == 1
-        and isinstance(node.ops[0], ast.NotIn)
-        and isinstance(node.left, ast.Name)
-        and node.left.id == "HANDOFF_DIRECTORY_NAME"
-        and isinstance(node.comparators[0], ast.Attribute)
-        and node.comparators[0].attr == "parts"
-        and isinstance(node.comparators[0].value, ast.Name)
-        and node.comparators[0].value.id in variables
+        (
+            isinstance(node, ast.Compare)
+            and len(node.ops) == 1
+            and isinstance(node.ops[0], ast.NotIn)
+            and isinstance(node.left, ast.Name)
+            and node.left.id == "HANDOFF_DIRECTORY_NAME"
+            and isinstance(node.comparators[0], ast.Attribute)
+            and node.comparators[0].attr == "parts"
+            and isinstance(node.comparators[0].value, ast.Name)
+            and node.comparators[0].value.id in variables
+        )
+        or (
+            isinstance(node, ast.UnaryOp)
+            and isinstance(node.op, ast.Not)
+            and isinstance(node.operand, ast.Call)
+            and _call_name(node.operand) == "_is_derived_handoff_artifact"
+            and len(node.operand.args) == 2
+            and ast.dump(node.operand.args[0]) == ast.dump(call.func.value)
+            and isinstance(node.operand.args[1], ast.Name)
+            and node.operand.args[1].id in variables
+        )
         for node in ast.walk(function)
     )
 
@@ -197,7 +209,6 @@ def future_raw_walk(plan):
     assert violations == []
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 def test_raw_walkers_are_page_anchored_or_exclude_derived_handoff():
     _, violations = _scan(_modules())
     assert violations == [], violations
@@ -242,7 +253,6 @@ def test_real_compacted_handoff_is_a_sibling_inside_the_same_run_prefix(tmp_path
     assert all(handoff_dir in Path(artifact.path).parents for artifact in handoff.artifacts)
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 @pytest.mark.parametrize("case", ["single_input", "two_inputs"])
 def test_all_rediscovery_paths_return_only_pages_after_real_compaction(tmp_path, case):
     zone = build_raw_zone(tmp_path, case)
@@ -302,6 +312,22 @@ def future_raw_walk(raw_root, other):
 """
     _, violations = _scan({"scripts/future_replay.py": ast.parse(source)})
     assert violations
+
+
+@pytest.mark.parametrize(
+    ("root", "candidate", "excluded"),
+    [("raw_root", "p", True), ("other_root", "p", False), ("raw_root", "other", False)],
+)
+def test_walker_detector_ties_the_handoff_helper_to_the_walked_root_and_candidate(
+    root, candidate, excluded
+):
+    source = f"""
+def future_raw_walk(raw_root, other_root, other):
+    return [p for p in raw_root.rglob("*")
+            if not _is_derived_handoff_artifact({root}, {candidate})]
+"""
+    _, violations = _scan({"scripts/future_replay.py": ast.parse(source)})
+    assert (violations == []) is excluded
 
 
 def test_raw_caller_cannot_borrow_another_callers_pages_anchor():
