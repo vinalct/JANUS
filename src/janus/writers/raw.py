@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from hashlib import sha256
@@ -91,15 +91,21 @@ class RawArtifactWriter:
         self,
         plan: ExecutionPlan,
         relative_path: str | Path,
-        stream: BinaryIO,
+        stream: BinaryIO | Iterable[bytes],
         *,
         zone: str = "raw",
         mode: str = "overwrite",
         metadata: Mapping[str, str] | None = None,
         max_bytes: int | None = None,
+        format_name: str = "binary",
     ) -> PersistedArtifact:
-        """Persist a binary stream atomically while computing its checksum."""
+        """Persist a stream or encoded chunks atomically while computing its checksum.
+
+        ``format_name`` describes bytes the caller has already encoded; this method
+        never serializes them. Binary streams retain their existing default format.
+        """
         _validate_output_zone(zone)
+        _validate_format_name(format_name)
         _validate_write_mode(mode)
         _validate_max_bytes(max_bytes)
         if mode == "append":
@@ -114,7 +120,7 @@ class RawArtifactWriter:
                 path,
                 checksum=checksum,
                 zone=zone,
-                format_name="binary",
+                format_name=format_name,
                 mode=mode,
                 records_written=1,
                 metadata=metadata,
@@ -141,7 +147,7 @@ class RawArtifactWriter:
             path,
             checksum=checksum,
             zone=zone,
-            format_name="binary",
+            format_name=format_name,
             mode=mode,
             records_written=1,
             metadata=metadata,
@@ -223,12 +229,8 @@ class RawArtifactWriter:
         mode: str = "overwrite",
         metadata: Mapping[str, str] | None = None,
     ) -> PersistedArtifact:
-        serialized_records = [
-            json.dumps(record, sort_keys=True, ensure_ascii=False) for record in records
-        ]
-        payload = ("\n".join(serialized_records) + ("\n" if serialized_records else "")).encode(
-            "utf-8"
-        )
+        serialized_records = list(iter_json_lines(records))
+        payload = b"".join(serialized_records)
         return self._write_payload(
             plan,
             relative_path,
@@ -470,18 +472,29 @@ def _write_bytes(path: Path, payload: bytes, mode: str) -> tuple[str, Path]:
     return checksum, path
 
 
+def iter_json_lines(records: Iterable[Any]) -> Iterator[bytes]:
+    """Encode records with the raw writer's canonical JSONL serialization."""
+    for record in records:
+        yield (json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _stream_chunks(stream: BinaryIO | Iterable[bytes]) -> Iterator[bytes]:
+    if hasattr(stream, "read"):
+        while chunk := stream.read(WRITE_CHUNK_BYTES):
+            yield chunk
+    else:
+        yield from stream
+
+
 def _copy_hashing(
-    stream: BinaryIO,
+    stream: BinaryIO | Iterable[bytes],
     destination: BinaryIO,
     *,
     max_bytes: int | None,
 ) -> tuple[int, str]:
     digest = sha256()
     bytes_seen = 0
-    while True:
-        chunk = stream.read(WRITE_CHUNK_BYTES)
-        if not chunk:
-            break
+    for chunk in _stream_chunks(stream):
         bytes_seen += len(chunk)
         if max_bytes is not None and bytes_seen > max_bytes:
             raise RawWriteLimitError(max_bytes=max_bytes, bytes_seen=bytes_seen)

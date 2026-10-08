@@ -9,7 +9,6 @@ module is what makes a divergence visible.
 
 from __future__ import annotations
 
-import contextlib
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -27,6 +26,19 @@ RAW_FILE_SUFFIXES = {
     "jsonl": ".jsonl",
     "text": ".txt",
 }
+
+_PAGE_NAME_PREFIXES = ("page-", "offset-", "cursor-", "response-")
+
+
+def _page_index(path: Path, *, prefix: str | None = None) -> int | None:
+    """Parse the numeric index shared by raw rediscovery and handoff ordering."""
+    for candidate in (prefix,) if prefix is not None else _PAGE_NAME_PREFIXES:
+        if path.stem.startswith(candidate):
+            try:
+                return int(path.stem[len(candidate) :])
+            except ValueError:
+                return None
+    return None
 
 
 def _raw_relative_path(
@@ -79,12 +91,9 @@ def _rediscover_all_artifacts_for_input(
 
     candidates: list[tuple[int, Path]] = []
     for path in directory.glob(f"*{suffix}"):
-        stem = path.stem
-        for prefix, start in (("page-", 5), ("offset-", 7), ("cursor-", 7), ("response-", 9)):
-            if stem.startswith(prefix):
-                with contextlib.suppress(ValueError):
-                    candidates.append((int(stem[start:]), path))
-                break
+        index = _page_index(path)
+        if index is not None:
+            candidates.append((index, path))
 
     artifacts = []
     for _, path in sorted(candidates):
@@ -157,13 +166,7 @@ def _numbered_pages_up_to(
     """
     candidates: list[tuple[int, Path]] = []
     for path in directory.glob(f"{prefix}*{suffix}"):
-        stem = path.stem
-        if not stem.startswith(prefix):
-            continue
-        try:
-            index = int(stem[len(prefix) :])
-        except ValueError:
-            continue
-        if index <= last_index:
+        index = _page_index(path, prefix=prefix)
+        if index is not None and index <= last_index:
             candidates.append((index, path))
     return [path for _, path in sorted(candidates)]

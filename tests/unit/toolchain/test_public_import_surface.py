@@ -115,9 +115,11 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
         "ApiTransport",
         "ApiTransportError",
         "AuthResolutionError",
+        "HANDOFF_DIRECTORY_NAME",
         "PaginationState",
         "UrllibApiTransport",
         "build_paginator",
+        "compact_api_handoff",
     ),
     "janus.strategies.common": ("raw_run_path_segment", "_safe_raw_path_segment"),
     "janus.strategies.api.core": (
