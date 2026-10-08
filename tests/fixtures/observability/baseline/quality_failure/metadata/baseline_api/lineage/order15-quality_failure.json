@@ -9,7 +9,7 @@
   "checkpoint_field": "updated_at",
   "checkpoint_strategy": "max_value",
   "checkpoint_value": "2026-07-02",
-  "config_version": "f1792598455bb3d6adf30b1279583882fd41af1803da7dc65a00e7e26cb7fb85",
+  "config_version": "ea4255cebb500ff251192c2c1522387dd8d5cb9c321df7e114794f42ba499e92",
   "configured_outputs": [
     {
       "format": "json",
@@ -85,6 +85,10 @@
     "strategy.checkpoint_value": "2026-07-02",
     "strategy.dead_letter_count": "0",
     "strategy.dead_letter_skipped_count": "0",
+    "strategy.handoff_artifact_count": "1",
+    "strategy.handoff_bytes": "169",
+    "strategy.handoff_compaction": "pages",
+    "strategy.handoff_source_page_count": "1",
     "strategy.pagination_concurrency": "1",
     "strategy.pagination_type": "page_number",
     "strategy.raw_path_prefix": "runs/ingestion_date=2026-07-04/run_id=order15-quality_failure",

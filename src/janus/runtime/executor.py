@@ -266,14 +266,16 @@ class SourceExecutor:
                 )
                 write_results = raw_write_results + materialized.bronze_results
 
-                strategy_metadata = dict(
-                    planned_run.strategy.emit_metadata(
+                strategy_metadata = {
+                    **planned_run.strategy.emit_metadata(
                         plan,
                         extraction_result,
                         write_results,
                         hook=planned_run.hook,
-                    )
-                )
+                    ),
+                    # Derived evidence joins raw-run metadata without replacing raw counts.
+                    **{key: value for key, value in handoff.metadata if key.startswith("handoff_")},
+                }
                 _log_info(
                     logger,
                     "strategy_metadata_emitted",

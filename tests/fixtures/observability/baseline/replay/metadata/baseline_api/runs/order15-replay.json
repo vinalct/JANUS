@@ -55,6 +55,10 @@
   "metadata": {
     "strategy.artifact_count": "1",
     "strategy.auth_type": "none",
+    "strategy.handoff_artifact_count": "1",
+    "strategy.handoff_bytes": "169",
+    "strategy.handoff_compaction": "pages",
+    "strategy.handoff_source_page_count": "1",
     "strategy.pagination_type": "page_number",
     "strategy.raw_artifact_root": "<PROJECT>/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-replay",
     "strategy.raw_to_bronze": "true",

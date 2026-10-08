@@ -19,7 +19,9 @@ from typing import TYPE_CHECKING, Any
 
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult
 from janus.strategies.api.artifacts import RAW_FILE_SUFFIXES, _page_index
+from janus.strategies.api.metadata import _handoff_metadata
 from janus.strategies.api.records import _default_records_from_payload
+from janus.strategies.base import SourceHook
 from janus.strategies.common import _raw_run_path_prefix
 from janus.writers.raw import RawArtifactWriter, iter_json_lines
 
@@ -51,12 +53,21 @@ class CompactionOutcome:
 
     @property
     def metadata(self) -> dict[str, str]:
-        return {
-            "handoff_compaction": self.compaction,
-            "handoff_source_page_count": str(self.source_page_count),
-            "handoff_artifact_count": str(len(self.artifacts)),
-            "handoff_bytes": str(self.handoff_bytes),
-        }
+        return _handoff_metadata(self)
+
+
+def _hook_replaces_handoff(hook: SourceHook | None) -> bool:
+    """Ask the hook class whether it replaces the base identity handoff."""
+    return (
+        hook is not None
+        and type(hook).on_normalization_handoff is not SourceHook.on_normalization_handoff
+    )
+
+
+def _hook_handoff_outcome(
+    extraction_result: ExtractionResult, handoff: ExtractionResult
+) -> CompactionOutcome:
+    return _outcome(handoff.artifacts, COMPACTION_HOOK, len(extraction_result.artifacts))
 
 
 def compact_api_handoff(

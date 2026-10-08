@@ -18,6 +18,7 @@ from janus.strategies.api.handoff import (
     COMPACTION_PAGES,
 )
 from janus.strategies.api.records import _default_records_from_payload
+from janus.strategies.base import SourceHook
 from janus.writers import RawArtifactWriter
 from janus.writers.raw import iter_json_lines
 from tests.fixtures.handoff.cases import (
@@ -146,7 +147,6 @@ def test_empty_compaction_outcome_has_no_artifacts_or_bytes(tmp_path):
     assert outcome.handoff_bytes == 0
 
 
-@pytest.mark.xfail(strict=True, reason="order-22 TASK-05: strategy wiring and hook metadata")
 def test_strategy_compacts_and_records_all_four_metadata_keys(tmp_path):
     zone = build_raw_zone(tmp_path)
     handoff = zone.strategy().build_normalization_handoff(zone.plan, zone.extraction)
@@ -165,7 +165,6 @@ def test_strategy_compacts_and_records_all_four_metadata_keys(tmp_path):
     assert handoff.checkpoint_value == zone.extraction.checkpoint_value
 
 
-@pytest.mark.xfail(strict=True, reason="order-22 TASK-05: strategy wiring and hook metadata")
 @pytest.mark.parametrize(
     ("raw_format", "spark", "reason"),
     [("text", {}, "none"), ("binary", {}, "none"), ("json", {"handoff": "pages"}, "pages")],
@@ -191,16 +190,16 @@ def test_declared_bypasses_keep_original_artifacts_and_record_reason(
     assert not (zone.run_root / "handoff").exists()
 
 
-@pytest.mark.xfail(strict=True, reason="order-22 TASK-05: strategy wiring and hook metadata")
 def test_custom_record_hook_disables_compaction_without_reextracting_records(tmp_path):
     zone = build_raw_zone(tmp_path)
     handoff = zone.strategy().build_normalization_handoff(zone.plan, zone.extraction, RecordsHook())
     assert handoff.artifacts == zone.extraction.artifacts
     assert handoff.metadata_as_dict()["handoff_compaction"] == "hook_records"
+    assert handoff.metadata_as_dict()["handoff_source_page_count"] == "3"
+    assert handoff.metadata_as_dict()["handoff_artifact_count"] == "3"
     assert not (zone.run_root / "handoff").exists()
 
 
-@pytest.mark.xfail(strict=True, reason="order-22 TASK-05: strategy wiring and hook metadata")
 def test_handoff_override_receives_original_json_pages_and_owns_the_result(tmp_path):
     zone = build_raw_zone(tmp_path)
     hook = HandoffHook(zone)
@@ -209,15 +208,70 @@ def test_handoff_override_receives_original_json_pages_and_owns_the_result(tmp_p
     assert read_records(handoff.artifacts) == [{"id": "hook-output"}]
     assert handoff.metadata_as_dict()["handoff_compaction"] == "hook"
     assert handoff.metadata_as_dict()["fixture_hook"] == "true"
+    assert handoff.metadata_as_dict()["fixture"] == "single_input"
+    assert handoff.metadata_as_dict()["handoff_source_page_count"] == "3"
+    assert handoff.metadata_as_dict()["handoff_artifact_count"] == "1"
+    assert handoff.metadata_as_dict()["handoff_bytes"] == str(
+        Path(handoff.artifacts[0].path).stat().st_size
+    )
+    assert handoff.records_extracted == zone.extraction.records_extracted
+    assert handoff.checkpoint_value == zone.extraction.checkpoint_value
     assert not (zone.run_root / "handoff").exists()
 
 
-@pytest.mark.xfail(strict=True, reason="order-22 TASK-05: strategy wiring and hook metadata")
-def test_inherited_noop_hook_does_not_disable_compaction(tmp_path):
+@pytest.mark.parametrize("hook_class", [SourceHook, ApiHook])
+def test_inherited_noop_hook_does_not_disable_compaction(tmp_path, hook_class):
     zone = build_raw_zone(tmp_path)
-    handoff = zone.strategy().build_normalization_handoff(zone.plan, zone.extraction, ApiHook())
+    handoff = zone.strategy().build_normalization_handoff(zone.plan, zone.extraction, hook_class())
     assert handoff.single_artifact_format() == "jsonl"
     assert handoff.metadata_as_dict()["handoff_compaction"] == "jsonl"
+
+
+def test_inherited_handoff_override_precedes_custom_record_extraction_and_pages_optout(tmp_path):
+    class BothHooks(HandoffHook, RecordsHook):
+        pass
+
+    zone = build_raw_zone(tmp_path, spark={"handoff": "pages"})
+    hook = BothHooks(zone)
+    strategy = zone.strategy()
+    with patch.object(type(strategy), "_raw_writer", side_effect=AssertionError("generic path")):
+        handoff = strategy.build_normalization_handoff(zone.plan, zone.extraction, hook)
+    assert hook.received is zone.extraction
+    assert handoff.metadata_as_dict()["handoff_compaction"] == "hook"
+    assert read_records(handoff.artifacts) == [{"id": "hook-output"}]
+
+
+def test_explicit_identity_override_still_owns_handoff(tmp_path):
+    class IdentityOverride(SourceHook):
+        def on_normalization_handoff(self, plan, extraction_result):
+            return extraction_result
+
+    zone = build_raw_zone(tmp_path)
+    handoff = zone.strategy().build_normalization_handoff(
+        zone.plan, zone.extraction, IdentityOverride()
+    )
+    assert handoff.artifacts is zone.extraction.artifacts
+    assert handoff.metadata_as_dict()["handoff_compaction"] == "hook"
+    assert handoff.metadata_as_dict()["handoff_source_page_count"] == "3"
+    assert handoff.metadata_as_dict()["handoff_artifact_count"] == "3"
+    assert not (zone.run_root / "handoff").exists()
+
+
+def test_strategy_resolves_handoff_writer_from_its_existing_factories(tmp_path):
+    zone = build_raw_zone(tmp_path)
+    strategy = zone.strategy()
+    calls = []
+
+    def writer_factory(layout):
+        calls.append(layout)
+        return zone.writer
+
+    strategy.raw_writer_factory = writer_factory
+    handoff = strategy.build_normalization_handoff(zone.plan, zone.extraction)
+    assert calls == [zone.layout]
+    assert Path(handoff.artifacts[0].path).relative_to(zone.run_root).as_posix() == (
+        "handoff/pages/records-0001.jsonl"
+    )
 
 
 def test_empty_strategy_handoff_stays_empty(tmp_path):
@@ -226,6 +280,12 @@ def test_empty_strategy_handoff_stays_empty(tmp_path):
     handoff = zone.strategy().build_normalization_handoff(zone.plan, empty)
     assert handoff.artifacts == ()
     assert handoff.is_empty is True
+    assert handoff.metadata_as_dict() == {
+        "handoff_compaction": "empty",
+        "handoff_source_page_count": "0",
+        "handoff_artifact_count": "0",
+        "handoff_bytes": "0",
+    }
 
 
 @pytest.mark.skipif(

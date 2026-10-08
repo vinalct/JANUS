@@ -226,7 +226,6 @@ def test_pages_dir_keeps_prefixed_and_legacy_flat_layouts(
     assert _pages_dir(zone.plan, zone.layout, index, count, prefix) == expected
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 @pytest.mark.parametrize("case", ["single_input", "two_inputs"])
 def test_real_compacted_handoff_is_a_sibling_inside_the_same_run_prefix(tmp_path, case):
     zone = build_raw_zone(tmp_path, case)

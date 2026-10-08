@@ -159,6 +159,10 @@ def capture_case(root: Path, case: str) -> dict[str, Any]:
     spec = SourceSpec("B" if upstreams else "C", upstreams, family=family)
     graph = GraphCase((SourceSpec("A"), spec)) if upstreams else GraphCase((spec,))
     documents = source_documents(graph)
+    for document in documents:
+        if document["strategy"] == "api":
+            # Pin this orchestration baseline to its original page read shape.
+            document["spark"]["handoff"] = "pages"
     if case == "empty":
         documents[0]["source_hook"] = "order14.empty"
     write_project(root, documents)

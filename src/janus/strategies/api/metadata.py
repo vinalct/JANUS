@@ -9,7 +9,7 @@ caller is the concurrent pagination path.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from janus.models import (
     CombinedRequestInputsConfig,
@@ -17,6 +17,19 @@ from janus.models import (
     IcebergRowsRequestInputsConfig,
 )
 from janus.strategies.http import ApiRequest
+
+if TYPE_CHECKING:
+    from janus.strategies.api.handoff import CompactionOutcome
+
+
+def _handoff_metadata(outcome: CompactionOutcome) -> dict[str, str]:
+    """Describe the handoff, including the original page count on every bypass."""
+    return {
+        "handoff_compaction": outcome.compaction,
+        "handoff_source_page_count": str(outcome.source_page_count),
+        "handoff_artifact_count": str(len(outcome.artifacts)),
+        "handoff_bytes": str(outcome.handoff_bytes),
+    }
 
 
 def _request_input_metadata(plan: ExecutionPlan, request_input_count: int) -> dict[str, str]:
@@ -86,6 +99,7 @@ def _request_input_field_names(
     if not request_input:
         return ()
     return tuple(sorted(str(field_name) for field_name in request_input))
+
 
 def _speculation_metadata(
     *,
