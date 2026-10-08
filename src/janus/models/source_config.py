@@ -123,6 +123,7 @@ from janus.models.config.types import (
     RetryConfig,
     SchemaConfig,
     SparkConfig,
+    SparkHandoffConfig,
 )
 
 __all__ = [
@@ -172,6 +173,7 @@ __all__ = [
     "SourceConfig",
     "SourceConfigValidationError",
     "SparkConfig",
+    "SparkHandoffConfig",
     "StrategyRegistry",
     "ValidationIssue",
     "ValidationPolicy",

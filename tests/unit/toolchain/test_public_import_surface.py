@@ -102,6 +102,7 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
         "SourceConfig",
         "SourceConfigValidationError",
         "SparkConfig",
+        "SparkHandoffConfig",
         "ValidationIssue",
         "ValidationPolicy",
         "_parse_request_input_entry",

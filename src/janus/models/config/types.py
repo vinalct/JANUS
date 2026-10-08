@@ -12,6 +12,8 @@ from datetime import date
 from typing import Final
 
 from janus.models.config.constants import (
+    DEFAULT_HANDOFF_MAX_ARTIFACT_MB,
+    DEFAULT_HANDOFF_MODE,
     DEFAULT_MAX_ARCHIVE_RATIO,
     DEFAULT_MAX_ARCHIVE_TOTAL_BYTES,
     DEFAULT_MAX_PAYLOAD_BYTES,
@@ -239,12 +241,29 @@ class SchemaConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SparkHandoffConfig:
+    """How the API strategy hands its raw artifacts to Spark."""
+
+    mode: str = DEFAULT_HANDOFF_MODE
+    max_artifact_mb: int = DEFAULT_HANDOFF_MAX_ARTIFACT_MB
+
+    @property
+    def is_compacting(self) -> bool:
+        return self.mode == "compact"
+
+    @property
+    def max_artifact_bytes(self) -> int:
+        return self.max_artifact_mb * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
 class SparkConfig:
     input_format: str
     write_mode: str
     repartition: int | None = None
     partition_by: tuple[str, ...] = ()
     read_options: dict[str, str] | None = None
+    handoff: SparkHandoffConfig = field(default_factory=SparkHandoffConfig)
 
 
 @dataclass(frozen=True, slots=True)

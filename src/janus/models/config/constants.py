@@ -50,6 +50,9 @@ SUPPORTED_DATA_FORMATS = frozenset(
     {"binary", "csv", "iceberg", "json", "jsonl", "parquet", "text"}
 )
 SUPPORTED_WRITE_MODES = frozenset({"append", "ignore", "overwrite"})
+SUPPORTED_HANDOFF_MODES = frozenset({"compact", "pages"})
+DEFAULT_HANDOFF_MODE = "compact"
+DEFAULT_HANDOFF_MAX_ARTIFACT_MB = 256
 SUPPORTED_BACKOFF_STRATEGIES = frozenset({"exponential", "fixed"})
 SUPPORTED_HTTP_METHODS = frozenset({"DELETE", "GET", "PATCH", "POST", "PUT"})
 SUPPORTED_FEDERATION_LEVELS = frozenset({"federal"})

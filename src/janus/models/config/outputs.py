@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from janus.models.config.coercion import (
+    _optional_enum,
     _optional_int,
     _optional_string,
     _optional_string_list,
@@ -18,9 +19,12 @@ from janus.models.config.coercion import (
     _require_string,
 )
 from janus.models.config.constants import (
+    DEFAULT_HANDOFF_MAX_ARTIFACT_MB,
+    DEFAULT_HANDOFF_MODE,
     RETIRED_QUALITY_KEYS,
     RETIRED_SCHEMA_KEYS,
     SUPPORTED_DATA_FORMATS,
+    SUPPORTED_HANDOFF_MODES,
     SUPPORTED_WRITE_MODES,
 )
 from janus.models.config.issues import ValidationIssue
@@ -31,6 +35,7 @@ from janus.models.config.types import (
     QualityConfig,
     SchemaConfig,
     SparkConfig,
+    SparkHandoffConfig,
 )
 
 
@@ -59,6 +64,7 @@ def _build_spark_config(raw_value: Any, issues: list[ValidationIssue]) -> SparkC
     repartition = _optional_int(data, "repartition", issues, "spark", minimum=1)
     partition_by = tuple(_optional_string_list(data, "partition_by", issues, "spark"))
     read_options = _optional_string_mapping(data, "read_options", issues, "spark")
+    handoff = _build_spark_handoff_config(data.get("handoff"), issues)
 
     return SparkConfig(
         input_format=input_format,
@@ -66,7 +72,40 @@ def _build_spark_config(raw_value: Any, issues: list[ValidationIssue]) -> SparkC
         repartition=repartition,
         partition_by=partition_by,
         read_options=read_options,
+        handoff=handoff,
     )
+
+
+def _build_spark_handoff_config(
+    raw_value: Any, issues: list[ValidationIssue]
+) -> SparkHandoffConfig:
+    """Validate spark.handoff. Absent means the default; present and wrong is an issue."""
+    if raw_value is None:
+        return SparkHandoffConfig()
+    if isinstance(raw_value, str):
+        raw_value = {"mode": raw_value}
+    data = _require_mapping(raw_value, "spark.handoff", issues)
+    mode = _optional_enum(
+        data,
+        "mode",
+        SUPPORTED_HANDOFF_MODES,
+        issues,
+        "spark.handoff",
+        default=DEFAULT_HANDOFF_MODE,
+    )
+    size_issues: list[ValidationIssue] = []
+    max_artifact_mb = _optional_int(
+        data,
+        "max_artifact_mb",
+        size_issues,
+        "spark.handoff",
+        default=DEFAULT_HANDOFF_MAX_ARTIFACT_MB,
+        minimum=1,
+    )
+    if size_issues:
+        issues.append(ValidationIssue("spark.handoff.max_artifact_mb", "must be >= 1"))
+        max_artifact_mb = DEFAULT_HANDOFF_MAX_ARTIFACT_MB
+    return SparkHandoffConfig(mode=mode, max_artifact_mb=max_artifact_mb)
 
 
 def _build_outputs_config(raw_value: Any, issues: list[ValidationIssue]) -> OutputsConfig:

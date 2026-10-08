@@ -65,6 +65,7 @@ PUBLIC_NAMES: tuple[str, ...] = (
     "SourceConfig",
     "SourceConfigValidationError",
     "SparkConfig",
+    "SparkHandoffConfig",
     "StrategyRegistry",
     "ValidationIssue",
     "ValidationPolicy",
