@@ -192,16 +192,24 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
         "_sha256",
     ),
     "janus.writers": (
+        "MANAGED_TABLE_PROPERTIES",
         "RawArtifactIntegrityError",
         "SIDECAR_SUFFIX",
         "WritePartitioningPlan",
         "apply_write_partitioning",
+        "desired_table_properties",
         "plan_write_partitioning",
+        "render_tblproperties_clause",
     ),
     "janus.writers.partitioning": (
         "WritePartitioningPlan",
         "apply_write_partitioning",
         "plan_write_partitioning",
+    ),
+    "janus.writers.table_properties": (
+        "MANAGED_TABLE_PROPERTIES",
+        "desired_table_properties",
+        "render_tblproperties_clause",
     ),
 }
 

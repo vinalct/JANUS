@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +26,8 @@ def execute_full_refresh_overwrite(
     frame: DataFrame,
     partition_columns: tuple[str, ...],
     evolution: EvolutionPlan | None,
+    *,
+    table_properties: Mapping[str, str] | None = None,
 ) -> FullRefreshOverwritePlan:
     """Plan from the post-ALTER table state, then execute exactly one bronze statement."""
     target_columns = read_target_columns(spark, table_identifier)
@@ -45,6 +47,7 @@ def execute_full_refresh_overwrite(
                 table_identifier=table_identifier,
                 source_view=source_view,
                 partition_columns=partition_columns,
+                table_properties=table_properties,
             )
         )
     else:

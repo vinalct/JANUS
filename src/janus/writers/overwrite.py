@@ -14,12 +14,13 @@ plan preserve the earlier pure planner behavior for existing callers.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from janus.writers.evolution import EvolutionPlan
 from janus.writers.identifiers import partition_clause, quote_identifier
 from janus.writers.schema_ddl import render_projection
+from janus.writers.table_properties import render_tblproperties_clause
 
 _MECHANISMS = frozenset({"insert_overwrite", "replace_table"})
 
@@ -165,11 +166,14 @@ def build_create_table_as_select_sql(
     table_identifier: str,
     source_view: str,
     partition_columns: Sequence[str],
+    table_properties: Mapping[str, str] | None = None,
 ) -> str:
     """Render the first bronze write, which creates the table from the staged view."""
+    properties = render_tblproperties_clause(table_properties or {})
     return (
         f"CREATE TABLE {quote_identifier(table_identifier)} USING iceberg "
-        f"{partition_clause(partition_columns)} AS SELECT * FROM "
+        f"{partition_clause(partition_columns)}{' ' + properties if properties else ''} "
+        f"AS SELECT * FROM "
         f"{quote_identifier(source_view)}"
     )
 
@@ -179,6 +183,7 @@ def build_replace_table_as_select_sql(
     table_identifier: str,
     source_view: str,
     partition_columns: Sequence[str],
+    table_properties: Mapping[str, str] | None = None,
 ) -> str:
     """Render the history-resetting fallback overwrite.
 
@@ -187,9 +192,11 @@ def build_replace_table_as_select_sql(
     new snapshot has no parent, so rollback to them is refused — the caller must say so in the
     write metadata rather than let an operator assume the prior run is still an ancestor.
     """
+    properties = render_tblproperties_clause(table_properties or {})
     return (
         f"REPLACE TABLE {quote_identifier(table_identifier)} USING iceberg "
-        f"{partition_clause(partition_columns)} AS SELECT * FROM "
+        f"{partition_clause(partition_columns)}{' ' + properties if properties else ''} "
+        f"AS SELECT * FROM "
         f"{quote_identifier(source_view)}"
     )
 

@@ -46,6 +46,7 @@ from janus.writers.schema_ddl import (
     build_insert_into_sql,
     project_append_columns,
 )
+from janus.writers.table_properties import desired_table_properties
 from janus.writers.table_state import (
     read_contract_stamp,
     read_live_columns,
@@ -246,8 +247,9 @@ class SparkDatasetWriter:
             prepared_frame.count() if count_records and records_written is None else records_written
         )
 
-        write_metadata: dict[str, str] = {**(metadata or {}), **partitioning_metadata}
-        write_metadata[PLAN_METADATA_KEY] = "none"
+        write_metadata: dict[str, str] = {
+            **(metadata or {}), **partitioning_metadata, PLAN_METADATA_KEY: "none",
+        }
         spark = prepared_frame.sparkSession
         temp_view_name = build_bronze_temp_view_name(plan.source.source_id)
 
@@ -275,6 +277,7 @@ class SparkDatasetWriter:
                     prepared_frame,
                     partition_columns,
                     evolution,
+                    table_properties=desired_table_properties(plan.source_config.spark.write),
                 )
                 write_metadata["overwrite_mechanism"] = overwrite_plan.mechanism
                 if not overwrite_plan.preserves_history:
@@ -308,8 +311,10 @@ class SparkDatasetWriter:
                         table_identifier=table_identifier,
                         source_view=temp_view_name,
                         partition_columns=partition_columns,
+                        table_properties=desired_table_properties(plan.source_config.spark.write),
                     )
                 )
+                write_metadata["table_properties_applied"] = "created"
                 stamp_contract(spark, table_identifier, contract, None)
         finally:
             spark.catalog.dropTempView(temp_view_name)
@@ -390,8 +395,10 @@ class SparkDatasetWriter:
                         table_identifier=table_identifier,
                         source_view=temp_view_name,
                         partition_columns=partition_columns,
+                        table_properties=desired_table_properties(plan.source_config.spark.write),
                     )
                 )
+                write_metadata["table_properties_applied"] = "created"
                 write_metadata["write_strategy"] = "create"
                 write_metadata["requested_strategy"] = "merge_on_keys"
                 stamp_contract(spark, table_identifier, contract, None)

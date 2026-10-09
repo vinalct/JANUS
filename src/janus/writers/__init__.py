@@ -37,8 +37,14 @@ from janus.writers.spark import (
     SparkDatasetWriter,
     build_merge_sql,
 )
+from janus.writers.table_properties import (
+    MANAGED_TABLE_PROPERTIES,
+    desired_table_properties,
+    render_tblproperties_clause,
+)
 
 __all__ = [
+    "MANAGED_TABLE_PROPERTIES",
     "PARTIAL_SUFFIX_MARKER",
     "PLAN_METADATA_KEY",
     "SIDECAR_SUFFIX",
@@ -65,9 +71,11 @@ __all__ = [
     "build_insert_overwrite_sql",
     "build_merge_sql",
     "build_replace_table_as_select_sql",
+    "desired_table_properties",
     "partition_clause",
     "plan_full_refresh_overwrite",
     "plan_schema_evolution",
     "plan_write_partitioning",
     "quote_identifier",
+    "render_tblproperties_clause",
 ]

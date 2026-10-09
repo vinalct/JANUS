@@ -3,7 +3,7 @@
   "metadata": {
     "run_date": "2026-10-07",
     "python_version": "3.13.12",
-    "work_root": "/tmp/janus-baseline",
+    "work_root": "/tmp/janus-order22-baseline",
     "provenance": "All columns hashed verbatim; no path or timestamp exclusions."
   },
   "baseline_goldens": {

@@ -19,7 +19,6 @@ def _properties():
     return import_module("janus.writers.table_properties")
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 def test_declaration_renders_exact_sorted_quoted_properties_with_size_in_bytes():
     from janus.models.config.types import SparkWriteConfig
 
@@ -34,15 +33,14 @@ def test_declaration_renders_exact_sorted_quoted_properties_with_size_in_bytes()
     )
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 def test_property_literal_escaping_sort_order_and_empty_clause():
     render = _properties().render_tblproperties_clause
     assert render({"z": "O'Brien", "a": "x"}) == "TBLPROPERTIES ('a'='x', 'z'='O''Brien')"
+    assert render({"operator's.key": "value"}) == "TBLPROPERTIES ('operator''s.key'='value')"
     assert render({}) == ""
     assert render(dict(reversed(list(DESIRED.items())))) == render(DESIRED)
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 @pytest.mark.parametrize(
     "builder",
     [build_create_table_as_select_sql, build_replace_table_as_select_sql],
@@ -59,6 +57,8 @@ def test_ctas_and_replace_place_properties_before_select_and_quote_identifiers(b
     assert sql.index("PARTITIONED BY") < sql.index("TBLPROPERTIES") < sql.index("AS SELECT")
     assert "'write.distribution-mode'='hash'" in sql
     assert "'write.target-file-size-bytes'='134217728'" in sql
+    assert "`write.distribution-mode`" not in sql
+    assert "`write.target-file-size-bytes`" not in sql
     assert "UNSET" not in sql.upper()
 
 
@@ -68,6 +68,23 @@ def test_omitting_properties_keeps_existing_create_and_replace_sql():
         assert "TBLPROPERTIES" not in sql
         assert "UNSET" not in sql.upper()
         assert quote_identifier("bronze.data") in sql
+        assert builder(
+            table_identifier="bronze.data", source_view="source", partition_columns=(),
+            table_properties={},
+        ) == sql
+
+
+@pytest.mark.parametrize("mode", ["none", "hash", "range"])
+def test_desired_properties_manage_only_file_size_and_distribution(mode):
+    from janus.models.config.types import SparkWriteConfig
+
+    module = _properties()
+    properties = module.desired_table_properties(
+        SparkWriteConfig(target_file_size_mb=256, distribution_mode=mode, partitions=4)
+    )
+    assert tuple(sorted(properties)) == module.MANAGED_TABLE_PROPERTIES == (MODE_KEY, SIZE_KEY)
+    assert properties == {MODE_KEY: mode, SIZE_KEY: "268435456"}
+    assert "UNSET" not in module.render_tblproperties_clause(properties).upper()
 
 
 @pytest.mark.xfail(strict=True, reason="green")
