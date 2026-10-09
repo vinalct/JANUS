@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from janus.models import (
@@ -38,6 +39,7 @@ from janus.quality.pre_write import pre_write_aggregates
 from janus.readers import SparkDatasetReader
 from janus.readers.spark import CORRUPT_RECORD_READ_FORMATS
 from janus.schema_contracts import spark_schema_from_contract
+from janus.utils.catalog_options import is_location_uri
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout
 from janus.writers import SparkDatasetWriter
@@ -227,6 +229,7 @@ class BronzeMaterializer:
                     intent=batch_intent,
                     batch_index=batch_index,
                     count_records=_should_count_records_for_handoff(planned_run),
+                    estimated_input_bytes=_estimated_batch_bytes(batch_artifacts),
                 )
             finally:
                 if persisted:
@@ -254,6 +257,23 @@ class BronzeMaterializer:
         if run_keys is not None:
             run_keys = run_keys.distinct()
         return tuple(bronze_results), normalized_dataframe, run_keys, tuple(evidence)
+
+
+def _estimated_batch_bytes(artifacts: Sequence[ExtractedArtifact]) -> int | None:
+    """Sum handoff sizes with one stat per artifact, or decline to estimate the batch.
+
+    A location URI or any unreadable file makes the whole estimate unknown: a partial
+    sum would undersize the write. No Spark action or object-store listing is needed.
+    """
+    total = 0
+    for artifact in artifacts:
+        if is_location_uri(artifact.path):
+            return None
+        try:
+            total += Path(artifact.path).stat().st_size
+        except OSError:
+            return None
+    return total
 
 
 def _tracks_corrupt_records(

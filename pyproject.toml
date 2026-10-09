@@ -46,6 +46,8 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
   "cluster: requires the cluster stack (MinIO + Postgres)",
+  "spark: requires the Spark and Iceberg runtime",
+  "large_handoff: generates a 2 GiB handoff; run in the Spark job only",
 ]
 
 [tool.ruff]

@@ -70,9 +70,11 @@ class IntentRecordingWriter:
 
     bronze_path: str
     intents: list[BronzeWriteIntent] = field(default_factory=list)
+    estimates: list[int | None] = field(default_factory=list)
 
     def write(self, dataframe, plan, zone, *, intent=None, count_records=False, **kwargs):
-        del dataframe, count_records, kwargs
+        del dataframe, count_records
+        self.estimates.append(kwargs["estimated_input_bytes"])
         assert intent is not None, "materializer must always pass an intent for bronze"
         self.intents.append(intent)
         return WriteResult.from_plan(
@@ -161,6 +163,34 @@ def test_ignore_mode_skips_if_exists_on_every_batch(tmp_path):
     writer = _materialize(planned_run, plan, handoff, tmp_path)
 
     assert [intent.strategy for intent in writer.intents] == ["skip_if_exists"] * 3
+
+
+def test_materializer_estimates_each_batch_once_and_threads_the_result(tmp_path, monkeypatch):
+    plan, planned = _plan(
+        tmp_path, mode="full_refresh", write_mode="overwrite", strategy_family="file"
+    )
+    handoff = _handoff(plan, artifact_count=11)
+    for index, artifact in enumerate(handoff.artifacts, start=1):
+        path = Path(artifact.path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * index)
+    estimate = materialize_module._estimated_batch_bytes
+    calls = []
+
+    def spy(artifacts):
+        calls.append(artifacts)
+        return estimate(artifacts)
+
+    monkeypatch.setattr(materialize_module, "_estimated_batch_bytes", spy)
+    writer = _materialize(planned, plan, handoff, tmp_path)
+    assert writer.estimates == [15, 40, 11]
+    assert [len(batch) for batch in calls] == [5, 5, 1]
+
+
+def test_materializer_threads_unknown_estimate_without_refusing_the_write(tmp_path):
+    plan, planned = _plan(tmp_path, mode="full_refresh", write_mode="overwrite")
+    writer = _materialize(planned, plan, _handoff(plan, artifact_count=1), tmp_path)
+    assert writer.estimates == [None]
 
 
 def test_intent_is_resolved_exactly_once_per_run(tmp_path, monkeypatch):

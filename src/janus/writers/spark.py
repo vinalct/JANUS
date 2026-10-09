@@ -35,7 +35,11 @@ from janus.writers.evolution import PLAN_METADATA_KEY, EvolutionPlan, plan_schem
 from janus.writers.identifiers import build_bronze_temp_view_name, quote_identifier
 from janus.writers.overwrite import build_create_table_as_select_sql
 from janus.writers.overwrite_exec import execute_full_refresh_overwrite
-from janus.writers.partitioning import WritePartitioningPlan, apply_write_partitioning
+from janus.writers.partitioning import (
+    WritePartitioningPlan,
+    apply_write_partitioning,
+    plan_write_partitioning,
+)
 from janus.writers.schema_ddl import (
     build_add_columns_sql,
     build_alter_column_type_sql,
@@ -67,8 +71,8 @@ _BRONZE_STRATEGY_ICEBERG_MODE = {
 _MERGE_SEQUENCE_COLUMN = "_janus_merge_seq"
 _MERGE_RANK_COLUMN = "_janus_merge_rank"
 
-_DEFERRED_PARTITIONING_PLAN = WritePartitioningPlan(
-    "none", None, "write partitioning execution deferred"
+_DISABLED_PARTITIONING_PLAN = WritePartitioningPlan(
+    "none", None, "write partitioning disabled"
 )
 
 
@@ -94,6 +98,7 @@ class SparkDatasetWriter:
         records_written: int | None = None,
         count_records: bool = False,
         apply_repartition: bool = True,
+        estimated_input_bytes: int | None = None,
         batch_index: int = 1,
     ) -> WriteResult:
         """Write ``dataframe`` to ``zone``.
@@ -105,6 +110,9 @@ class SparkDatasetWriter:
         is idempotent too. ``mode`` is ignored for bronze Iceberg writes — the intent always
         wins — and is only consulted for non-bronze / non-iceberg zones, which ignore
         ``intent`` entirely.
+
+        ``estimated_input_bytes`` is the materializer's batch artifact-size total.
+        When it is unknown, the planner only changes partitions for an exact declaration.
         """
         if zone == "bronze" and plan.data_contract is None:
             raise MissingContractError(plan.source.source_id)
@@ -121,6 +129,7 @@ class SparkDatasetWriter:
                 records_written=records_written,
                 count_records=count_records,
                 apply_repartition=apply_repartition,
+                estimated_input_bytes=estimated_input_bytes,
                 batch_index=batch_index,
             )
 
@@ -133,7 +142,16 @@ class SparkDatasetWriter:
         write_mode = mode or plan.source_config.spark.write_mode
         partition_columns = partition_by or plan.source_config.spark.partition_by
 
-        prepared_frame = apply_write_partitioning(dataframe, _DEFERRED_PARTITIONING_PLAN)
+        current_partitions = dataframe.rdd.getNumPartitions() if zone == "bronze" else 0
+        partitioning_plan = (
+            plan_write_partitioning(
+                current_partitions=current_partitions,
+                estimated_input_bytes=estimated_input_bytes,
+                declaration=plan.source_config.spark.write,
+            )
+            if apply_repartition and zone == "bronze" else _DISABLED_PARTITIONING_PLAN
+        )
+        prepared_frame = apply_write_partitioning(dataframe, partitioning_plan)
 
         resolved_records_written = records_written
         if count_records and resolved_records_written is None:
@@ -155,7 +173,10 @@ class SparkDatasetWriter:
             records_written=resolved_records_written,
             partition_by=partition_columns,
             metadata=(
-                {**(metadata or {}), PLAN_METADATA_KEY: "none"} if zone == "bronze" else metadata
+                {
+                    **(metadata or {}), PLAN_METADATA_KEY: "none",
+                    **_partitioning_metadata(partitioning_plan, current_partitions),
+                } if zone == "bronze" else metadata
             ),
         )
 
@@ -171,6 +192,7 @@ class SparkDatasetWriter:
         records_written: int | None,
         count_records: bool,
         apply_repartition: bool,
+        estimated_input_bytes: int | None,
         batch_index: int,
     ) -> WriteResult:
         contract = plan.data_contract
@@ -182,7 +204,17 @@ class SparkDatasetWriter:
         resolved_intent = intent or resolve_bronze_write_intent(plan)
         partition_columns = partition_by or plan.source_config.spark.partition_by
 
-        prepared_frame = apply_write_partitioning(dataframe, _DEFERRED_PARTITIONING_PLAN)
+        current_partitions = dataframe.rdd.getNumPartitions()
+        partitioning_plan = (
+            plan_write_partitioning(
+                current_partitions=current_partitions,
+                estimated_input_bytes=estimated_input_bytes,
+                declaration=plan.source_config.spark.write,
+            )
+            if apply_repartition else _DISABLED_PARTITIONING_PLAN
+        )
+        prepared_frame = apply_write_partitioning(dataframe, partitioning_plan)
+        partitioning_metadata = _partitioning_metadata(partitioning_plan, current_partitions)
 
         table_identifier = bronze_table_identifier(
             plan.bronze_output.path,
@@ -200,7 +232,7 @@ class SparkDatasetWriter:
                 table_identifier=table_identifier,
                 namespace_identifier=namespace_identifier,
                 partition_columns=partition_columns,
-                metadata=metadata,
+                metadata={**(metadata or {}), **partitioning_metadata},
                 records_written=records_written,
                 count_records=count_records,
                 batch_index=batch_index,
@@ -210,11 +242,11 @@ class SparkDatasetWriter:
         if effective_mode is None:
             raise ValueError(f"unsupported bronze write strategy: {resolved_intent.strategy!r}")
 
-        resolved_records_written = records_written
-        if count_records and resolved_records_written is None:
-            resolved_records_written = prepared_frame.count()
+        resolved_records_written = (
+            prepared_frame.count() if count_records and records_written is None else records_written
+        )
 
-        write_metadata: dict[str, str] = dict(metadata or {})
+        write_metadata: dict[str, str] = {**(metadata or {}), **partitioning_metadata}
         write_metadata[PLAN_METADATA_KEY] = "none"
         spark = prepared_frame.sparkSession
         temp_view_name = build_bronze_temp_view_name(plan.source.source_id)
@@ -389,6 +421,19 @@ class SparkDatasetWriter:
             partition_by=partition_columns,
             metadata=write_metadata,
         )
+
+
+def _partitioning_metadata(
+    plan: WritePartitioningPlan, current_partitions: int
+) -> dict[str, str]:
+    metadata = {
+        "write_partitioning": plan.action,
+        "write_input_partitions": str(current_partitions),
+    }
+    if plan.changes_partitioning:
+        metadata["write_partitioning_target"] = str(plan.target_partitions)
+        metadata["write_partitioning_reason"] = plan.reason
+    return metadata
 
 
 def build_merge_sql(
