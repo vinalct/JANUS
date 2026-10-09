@@ -13,6 +13,11 @@ from janus.writers.overwrite import (
     build_replace_table_as_select_sql,
     plan_full_refresh_overwrite,
 )
+from janus.writers.partitioning import (
+    WritePartitioningPlan,
+    apply_write_partitioning,
+    plan_write_partitioning,
+)
 from janus.writers.raw import (
     PARTIAL_SUFFIX_MARKER,
     SIDECAR_SUFFIX,
@@ -52,6 +57,8 @@ __all__ = [
     "SchemaEvolutionRefusedError",
     "SparkDatasetWriter",
     "StagedWrite",
+    "WritePartitioningPlan",
+    "apply_write_partitioning",
     "build_add_columns_sql",
     "build_create_table_as_select_sql",
     "build_insert_into_sql",
@@ -61,5 +68,6 @@ __all__ = [
     "partition_clause",
     "plan_full_refresh_overwrite",
     "plan_schema_evolution",
+    "plan_write_partitioning",
     "quote_identifier",
 ]

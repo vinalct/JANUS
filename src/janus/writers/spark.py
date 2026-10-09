@@ -35,6 +35,7 @@ from janus.writers.evolution import PLAN_METADATA_KEY, EvolutionPlan, plan_schem
 from janus.writers.identifiers import build_bronze_temp_view_name, quote_identifier
 from janus.writers.overwrite import build_create_table_as_select_sql
 from janus.writers.overwrite_exec import execute_full_refresh_overwrite
+from janus.writers.partitioning import WritePartitioningPlan, apply_write_partitioning
 from janus.writers.schema_ddl import (
     build_add_columns_sql,
     build_alter_column_type_sql,
@@ -65,6 +66,10 @@ _BRONZE_STRATEGY_ICEBERG_MODE = {
 # drops again before the MERGE — never persisted to bronze.
 _MERGE_SEQUENCE_COLUMN = "_janus_merge_seq"
 _MERGE_RANK_COLUMN = "_janus_merge_rank"
+
+_DEFERRED_PARTITIONING_PLAN = WritePartitioningPlan(
+    "none", None, "write partitioning execution deferred"
+)
 
 
 class SparkDatasetWriter:
@@ -128,11 +133,7 @@ class SparkDatasetWriter:
         write_mode = mode or plan.source_config.spark.write_mode
         partition_columns = partition_by or plan.source_config.spark.partition_by
 
-        prepared_frame = _rebalance_for_write(
-            dataframe,
-            target_partitions=plan.source_config.spark.repartition,
-            apply_repartition=apply_repartition and zone == "bronze",
-        )
+        prepared_frame = apply_write_partitioning(dataframe, _DEFERRED_PARTITIONING_PLAN)
 
         resolved_records_written = records_written
         if count_records and resolved_records_written is None:
@@ -181,11 +182,7 @@ class SparkDatasetWriter:
         resolved_intent = intent or resolve_bronze_write_intent(plan)
         partition_columns = partition_by or plan.source_config.spark.partition_by
 
-        prepared_frame = _rebalance_for_write(
-            dataframe,
-            target_partitions=plan.source_config.spark.repartition,
-            apply_repartition=apply_repartition,
-        )
+        prepared_frame = apply_write_partitioning(dataframe, _DEFERRED_PARTITIONING_PLAN)
 
         table_identifier = bronze_table_identifier(
             plan.bronze_output.path,
@@ -535,18 +532,3 @@ def _spark_write_format(format_name: str) -> str:
     if normalized == "jsonl":
         return "json"
     return normalized
-
-
-def _rebalance_for_write(
-    dataframe: DataFrame,
-    *,
-    target_partitions: int | None,
-    apply_repartition: bool,
-) -> DataFrame:
-    if not apply_repartition or not target_partitions:
-        return dataframe
-
-    current_partitions = dataframe.rdd.getNumPartitions()
-    if target_partitions > current_partitions:
-        return dataframe.repartition(target_partitions)
-    return dataframe

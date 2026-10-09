@@ -191,7 +191,18 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
         "_resolve_raw_checksum",
         "_sha256",
     ),
-    "janus.writers": ("RawArtifactIntegrityError", "SIDECAR_SUFFIX"),
+    "janus.writers": (
+        "RawArtifactIntegrityError",
+        "SIDECAR_SUFFIX",
+        "WritePartitioningPlan",
+        "apply_write_partitioning",
+        "plan_write_partitioning",
+    ),
+    "janus.writers.partitioning": (
+        "WritePartitioningPlan",
+        "apply_write_partitioning",
+        "plan_write_partitioning",
+    ),
 }
 
 
