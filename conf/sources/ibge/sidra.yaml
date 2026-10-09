@@ -51,7 +51,8 @@ sources:
     input_format: jsonl
     # append resolves to merge_on_keys under: bronze now accumulates windows
     write_mode: append
-    repartition: 1
+    write:
+      partitions: 1
     partition_by:
     - ingestion_date
   outputs:
@@ -129,7 +130,8 @@ sources:
   spark:
     input_format: jsonl
     write_mode: append
-    repartition: 1
+    write:
+      partitions: 1
     partition_by:
     - ingestion_date
   outputs:

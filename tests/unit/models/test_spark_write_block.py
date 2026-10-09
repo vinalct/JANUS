@@ -14,6 +14,15 @@ from janus.models.source_config import (
 )
 from tests.fixtures.handoff.cases import source_mapping
 
+DEPRECATION = ValidationIssue(
+    "spark.repartition",
+    "is deprecated and will be removed in the next order; declare spark.write.partitions instead",
+)
+CONFLICT = ValidationIssue(
+    "spark.write.partitions",
+    "must not be declared together with the deprecated spark.repartition",
+)
+
 
 @pytest.mark.parametrize(
     ("partition_by", "mode"),
@@ -88,39 +97,34 @@ def test_null_partitions_means_no_exact_partition_count():
     assert config.spark.write.partitions is None
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 def test_repartition_loads_as_write_partitions_with_one_deprecation_and_no_error():
     config = SourceConfig.from_mapping(
         source_mapping(spark={"repartition": 4}), Path("source.yaml")
     )
     assert config.spark.write.partitions == 4
-    assert len(config.deprecations) == 1
-    assert config.deprecations[0].path == "spark.repartition"
-    assert "spark.write.partitions" in config.deprecations[0].message
+    assert config.spark.repartition == 4
+    assert config.deprecations == (DEPRECATION,)
 
 
-@pytest.mark.xfail(strict=True, reason="green")
-def test_legacy_and_new_partitions_together_are_rejected():
+@pytest.mark.parametrize("partitions", [2, None])
+def test_legacy_and_new_partitions_together_are_rejected(partitions):
     with pytest.raises(SourceConfigValidationError) as raised:
         SourceConfig.from_mapping(
-            source_mapping(spark={"repartition": 4, "write": {"partitions": 2}}),
+            source_mapping(spark={"repartition": 4, "write": {"partitions": partitions}}),
             Path("source.yaml"),
         )
-    assert len(raised.value.issues) == 1
-    assert raised.value.issues[0].path in {"spark.repartition", "spark.write.partitions"}
-    assert "repartition" in raised.value.issues[0].message
-    assert "write.partitions" in raised.value.issues[0].message
+    assert raised.value.issues == (CONFLICT,)
+    assert raised.value.deprecations == ()
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 def test_deprecation_never_masks_an_unrelated_error_and_survives_the_raise():
     mapping = source_mapping(spark={"repartition": 4})
     mapping["owner"] = None
     with pytest.raises(SourceConfigValidationError) as raised:
         SourceConfig.from_mapping(mapping, Path("source.yaml"))
     assert [issue.path for issue in raised.value.issues] == ["owner"]
-    assert len(raised.value.deprecations) == 1
-    assert "spark.write.partitions" in raised.value.deprecations[0].message
+    assert raised.value.deprecations == (DEPRECATION,)
+    assert str(raised.value) == "Invalid source config: source.yaml\n- owner: is required"
 
 
 def test_validation_issue_keeps_its_two_field_collect_all_contract():
@@ -228,12 +232,55 @@ def test_write_config_is_frozen_and_has_slots():
     assert not hasattr(write, "__dict__")
 
 
-def test_legacy_repartition_still_parses_independently_until_task16():
+def test_legacy_repartition_preserves_the_model_field_for_one_order():
     config = SourceConfig.from_mapping(
         source_mapping(spark={"repartition": 4}), Path("source.yaml")
     )
     assert config.spark.repartition == 4
-    assert config.spark.write.partitions is None
+    assert config.spark.write.partitions == 4
+
+
+@pytest.mark.parametrize("write", [None, {}, {"target_file_size_mb": 32}])
+def test_legacy_shim_preserves_other_write_overrides_and_profile_defaults(write):
+    mapping = source_mapping(spark={"repartition": 4, "write": write})
+    config = SourceConfig.from_mapping(
+        mapping, Path("source.yaml"), write_defaults=SparkWriteDefaults(256, "range")
+    )
+    assert config.spark.write == SparkWriteConfig(
+        32 if write else 256, "range", partitions=4
+    )
+    assert mapping["spark"]["write"] == write
+    assert config.deprecations == (DEPRECATION,)
+    with pytest.raises(FrozenInstanceError):
+        config.deprecations = ()
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "4", 1.5])
+def test_invalid_legacy_value_still_raises_and_carries_deprecation(value):
+    with pytest.raises(SourceConfigValidationError) as raised:
+        SourceConfig.from_mapping(
+            source_mapping(spark={"repartition": value}), Path("source.yaml")
+        )
+    assert [issue.path for issue in raised.value.issues] == ["spark.repartition"]
+    assert raised.value.deprecations == (DEPRECATION,)
+
+
+def test_legacy_deprecation_preserves_multi_issue_order_and_rendering():
+    mapping = source_mapping(spark={"repartition": 0, "partition_by": [1]})
+    mapping["owner"] = None
+    mapping["outputs"]["bronze"]["path"] = None
+    with pytest.raises(SourceConfigValidationError) as raised:
+        SourceConfig.from_mapping(mapping, Path("source.yaml"))
+    assert [issue.path for issue in raised.value.issues] == [
+        "owner", "spark.repartition", "spark.partition_by[0]", "outputs.bronze.path"
+    ]
+    assert raised.value.deprecations == (DEPRECATION,)
+
+
+@pytest.mark.parametrize("spark", [{}, {"write": {"partitions": 4}}])
+def test_current_config_has_no_deprecations(spark):
+    config = SourceConfig.from_mapping(source_mapping(spark=spark), Path("source.yaml"))
+    assert config.deprecations == ()
 
 
 def test_partitioned_source_can_explicitly_disable_distribution():

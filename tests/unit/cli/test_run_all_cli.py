@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 import janus.cli.run_all as run_all_module
 from janus.main import main
@@ -115,6 +116,37 @@ def _install_runner(monkeypatch, execution: ExecutionSpy, **kwargs: Any) -> Core
     runner = CoreBatchExecutor(source_execution=execution, **kwargs)
     monkeypatch.setattr(run_all_module, "_build_batch_executor", lambda _logger: runner)
     return runner
+
+
+@pytest.mark.parametrize("batch", [False, True], ids=["single-source", "run-all"])
+def test_legacy_config_logs_operator_migration_guidance(tmp_path, monkeypatch, capsys, batch):
+    root = _project(tmp_path)
+    source_path = next((root / "conf/sources").rglob("*.yaml"))
+    document = yaml.safe_load(source_path.read_text())
+    mapping = document.get("sources", [document])[0]
+    mapping["spark"]["repartition"] = 4
+    source_path.write_text(yaml.safe_dump(document))
+    execution = ExecutionSpy()
+    _install_runner(monkeypatch, execution)
+    arguments = (
+        _arguments(root) if batch else [
+            "--project-root", str(root), "--source-id", mapping["source_id"]
+        ]
+    )
+    with pytest.warns(DeprecationWarning):
+        assert main(arguments) == 0
+    captured = capsys.readouterr()
+    events = [json.loads(line) for line in captured.err.splitlines() if line.startswith("{")]
+    deprecated = [event for event in events if event["event"] == "source_config_deprecated"]
+    assert len(deprecated) == 1
+    assert deprecated[0]["level"] == "WARNING"
+    assert deprecated[0]["fields"]["source_id"] == mapping["source_id"]
+    assert deprecated[0]["fields"]["config_path"] == str(source_path)
+    assert deprecated[0]["fields"]["path"] == "spark.repartition"
+    assert deprecated[0]["fields"]["message"] == (
+        "is deprecated and will be removed in the next order; "
+        "declare spark.write.partitions instead"
+    )
 
 
 @pytest.mark.parametrize(

@@ -4,8 +4,27 @@ from __future__ import annotations
 
 import argparse
 import os
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
+
+from janus.models.source_config import SourceConfig
+from janus.utils.logging import StructuredLogger
+
+
+def log_source_config_deprecations(
+    logger: StructuredLogger, sources: Iterable[SourceConfig]
+) -> None:
+    """Make each loaded source's migration guidance visible in operator logs."""
+    for source in sources:
+        for issue in source.deprecations:
+            logger.warning(
+                "source_config_deprecated",
+                source_id=source.source_id,
+                config_path=str(source.config_path),
+                path=issue.path,
+                message=issue.message,
+            )
 
 
 def default_project_root() -> Path:

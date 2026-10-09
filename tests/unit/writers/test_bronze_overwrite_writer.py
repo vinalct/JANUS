@@ -197,9 +197,12 @@ class FakeSparkSession:
         return FakeTable(FakeSchema.of_columns(self.target_columns))
 
 
+@dataclass
 class FakeRDD:
+    partitions: int = 4
+
     def getNumPartitions(self) -> int:
-        return 4
+        return self.partitions
 
 
 class FakeDataFrame:
@@ -212,6 +215,10 @@ class FakeDataFrame:
         self.schema = FakeSchema.of_columns(columns)
         self.rdd = FakeRDD()
         self.temp_views: list[str] = []
+
+    def coalesce(self, partitions: int) -> FakeDataFrame:
+        self.rdd = FakeRDD(partitions)
+        return self
 
     def createOrReplaceTempView(self, name: str) -> None:
         self.temp_views.append(name)
@@ -489,7 +496,7 @@ def _source_config(
         "spark": {
             "input_format": "json",
             "write_mode": "overwrite",
-            "repartition": 1,
+            "write": {"partitions": 1},
             "partition_by": ["ingestion_date"] if partition_by is None else partition_by,
         },
         "outputs": {

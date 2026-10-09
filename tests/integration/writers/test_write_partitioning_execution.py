@@ -8,7 +8,7 @@ from time import monotonic
 
 import pytest
 
-from janus.models import BronzeWriteIntent, ExtractedArtifact, ExtractionResult
+from janus.models import BronzeWriteIntent, ExtractedArtifact, ExtractionResult, SourceConfig
 from janus.models.config.types import SparkWriteConfig
 from janus.normalizers import BaseNormalizer
 from janus.planner import PlannedRun
@@ -18,7 +18,7 @@ from janus.runtime.materialize import BronzeMaterializer
 from janus.strategies.api import ApiStrategy
 from janus.utils.storage import StorageLayout
 from janus.writers import SparkDatasetWriter
-from tests.fixtures.handoff.generate_pages import synthetic_plan
+from tests.fixtures.handoff.generate_pages import synthetic_plan, synthetic_source_mapping
 from tests.support.bronze_digest import bronze_golden
 from tests.support.contract_baseline import _CASE_BY_NAME, _ENVIRONMENT_CONFIG, BRONZE_CASES
 from tests.support.handoff_matrix import identifier_for, plan_cell, prepare_fixture
@@ -127,6 +127,48 @@ def write_plan(tmp_path, table_name, declaration):
             (("id", "long"), ("value", "string")), source_id=config.source_id, primary_key=("id",)
         )
     )
+
+
+def test_legacy_and_migrated_partition_counts_coalesce_with_identical_bronze(spark, tmp_path):
+    """The former no-op becomes one real task through either spelling of the declaration."""
+    captures = {}
+    writer = SparkDatasetWriter(
+        StorageLayout.from_environment_config(_ENVIRONMENT_CONFIG, tmp_path)
+    )
+    for label, legacy, enabled in (
+        ("before", True, False), ("legacy-shim", True, True), ("migrated", False, True)
+    ):
+        mapping = synthetic_source_mapping(tmp_path / "raw")
+        mapping["spark"].update(partition_by=[], write={"distribution_mode": "none"})
+        if legacy:
+            mapping["spark"]["repartition"] = 1
+        else:
+            mapping["spark"]["write"]["partitions"] = 1
+        config = SourceConfig.from_mapping(mapping, tmp_path / "source.yaml")
+        assert len(config.deprecations) == int(legacy)
+        plan = replace(
+            write_plan(tmp_path, f"deprecation_{label.replace('-', '_')}", config.spark.write),
+            source_config=config,
+        )
+        frame = BaseNormalizer().normalize(
+            spark.createDataFrame([(index, str(index)) for index in range(20)],
+                                  "id long, value string"), plan
+        ).repartition(4)
+        result = writer.write(frame, plan, "bronze", apply_repartition=enabled)
+        captures[label] = {
+            "files": spark.table(f"{result.path}.files").count(),
+            "golden": bronze_golden(spark.table(result.path), identifier="bronze.deprecation"),
+            "write_metadata": result.metadata_as_dict(),
+        }
+    print("AC5_WRITE=" + json.dumps(captures, sort_keys=True), flush=True)
+    assert [captures[label]["files"] for label in captures] == [4, 1, 1]
+    assert captures["before"]["golden"] == captures["legacy-shim"]["golden"]
+    assert captures["before"]["golden"] == captures["migrated"]["golden"]
+    for label in ("legacy-shim", "migrated"):
+        metadata = captures[label]["write_metadata"]
+        assert metadata["write_partitioning"] == "coalesce"
+        assert metadata["write_input_partitions"] == "4"
+        assert metadata["write_partitioning_target"] == "1"
 
 
 @pytest.mark.parametrize("strategy", ["replace_table", "insert", "merge_on_keys"])

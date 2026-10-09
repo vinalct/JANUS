@@ -40,7 +40,13 @@ def test_profile_defaults_load_and_plan_all_31_sources(profile, size):
         write = planned.plan.source_config.spark.write
         assert write.target_file_size_mb == size
         assert write.distribution_mode == ("hash" if source.spark.partition_by else "none")
-        assert write.partitions is None
+        document = yaml.safe_load(source.config_path.read_text(encoding="utf-8"))
+        entry = next(
+            item for item in document.get("sources", [document])
+            if item["source_id"] == source.source_id
+        )
+        assert write.partitions == entry["spark"].get("write", {}).get("partitions")
+        assert source.deprecations == ()
 
 
 def test_environment_overrides_profile_values(monkeypatch):

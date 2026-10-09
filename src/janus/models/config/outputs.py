@@ -6,7 +6,9 @@ written result — and none of them depends on how the data was fetched.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import suppress
+from dataclasses import replace
 from typing import Any
 
 from janus.models.config.coercion import (
@@ -67,6 +69,7 @@ def _build_spark_config(
     raw_value: Any,
     issues: list[ValidationIssue],
     *,
+    deprecations: list[ValidationIssue] | None = None,
     write_defaults: SparkWriteDefaults | None = None,
 ) -> SparkConfig:
     """Validate the Spark-facing options that later tasks will consume."""
@@ -74,12 +77,15 @@ def _build_spark_config(
     input_format = _require_enum(data, "input_format", SUPPORTED_DATA_FORMATS, issues, "spark")
     write_mode = _require_enum(data, "write_mode", SUPPORTED_WRITE_MODES, issues, "spark")
     repartition = _optional_int(data, "repartition", issues, "spark", minimum=1)
+    _collect_repartition_deprecation(data, issues, deprecations)
     partition_by = tuple(_optional_string_list(data, "partition_by", issues, "spark"))
     read_options = _optional_string_mapping(data, "read_options", issues, "spark")
     handoff = _build_spark_handoff_config(data.get("handoff"), issues)
     write = _build_spark_write_config(
         data.get("write"), issues, partition_by=partition_by, defaults=write_defaults
     )
+    if repartition is not None and write.partitions is None:
+        write = replace(write, partitions=repartition)
 
     return SparkConfig(
         input_format=input_format,
@@ -90,6 +96,32 @@ def _build_spark_config(
         handoff=handoff,
         write=write,
     )
+
+
+def _collect_repartition_deprecation(
+    data: Mapping[str, Any],
+    issues: list[ValidationIssue],
+    deprecations: list[ValidationIssue] | None,
+) -> None:
+    """Keep legacy warnings separate from the ordered, fatal issue collector."""
+    if "repartition" not in data:
+        return
+    write = data.get("write")
+    if isinstance(write, Mapping) and "partitions" in write:
+        issues.append(
+            ValidationIssue(
+                "spark.write.partitions",
+                "must not be declared together with the deprecated spark.repartition",
+            )
+        )
+    elif deprecations is not None:
+        deprecations.append(
+            ValidationIssue(
+                "spark.repartition",
+                "is deprecated and will be removed in the next order; "
+                "declare spark.write.partitions instead",
+            )
+        )
 
 
 def _build_spark_write_config(

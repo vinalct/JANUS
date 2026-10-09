@@ -12,6 +12,7 @@ no rule is re-run or restated here. The third test pins an inventory, not a rule
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 from janus.registry import load_registry, unverified_required_fields
@@ -29,6 +30,18 @@ def test_every_checked_in_source_validates() -> None:
     registry = load_registry(PROJECT_ROOT)
 
     assert len(registry.list_sources(enabled_only=False)) > 0
+
+
+def test_every_checked_in_source_loads_without_deprecations() -> None:
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always", DeprecationWarning)
+        registry = load_registry(PROJECT_ROOT)
+    deprecated = {
+        source.source_id: source.deprecations for source in registry.sources if source.deprecations
+    }
+    assert len(registry.sources) == 31
+    assert deprecated == {}, f"checked-in source declarations need migration: {deprecated}"
+    assert not [warning for warning in emitted if warning.category is DeprecationWarning]
 
 
 def test_every_incremental_source_declares_a_primary_key() -> None:

@@ -112,7 +112,7 @@ def cli(monkeypatch, tmp_path):
 
     monkeypatch.setattr(main_module, "load_environment_config", lambda *a, **k: ENVIRONMENT_CONFIG)
     monkeypatch.setattr(main_module, "prepare_runtime", lambda *a, **k: {"root_dir": tmp_path})
-    registry_snapshot = object()
+    registry_snapshot = SimpleNamespace(sources=())
 
     def load_registry(project_root, *, write_defaults=None):
         del project_root

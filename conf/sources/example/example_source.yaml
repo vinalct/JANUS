@@ -54,7 +54,8 @@ schema:
 spark:
   input_format: json
   write_mode: append
-  repartition: 4
+  write:
+    partitions: 4
   partition_by:
     - ingestion_date
 

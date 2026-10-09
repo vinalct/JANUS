@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import InitVar, dataclass, field
 from pathlib import Path
@@ -157,6 +158,17 @@ class SourceRegistry:
                 strategy_registry=strategy_registry,
                 write_defaults=write_defaults,
             )
+            deprecations = dict.fromkeys(
+                issue for source, _entry in loaded for issue in source.deprecations
+            )
+            if deprecations:
+                warnings.warn(
+                    "\n".join(
+                        f"{config_path}: {issue.path}: {issue.message}" for issue in deprecations
+                    ),
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
             for source, entry in loaded:
                 previous_path = seen_source_ids.get(source.source_id)
                 if previous_path is not None:
@@ -422,6 +434,7 @@ def _load_grouped_source_configs(
 ) -> tuple[tuple[SourceConfig, str], ...]:
     """Load a grouped source file whose top level is a `sources:` list."""
     issues: list[ValidationIssue] = []
+    deprecations: list[ValidationIssue] = []
 
     unsupported_keys = sorted(key for key in raw if key != "sources")
     for key in unsupported_keys:
@@ -459,14 +472,22 @@ def _load_grouped_source_configs(
                     entry_path,
                 )
             )
+            deprecations.extend(
+                ValidationIssue(f"{entry_path}.{issue.path}", issue.message)
+                for issue in sources[-1][0].deprecations
+            )
         except SourceConfigValidationError as exc:
+            deprecations.extend(
+                ValidationIssue(f"{entry_path}.{issue.path}", issue.message)
+                for issue in exc.deprecations
+            )
             issues.extend(
                 ValidationIssue(f"{entry_path}.{issue.path}", issue.message)
                 for issue in exc.issues
             )
 
     if issues:
-        raise SourceConfigValidationError(config_path, issues)
+        raise SourceConfigValidationError(config_path, issues, deprecations=deprecations)
     return tuple(sources)
 
 

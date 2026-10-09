@@ -242,6 +242,7 @@ class SourceConfig:
     description: str | None = None
     source_hook: str | None = None
     tags: tuple[str, ...] = ()
+    deprecations: tuple[ValidationIssue, ...] = ()
 
     @classmethod
     def from_mapping(
@@ -268,6 +269,7 @@ class SourceConfig:
         is what makes a config with five problems report five.
         """
         issues: list[ValidationIssue] = []
+        deprecations: list[ValidationIssue] = []
 
         source_id = _require_string(data, "source_id", issues)
         name = _require_string(data, "name", issues)
@@ -300,7 +302,9 @@ class SourceConfig:
         access = _build_access_config(data.get("access"), source_type, issues)
         extraction = _build_extraction_config(data.get("extraction"), issues)
         schema = _build_schema_config(data.get("schema"), issues)
-        spark = _build_spark_config(data.get("spark"), issues, write_defaults=write_defaults)
+        spark = _build_spark_config(
+            data.get("spark"), issues, deprecations=deprecations, write_defaults=write_defaults
+        )
         outputs = _build_outputs_config(data.get("outputs"), issues)
         quality = _build_quality_config(data.get("quality"), issues)
 
@@ -308,7 +312,7 @@ class SourceConfig:
         _validate_retry_status_contract(access, extraction, issues)
 
         if issues:
-            raise SourceConfigValidationError(config_path, issues)
+            raise SourceConfigValidationError(config_path, issues, deprecations=deprecations)
 
         return cls(
             config_path=config_path,
@@ -331,4 +335,5 @@ class SourceConfig:
             spark=spark,
             outputs=outputs,
             quality=quality,
+            deprecations=tuple(deprecations),
         )

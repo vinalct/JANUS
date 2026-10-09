@@ -12,6 +12,7 @@ from typing import Any
 from janus.cli.common import (
     default_project_root,
     format_runtime_permission_error,
+    log_source_config_deprecations,
     parse_started_at,
 )
 from janus.observability.openlineage import resolve_openlineage_settings
@@ -167,6 +168,15 @@ def run_command(argv: Sequence[str] | None = None) -> int:
             run_attributes: dict[str, str] = {"trigger": "cli"}
             if args.resume:
                 run_attributes["resume"] = "true"
+            registry = load_registry(
+                project_root, write_defaults=read_spark_write_defaults(config)
+            )
+            log_source_config_deprecations(
+                build_structured_logger(
+                    "janus.execution", level=config.get("runtime", {}).get("log_level", "INFO")
+                ),
+                registry.sources,
+            )
             planned_run = Planner().plan(
                 PlanningRequest.create(
                     source_id=args.source_id,
@@ -177,9 +187,7 @@ def run_command(argv: Sequence[str] | None = None) -> int:
                     include_disabled=args.include_disabled,
                     attributes=run_attributes,
                 ),
-                registry=load_registry(
-                    project_root, write_defaults=read_spark_write_defaults(config)
-                ),
+                registry=registry,
             )
         except (FileNotFoundError, PlannerError, SourceNotFoundError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
