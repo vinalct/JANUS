@@ -18,58 +18,68 @@ SOURCE_ID = "synthetic_pages"
 LATE_FIELD_NULL_PAGES = 100
 
 
+def synthetic_source_mapping(target_dir: Path) -> dict:
+    """The same declaration for the generator and the live/replay differential."""
+    return {
+        "source_id": SOURCE_ID,
+        "name": "synthetic API pages",
+        "description": "Deterministic Transparência-shaped raw baseline",
+        "owner": "janus-tests",
+        "enabled": True,
+        "source_type": "api",
+        "strategy": "api",
+        "strategy_variant": "page_number_api",
+        "federation_level": "federal",
+        "domain": "tests",
+        "public_access": True,
+        "access": {
+            "base_url": "https://example.invalid",
+            "path": "/synthetic",
+            "method": "GET",
+            "format": "json",
+            "auth": {"type": "none"},
+            "pagination": {
+                "type": "page_number",
+                "page_size": 15,
+                "page_param": "pagina",
+                "size_param": "tamanhoPagina",
+            },
+            "rate_limit": {"requests_per_minute": 90, "concurrency": 1},
+        },
+        "extraction": {
+            "mode": "full_refresh",
+            "checkpoint_strategy": "none",
+            "retry": {
+                "max_attempts": 1,
+                "backoff_strategy": "fixed",
+                "backoff_seconds": 1,
+            },
+        },
+        "schema": {"contract": str(FIXTURE_DIR / "envelope_contract.yaml")},
+        "spark": {
+            "input_format": "json",
+            "write_mode": "overwrite",
+            "partition_by": ["ingestion_date"],
+        },
+        "outputs": {
+            "raw": {"path": str(target_dir), "format": "json"},
+            "bronze": {
+                "path": "data/bronze/synthetic",
+                "format": "iceberg",
+                "namespace": "bronze",
+                "table_name": "synthetic_pages",
+            },
+            "metadata": {"path": "data/metadata/synthetic", "format": "json"},
+        },
+        "quality": {},
+    }
+
+
 def synthetic_plan(target_dir: Path) -> ExecutionPlan:
     """Plan an offline source with the envelope schema today's reader preserves."""
     target_dir = target_dir.resolve()
     source = SourceConfig.from_mapping(
-        {
-            "source_id": SOURCE_ID,
-            "name": "synthetic API pages",
-            "description": "Deterministic Transparência-shaped raw baseline",
-            "owner": "janus-tests",
-            "enabled": True,
-            "source_type": "api",
-            "strategy": "api",
-            "strategy_variant": "page_number_api",
-            "federation_level": "federal",
-            "domain": "tests",
-            "public_access": True,
-            "access": {
-                "base_url": "https://example.invalid",
-                "path": "/synthetic",
-                "method": "GET",
-                "format": "json",
-                "auth": {"type": "none"},
-                "pagination": {
-                    "type": "page_number", "page_size": 15,
-                    "page_param": "pagina", "size_param": "tamanhoPagina",
-                },
-                "rate_limit": {"requests_per_minute": 90, "concurrency": 1},
-            },
-            "extraction": {
-                "mode": "full_refresh", "checkpoint_strategy": "none",
-                "retry": {
-                    "max_attempts": 1, "backoff_strategy": "fixed", "backoff_seconds": 1,
-                },
-            },
-            "schema": {"contract": str(FIXTURE_DIR / "envelope_contract.yaml")},
-            "spark": {
-                "input_format": "json",
-                "write_mode": "overwrite",
-                "partition_by": ["ingestion_date"],
-            },
-            "outputs": {
-                "raw": {"path": str(target_dir), "format": "json"},
-                "bronze": {
-                    "path": "data/bronze/order22/synthetic",
-                    "format": "iceberg",
-                    "namespace": "bronze_order22",
-                    "table_name": "synthetic_pages",
-                },
-                "metadata": {"path": "data/metadata/order22", "format": "json"},
-            },
-            "quality": {},
-        },
+        synthetic_source_mapping(target_dir),
         config_path=target_dir / "synthetic_source.yaml",
     )
     context = RunContext.create(

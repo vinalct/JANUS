@@ -1,7 +1,8 @@
 """Derive deterministic JSONL handoffs without changing the raw resume record.
 
-Pages remain read-only. A bare mapping is one record per page, matching extraction;
-for that shape compaction improves file count alone. Custom record extraction needs
+Pages remain read-only. A mapping is one bronze row per page, including envelopes;
+arrays contribute their elements, matching Spark's uncompacted JSON reader.
+Custom record extraction needs
 the original request/response and cannot safely be reconstructed from saved pages.
 Serialization and streamed persistence both belong to the raw writer.
 """
@@ -20,7 +21,6 @@ from typing import TYPE_CHECKING, Any
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult
 from janus.strategies.api.artifacts import RAW_FILE_SUFFIXES, _page_index
 from janus.strategies.api.metadata import _handoff_metadata
-from janus.strategies.api.records import _default_records_from_payload
 from janus.strategies.base import SourceHook
 from janus.strategies.common import _raw_run_path_prefix
 from janus.writers.raw import RawArtifactWriter, iter_json_lines
@@ -187,14 +187,26 @@ def _group_pages(
 
 
 def _records_from_pages(pages: list[Path], *, raw_format: str) -> Iterator[Any]:
+    """Preserve Spark's page-read rows, including wrapper fields and nested arrays.
+
+    Extraction counts may flatten envelopes, but the uncompacted Spark reader does
+    not. Flattening here changes both rows and types under an explicit contract.
+    """
     for path in pages:
         with path.open(encoding="utf-8") as stream:
             if raw_format == "json":
-                yield from _default_records_from_payload(json.load(stream))
+                yield from _page_rows(json.load(stream))
             else:
                 for line in stream:
                     if line.strip():
-                        yield from _default_records_from_payload(json.loads(line))
+                        yield from _page_rows(json.loads(line))
+
+
+def _page_rows(payload: Any) -> Iterator[Any]:
+    if isinstance(payload, dict):
+        yield payload
+    elif isinstance(payload, list):
+        yield from payload
 
 
 def _write_split(

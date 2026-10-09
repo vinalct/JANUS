@@ -17,7 +17,6 @@ from janus.strategies.api.handoff import (
     COMPACTION_NONE,
     COMPACTION_PAGES,
 )
-from janus.strategies.api.records import _default_records_from_payload
 from janus.strategies.base import SourceHook
 from janus.writers import RawArtifactWriter
 from janus.writers.raw import iter_json_lines
@@ -51,11 +50,11 @@ def _bytes_and_sidecars(artifacts):
 def _expected_records(zone):
     if zone.extraction.single_artifact_format() == "jsonl":
         return read_records(zone.extraction.artifacts)
-    return [
-        record
-        for artifact in zone.extraction.artifacts
-        for record in _default_records_from_payload(json.loads(Path(artifact.path).read_bytes()))
-    ]
+    records = []
+    for artifact in zone.extraction.artifacts:
+        payload = json.loads(Path(artifact.path).read_bytes())
+        records.extend(payload if isinstance(payload, list) else [payload])
+    return records
 
 
 @pytest.mark.parametrize("case", ["single_input", "two_inputs"])
@@ -97,11 +96,11 @@ def test_grouping_mirrors_request_input_directories(tmp_path, case, expected):
 
 
 @pytest.mark.parametrize("raw_format", ["json", "jsonl"])
-def test_concatenated_records_match_default_extraction_in_page_order(tmp_path, raw_format):
+def test_concatenated_rows_match_page_reader_in_page_order(tmp_path, raw_format):
     zone = build_raw_zone(tmp_path, raw_format=raw_format)
     outcome = _compact(zone)
     assert read_records(outcome.artifacts) == _expected_records(zone)
-    assert len(read_records(outcome.artifacts)) == zone.extraction.records_extracted
+    assert zone.extraction.records_extracted == 5
 
 
 def test_page_order_is_numeric_even_when_artifact_order_is_reversed(tmp_path):
@@ -453,7 +452,7 @@ def test_empty_record_groups_write_no_artifact(tmp_path, raw_format):
     assert not (zone.run_root / "handoff").exists()
 
 
-def test_bare_mappings_and_jsonl_envelopes_use_default_record_extraction(tmp_path):
+def test_bare_mappings_and_jsonl_envelopes_preserve_reader_rows(tmp_path):
     zone = build_raw_zone(tmp_path, raw_format="jsonl")
     artifact = zone.writer.write_text(
         zone.plan,
@@ -467,10 +466,31 @@ def test_bare_mappings_and_jsonl_envelopes_use_default_record_extraction(tmp_pat
     )
     outcome = _compact(zone, extraction)
     assert read_records(outcome.artifacts) == [
-        {"id": 1},
-        {"id": 2},
+        {"value": [{"id": 1}, {"id": 2}]},
         {"id": 3, "nullable": None},
     ]
+
+
+@pytest.mark.parametrize("raw_format", ["json", "jsonl"])
+@pytest.mark.parametrize("key", ["records", "items", "results", "data", "value"])
+def test_page_envelopes_retain_nested_records_and_wrapper_fields(tmp_path, raw_format, key):
+    zone = build_raw_zone(tmp_path, raw_format=raw_format)
+    envelope = {key: [{"id": 1}, {"id": 2}], "page": 1, "totalPages": 2}
+    empty_envelope = {key: [], "page": 2, "totalPages": 2}
+    write = zone.writer.write_json if raw_format == "json" else zone.writer.write_json_lines
+    artifacts = tuple(
+        write(
+            zone.plan,
+            f"pages/page-{index:04d}.{raw_format}",
+            payload if raw_format == "json" else [payload],
+        ).artifact
+        for index, payload in enumerate((envelope, empty_envelope), start=1)
+    )
+    extraction = replace(zone.extraction, artifacts=artifacts, records_extracted=2)
+    before = page_snapshot(replace(zone, extraction=extraction))
+    outcome = _compact(zone, extraction)
+    assert read_records(outcome.artifacts) == [envelope, empty_envelope]
+    assert page_snapshot(replace(zone, extraction=extraction)) == before
 
 
 @pytest.mark.parametrize("oversized", [False, True])

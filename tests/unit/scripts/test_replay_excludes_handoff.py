@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -137,7 +138,16 @@ def test_legacy_replay_creates_a_handoff_from_verified_pages(tmp_path, case, raw
     assert extraction.single_artifact_format() == raw_format
     assert replay.single_artifact_format() == "jsonl"
     assert replay.metadata_as_dict()["handoff_compaction"] == "jsonl"
-    assert len(read_records(replay.artifacts)) == zone.extraction.records_extracted
+    expected_rows = []
+    for artifact in zone.extraction.artifacts:
+        payloads = (
+            [json.loads(Path(artifact.path).read_text())]
+            if raw_format == "json"
+            else read_records((artifact,))
+        )
+        for payload in payloads:
+            expected_rows.extend(payload if isinstance(payload, list) else [payload])
+    assert read_records(replay.artifacts) == expected_rows
     assert all(
         Path(artifact.path + SIDECAR_SUFFIX).read_text().strip() == artifact.checksum
         for artifact in replay.artifacts

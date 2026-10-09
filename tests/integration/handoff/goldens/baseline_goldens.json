@@ -1,5 +1,5 @@
 {
-  "_comment": "Regenerate in a fresh container scratch zone: python -m tests.support.handoff_baseline --output-dir /tmp/order22-output",
+  "_comment": "Regenerate in a fresh container scratch zone: python -m tests.support.handoff_baseline --output-dir /tmp/output --work-root /tmp/janus-baseline",
   "metadata": {
     "run_date": "2026-10-07",
     "python_version": "3.13.12",

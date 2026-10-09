@@ -89,6 +89,7 @@ RUNS_DECLARATION_CLASS := tests.unit.observability.test_pyiceberg_declared_schem
 PREFLIGHT_REAL_CATALOG_CLASS := tests.integration.catalog_commits.test_contract_preflight_real_catalog
 CROSS_ENGINE_CLASS := tests.integration.catalog_commits.test_pyiceberg_round_trip
 CONTRACTS_GOLDEN_CLASS := tests.integration.contracts.test_bronze_unchanged_after_migration
+HANDOFF_GOLDEN_CLASS := tests.integration.handoff.test_bronze_unchanged_under_compaction
 PRE_WRITE_GATE_CLASS := tests.integration.contracts.test_pre_write_gate
 MALFORMED_ROWS_CLASS := tests.integration.contracts.test_malformed_rows
 EVOLUTION_MATRIX_CLASS := tests.integration.contracts.test_evolution_matrix
@@ -307,6 +308,7 @@ ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(MALFORMED_ROWS_CLASS) --minimum-passed 9)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(EVOLUTION_MATRIX_CLASS) --minimum-passed 59)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CONTRACTS_GOLDEN_CLASS) --minimum-passed 23)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(HANDOFF_GOLDEN_CLASS) --minimum-passed 8)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
