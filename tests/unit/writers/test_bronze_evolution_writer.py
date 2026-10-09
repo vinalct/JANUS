@@ -30,6 +30,8 @@ V2_TABLE = tuple(column for column in BASE_TABLE if column[0] != "label")
 
 def _kind(statement: str) -> str | None:
     """What one recorded statement does to the table; ``None`` for reads and bookkeeping."""
+    if "SET TBLPROPERTIES" in statement and "'janus.contract_id'" not in statement:
+        return None  # Managed write properties are independent of contract evolution.
     for marker, kind in (
         ("ADD COLUMNS", "add_columns"),
         ("ALTER COLUMN", "alter_type"),

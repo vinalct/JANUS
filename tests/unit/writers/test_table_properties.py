@@ -87,7 +87,6 @@ def test_desired_properties_manage_only_file_size_and_distribution(mode):
     assert "UNSET" not in module.render_tblproperties_clause(properties).upper()
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 def test_drift_sets_only_changed_managed_key_in_one_alter_statement():
     module = _properties()
     plan = module.plan_table_property_reconciliation(
@@ -107,7 +106,6 @@ def test_drift_sets_only_changed_managed_key_in_one_alter_statement():
     )
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 def test_equal_properties_issue_no_statement_at_all(monkeypatch):
     module = _properties()
     plan = module.plan_table_property_reconciliation(current=DESIRED, desired=DESIRED)
@@ -135,7 +133,6 @@ def test_equal_properties_issue_no_statement_at_all(monkeypatch):
     assert metadata["table_properties_reconciled"] == "none"
 
 
-@pytest.mark.xfail(strict=True, reason="green in TASK-15")
 def test_unmanaged_keys_are_preserved_and_never_mentioned_in_sql():
     module = _properties()
     plan = module.plan_table_property_reconciliation(
@@ -149,14 +146,12 @@ def test_unmanaged_keys_are_preserved_and_never_mentioned_in_sql():
     assert "UNSET" not in sql.upper()
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 def test_missing_managed_keys_are_drift():
     plan = _properties().plan_table_property_reconciliation(current={}, desired=DESIRED)
     assert plan.needs_alter
     assert dict(plan.to_set) == DESIRED
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 @pytest.mark.parametrize("identifier", ["bronze.name.with.dots", ESCAPED_TABLE])
 def test_alter_quotes_each_table_identifier_segment_and_never_unsets(identifier):
     sql = _properties().build_set_tblproperties_sql(
@@ -167,7 +162,117 @@ def test_alter_quotes_each_table_identifier_segment_and_never_unsets(identifier)
     assert "UNSET" not in sql.upper()
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 def test_empty_alter_properties_are_refused():
     with pytest.raises(ValueError):
         _properties().build_set_tblproperties_sql(table_identifier="bronze.data", properties={})
+
+
+@pytest.mark.parametrize("numeric_side", ["current", "desired", "both"])
+def test_rendered_numeric_values_do_not_cause_permanent_drift(numeric_side):
+    current, desired = dict(DESIRED), dict(DESIRED)
+    if numeric_side in {"current", "both"}:
+        current[SIZE_KEY] = 134217728
+    if numeric_side in {"desired", "both"}:
+        desired[SIZE_KEY] = 134217728
+    reconciliation = _properties().plan_table_property_reconciliation(
+        current=current, desired=desired,
+    )
+    assert not reconciliation.needs_alter
+    assert reconciliation.unchanged == (MODE_KEY, SIZE_KEY)
+
+
+def test_omitted_managed_key_is_never_removed_and_plan_cannot_be_mutated():
+    current = {**DESIRED, "z.foreign": "z", "a.foreign": "a"}
+    desired = {MODE_KEY: "range"}
+    reconciliation = _properties().plan_table_property_reconciliation(
+        current=current, desired=desired,
+    )
+    assert dict(reconciliation.to_set) == {MODE_KEY: "range"}
+    assert reconciliation.unmanaged == ("a.foreign", "z.foreign")
+    assert reconciliation.unchanged == ()
+    assert current[MODE_KEY] == "hash" and desired == {MODE_KEY: "range"}
+    with pytest.raises(TypeError):
+        reconciliation.to_set[MODE_KEY] = "none"
+
+
+def test_alter_escapes_property_literals_and_sorts_keys():
+    sql = _properties().build_set_tblproperties_sql(
+        table_identifier=ESCAPED_TABLE, properties={"z": "O'Brien", "operator's.key": "x"},
+    )
+    assert sql == (
+        f"ALTER TABLE {quote_identifier(ESCAPED_TABLE)} SET "
+        "TBLPROPERTIES ('operator''s.key'='x', 'z'='O''Brien')"
+    )
+
+
+def test_catalog_read_quotes_identifier_and_normalizes_values():
+    statements = []
+
+    def sql(statement):
+        statements.append(statement)
+        return SimpleNamespace(collect=lambda: [{"key": SIZE_KEY, "value": 134217728}])
+
+    current = _properties().read_table_properties(SimpleNamespace(sql=sql), ESCAPED_TABLE)
+    assert current == {SIZE_KEY: "134217728"}
+    assert statements == [f"SHOW TBLPROPERTIES {quote_identifier(ESCAPED_TABLE)}"]
+    assert not getattr(current, "read_failed", False)
+
+
+@pytest.mark.parametrize("stage", ["sql", "collect"])
+def test_failed_read_is_logged_and_distinguishable_from_missing_properties(stage, caplog):
+    def fail():
+        raise RuntimeError("property lookup unavailable")
+
+    def sql(_statement):
+        return fail() if stage == "sql" else SimpleNamespace(collect=fail)
+
+    module = _properties()
+    current = module.read_table_properties(SimpleNamespace(sql=sql), "bronze.data")
+    assert current == {} and current.read_failed
+    assert "Could not read table properties for bronze.data" in caplog.text
+    empty = module.read_table_properties(
+        SimpleNamespace(sql=lambda _: SimpleNamespace(collect=lambda: [])), "bronze.data",
+    )
+    assert empty == {} and not getattr(empty, "read_failed", False)
+
+
+@pytest.mark.parametrize("failure", ["read", "alter"])
+def test_reconciler_degrades_lookup_and_alter_failures(failure, caplog):
+    from janus.models.config.types import SparkWriteConfig
+    from janus.writers.spark import _reconcile_table_properties
+
+    statements = []
+
+    def sql(statement):
+        statements.append(statement)
+        if failure == "read" or statement.startswith("ALTER"):
+            raise RuntimeError("catalog unavailable")
+        return SimpleNamespace(collect=lambda: [])
+
+    metadata = _reconcile_table_properties(
+        SimpleNamespace(sql=sql), "bronze.data", SparkWriteConfig(),
+    )
+    assert metadata["table_properties_reconciled"] == f"{failure}_failed"
+    assert len(statements) == (1 if failure == "read" else 2)
+    assert "Could not" in caplog.text
+
+
+def test_one_alter_records_changed_keys_and_unmanaged_keys():
+    from janus.models.config.types import SparkWriteConfig
+    from janus.writers.spark import _reconcile_table_properties
+
+    statements = []
+
+    def sql(statement):
+        statements.append(statement)
+        return SimpleNamespace(collect=lambda: [{"key": "operator.note", "value": "keep"}])
+
+    metadata = _reconcile_table_properties(
+        SimpleNamespace(sql=sql), "bronze.data", SparkWriteConfig(distribution_mode="hash"),
+    )
+    assert metadata == {
+        "table_properties_reconciled": f"{MODE_KEY},{SIZE_KEY}",
+        "table_properties_unmanaged": "operator.note",
+    }
+    assert len(statements) == 2 and statements[1].startswith("ALTER TABLE")
+    assert "operator.note" not in statements[1] and "UNSET" not in statements[1].upper()

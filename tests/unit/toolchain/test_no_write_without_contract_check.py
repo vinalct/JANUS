@@ -15,7 +15,10 @@ import janus
 PACKAGE_ROOT = Path(inspect.getfile(janus)).parent
 
 WRITER_PACKAGE = "writers"
-BUILDER_MODULE_ANCHORS = {"writers/overwrite.py", "writers/schema_ddl.py", "writers/spark.py"}
+BUILDER_MODULE_ANCHORS = {
+    "writers/overwrite.py", "writers/schema_ddl.py", "writers/merge.py",
+    "writers/table_properties.py", "writers/spark.py",
+}
 CALLER_PACKAGES = ("runtime", "scripts", "strategies", "adapters", "cli")
 CALLER_FILES = ("main.py",)
 MATERIALIZER = "runtime/materialize.py"

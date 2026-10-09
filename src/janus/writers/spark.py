@@ -18,7 +18,8 @@ expires anything (see docs/maintenance.md).
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from logging import getLogger
 from typing import TYPE_CHECKING, Any
 
 from janus.models import (
@@ -27,12 +28,15 @@ from janus.models import (
     WriteResult,
     resolve_bronze_write_intent,
 )
+from janus.models.config.types import SparkWriteConfig
 from janus.models.data_contracts import spark_sql_type
 from janus.quality.contract_checks import MissingContractError
 from janus.utils.storage import StorageLayout, bronze_table_identifier
+from janus.writers import table_properties
 from janus.writers.errors import SchemaEvolutionRefusedError
 from janus.writers.evolution import PLAN_METADATA_KEY, EvolutionPlan, plan_schema_evolution
 from janus.writers.identifiers import build_bronze_temp_view_name, quote_identifier
+from janus.writers.merge import _dedupe_for_merge, _reject_complex_merge_keys, build_merge_sql
 from janus.writers.overwrite import build_create_table_as_select_sql
 from janus.writers.overwrite_exec import execute_full_refresh_overwrite
 from janus.writers.partitioning import (
@@ -58,6 +62,7 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
 SUPPORTED_SPARK_WRITE_FORMATS = frozenset({"csv", "json", "jsonl", "parquet", "text"})
+logger = getLogger(__name__)
 
 # Every non-merge bronze strategy maps to exactly one Iceberg write mode
 _BRONZE_STRATEGY_ICEBERG_MODE = {
@@ -66,11 +71,6 @@ _BRONZE_STRATEGY_ICEBERG_MODE = {
     "create": "append",
     "replace_table": "overwrite",
 }
-
-# Transient columns the source-side dedup stamps on the batch and
-# drops again before the MERGE — never persisted to bronze.
-_MERGE_SEQUENCE_COLUMN = "_janus_merge_seq"
-_MERGE_RANK_COLUMN = "_janus_merge_rank"
 
 _DISABLED_PARTITIONING_PLAN = WritePartitioningPlan(
     "none", None, "write partitioning disabled"
@@ -258,9 +258,12 @@ class SparkDatasetWriter:
             spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {quote_identifier(namespace_identifier)}")
 
             table_exists = spark.catalog.tableExists(table_identifier)
+            write_metadata.update(
+                _reconcile_table_properties(spark, table_identifier, plan.source_config.spark.write)
+                if table_exists else {}
+            )
 
-            recorded_stamp = None
-            evolution = None
+            recorded_stamp, evolution = None, None
             if table_exists and effective_mode != "ignore":
                 evolution, recorded_stamp = _evolve_target_for_batch(
                     spark, table_identifier, plan, resolved_intent, batch_index=batch_index
@@ -268,7 +271,7 @@ class SparkDatasetWriter:
                 write_metadata[PLAN_METADATA_KEY] = evolution.render()
 
             if effective_mode == "ignore" and table_exists:
-                pass
+                pass  # skip_if_exists skips rows, while still maintaining table properties.
             elif effective_mode == "overwrite" and table_exists:
                 overwrite_plan = execute_full_refresh_overwrite(
                     spark,
@@ -381,6 +384,10 @@ class SparkDatasetWriter:
 
         spark = deduped.sparkSession
         table_exists = spark.catalog.tableExists(table_identifier)
+        if table_exists:
+            write_metadata.update(
+                _reconcile_table_properties(spark, table_identifier, plan.source_config.spark.write)
+            )
 
         merge_source = deduped.localCheckpoint(eager=True) if table_exists else deduped
 
@@ -430,6 +437,31 @@ class SparkDatasetWriter:
         )
 
 
+def _reconcile_table_properties(
+    spark: Any, table_identifier: str, declaration: SparkWriteConfig,
+) -> dict[str, str]:
+    current = table_properties.read_table_properties(spark, table_identifier)
+    if getattr(current, "read_failed", False):
+        return {"table_properties_reconciled": "read_failed"}
+    reconciliation = table_properties.plan_table_property_reconciliation(
+        current=current, desired=desired_table_properties(declaration),
+    )
+    metadata = {
+        "table_properties_reconciled": ",".join(reconciliation.to_set) or "none",
+        "table_properties_unmanaged": ",".join(reconciliation.unmanaged),
+    }
+    if reconciliation.needs_alter:
+        try:
+            spark.sql(table_properties.build_set_tblproperties_sql(
+                table_identifier=table_identifier, properties=reconciliation.to_set,
+            ))
+        except Exception:
+            logger.warning("Could not reconcile table properties for %s", table_identifier,
+                           exc_info=True)
+            metadata["table_properties_reconciled"] = "alter_failed"
+    return metadata
+
+
 def _partitioning_metadata(
     plan: WritePartitioningPlan, current_partitions: int
 ) -> dict[str, str]:
@@ -441,92 +473,6 @@ def _partitioning_metadata(
         metadata["write_partitioning_target"] = str(plan.target_partitions)
         metadata["write_partitioning_reason"] = plan.reason
     return metadata
-
-
-def build_merge_sql(
-    *,
-    table_identifier: str,
-    source_view: str,
-    merge_keys: Sequence[str],
-) -> str:
-    """Render the idempotent ``MERGE INTO`` for a bronze upsert.
-
-    Pure — strings in, string out, no Spark. ``<=>`` (null-safe equality) keeps the write
-    idempotent even for a null key (the quality gate fails the run afterwards, which is the
-    correct division of labour). ``UPDATE SET *`` is last-seen-wins. Aliases are
-    ``janus_target`` / ``janus_source`` so a payload column named ``t``/``s`` cannot shadow
-    them, and every key column is quoted with the same defence as the table identifier.
-    """
-    if not merge_keys:
-        raise ValueError("merge_on_keys requires at least one merge key")
-
-    quoted_table = quote_identifier(table_identifier)
-    quoted_view = quote_identifier(source_view)
-    conditions = "\n   AND ".join(
-        f"janus_target.{quote_identifier(key)} <=> janus_source.{quote_identifier(key)}"
-        for key in merge_keys
-    )
-    return (
-        f"MERGE INTO {quoted_table} AS janus_target\n"
-        f"USING {quoted_view} AS janus_source\n"
-        f"ON {conditions}\n"
-        "WHEN MATCHED THEN UPDATE SET *\n"
-        "WHEN NOT MATCHED THEN INSERT *"
-    )
-
-
-def _dedupe_for_merge(
-    frame: DataFrame,
-    merge_keys: tuple[str, ...],
-    *,
-    count: bool,
-) -> tuple[DataFrame, int | None, int | None]:
-    """Keep exactly one row per key so MERGE never sees a many-to-one match.
-
-    The survivor is the last-observed row within the batch: ``ingestion_timestamp`` is
-    constant within a run, so the real tiebreaker is the monotonic sequence — deterministic
-    within the run, which is all "exactly one row per key" needs; ordering across runs is
-    MERGE's job. Returns ``(deduped, duplicates_dropped, deduped_count)``; the two counts are
-    ``None`` when ``count`` is false so the file family does not pay for an extra action.
-    """
-    from pyspark.sql.functions import col, monotonically_increasing_id, row_number
-    from pyspark.sql.window import Window
-
-    ordering = [
-        col("ingestion_timestamp").desc_nulls_last(),
-        col(_MERGE_SEQUENCE_COLUMN).asc(),
-    ]
-    window = Window.partitionBy(*[col(key) for key in merge_keys]).orderBy(*ordering)
-    deduped = (
-        frame.withColumn(_MERGE_SEQUENCE_COLUMN, monotonically_increasing_id())
-        .withColumn(_MERGE_RANK_COLUMN, row_number().over(window))
-        .where(col(_MERGE_RANK_COLUMN) == 1)
-        .drop(_MERGE_RANK_COLUMN, _MERGE_SEQUENCE_COLUMN)
-    )
-
-    if not count:
-        return deduped, None, None
-
-    before = frame.count()
-    after = deduped.count()
-    return deduped, before - after, after
-
-
-def _reject_complex_merge_keys(frame: DataFrame, merge_keys: tuple[str, ...]) -> None:
-    """Reject nested/complex-typed key columns up front with a clear message."""
-    from pyspark.sql.types import ArrayType, MapType, StructType
-
-    field_types = {field.name: field.dataType for field in frame.schema.fields}
-    offending = [
-        key
-        for key in merge_keys
-        if isinstance(field_types.get(key), ArrayType | MapType | StructType)
-    ]
-    if offending:
-        raise ValueError(
-            "merge keys must be scalar columns; these have nested/complex types and cannot "
-            f"be used as idempotency keys: {', '.join(offending)}"
-        )
 
 
 def _evolve_target_for_batch(

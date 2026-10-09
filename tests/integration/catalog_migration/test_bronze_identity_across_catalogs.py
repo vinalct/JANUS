@@ -361,6 +361,12 @@ def test_a_second_full_refresh_grows_the_snapshot_log_under_the_jdbc_catalog(
     assert second_full_refresh.bronze_result.metadata == (
         *BASELINE_SECOND_RUN_METADATA,
         ("schema_evolution", "none"),
+        ("table_properties_reconciled", "none"),
+        (
+            "table_properties_unmanaged",
+            "current-snapshot-id,format,format-version,janus.contract_id,"
+            "janus.contract_version,janus.schema_version,write.parquet.compression-codec",
+        ),
         ("write_input_partitions", "1"),
         ("write_partitioning", "none"),
     )

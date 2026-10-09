@@ -76,7 +76,7 @@ def _decision_violations(function):
     return violations
 
 
-def _scan(modules):
+def _scan(modules, *, detector=_decision_violations, boundaries=PLANNER_BOUNDARIES):
     functions = {}
     for path, tree in modules.items():
         for node in ast.walk(tree):
@@ -91,12 +91,12 @@ def _scan(modules):
         key = (path, function.lineno)
         if (
             key in visited
-            or function.name in PLANNER_BOUNDARIES
+            or function.name in boundaries
             or (path, function.name) in HELPER_BOUNDARIES
         ):
             continue
         visited.add(key)
-        violations.extend((path, *item) for item in _decision_violations(function))
+        violations.extend((path, *item) for item in detector(function))
         for node in ast.walk(function):
             if isinstance(node, ast.Call):
                 pending.extend(functions.get(_call_name(node), []))
@@ -219,3 +219,141 @@ def read_target_partitions(df):
 """
     _, violations = _scan({"future/table_state.py": ast.parse(source)})
     assert any(item[1] == "read_target_partitions" for item in violations)
+
+
+PROPERTY_BOUNDARIES = PLANNER_BOUNDARIES | {"plan_table_property_reconciliation"}
+PROPERTY_PLAN_CALLS = PROPERTY_BOUNDARIES | {"execute_full_refresh_overwrite"}
+PROPERTY_KEYS = {"write.distribution-mode", "write.target-file-size-bytes"}
+
+
+def _property_value(node, names):
+    return any(
+        (isinstance(child, ast.Name) and child.id in names)
+        or (isinstance(child, ast.Attribute) and child.attr in names)
+        or (isinstance(child, ast.Constant) and child.value in PROPERTY_KEYS)
+        or (isinstance(child, ast.Call) and _call_name(child) in {
+            "read_table_properties", "desired_table_properties",
+        })
+        for child in ast.walk(node)
+    )
+
+
+def _property_decision_violations(function):
+    names = {"current_properties", "desired_properties", "MANAGED_TABLE_PROPERTIES"}
+    while True:
+        before = set(names)
+        for node in ast.walk(function):
+            if isinstance(node, ast.Assign | ast.AnnAssign | ast.NamedExpr):
+                value = node.value
+                if isinstance(value, ast.Call) and _call_name(value) in PROPERTY_PLAN_CALLS:
+                    continue  # Branching on a returned plan is execution, not drift comparison.
+                if value is not None and _property_value(value, names):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    names.update(
+                        child.id for target in targets for child in ast.walk(target)
+                        if isinstance(child, ast.Name)
+                    )
+        if names == before:
+            break
+    return [
+        (function.name, node.lineno, "property-drift comparison")
+        for node in ast.walk(function)
+        if isinstance(node, ast.Compare | ast.BinOp) and _property_value(node, names)
+    ]
+
+
+def _property_scan(modules):
+    # Exempt the sanctioned reader by exact module/function pair, not by its name.
+    reader = modules.get("table_properties.py")
+    filtered = dict(modules)
+    if reader is not None:
+        filtered["table_properties.py"] = ast.Module(
+            body=[node for node in reader.body if not (
+                isinstance(node, ast.FunctionDef) and node.name == "read_table_properties"
+            )], type_ignores=[],
+        )
+    return _scan(filtered, detector=_property_decision_violations, boundaries=PROPERTY_BOUNDARIES)
+
+
+def test_property_sweep_matches_package_and_both_write_paths():
+    modules = _modules()
+    assert modules and {"spark.py", "table_properties.py", "merge.py"} <= modules.keys()
+    roots, violations = _property_scan(modules)
+    assert roots >= WRITE_PATHS
+    assert violations == [], violations
+
+
+@pytest.mark.parametrize("statement", [
+    "if current_properties != desired_properties: pass",
+    "if current_properties.get('write.distribution-mode') != 'hash': pass",
+    "if 'write.target-file-size-bytes' not in current: pass",
+    "current = read_table_properties(spark, table);\n    if current != desired: pass",
+    "wanted = desired_table_properties(declaration);\n    if actual == wanted: pass",
+    "a = read_table_properties(spark, table);\n    b = a.get(key);\n    if str(b) != value: pass",
+    "if (actual := read_table_properties(spark, table)) != desired: pass",
+    "current: dict = read_table_properties(spark, table);\n    if key in current: pass",
+    "missing = desired_properties.keys() - current_properties.keys()",
+])
+def test_property_detector_flags_planted_drift_comparisons(statement):
+    source = "def _write_bronze_iceberg(spark, table):\n    " + statement
+    _, violations = _property_scan({"future/spark.py": ast.parse(source)})
+    assert violations, source
+
+
+def test_property_detector_follows_helpers_and_duplicate_function_names():
+    dirty = """
+def _merge_bronze_iceberg(spark, table):
+    return hidden_write(spark, table)
+def hidden_write(spark, table):
+    old = read_table_properties(spark, table)
+    if old != desired_properties:
+        pass
+"""
+    _, violations = _property_scan({
+        "future/merge.py": ast.parse(dirty),
+        "spark.py": ast.parse("def _merge_bronze_iceberg(df): return df"),
+    })
+    assert any(item[:2] == ("future/merge.py", "hidden_write") for item in violations)
+
+
+def test_property_detector_accepts_clean_planner_execution():
+    clean = """
+def _write_bronze_iceberg(spark, table, declaration):
+    current = read_table_properties(spark, table)
+    plan = plan_table_property_reconciliation(
+        current=current, desired=desired_table_properties(declaration))
+    if plan.needs_alter:
+        spark.sql(build_set_tblproperties_sql(table_identifier=table, properties=plan.to_set))
+def plan_table_property_reconciliation(current, desired):
+    return current != desired
+"""
+    _, violations = _property_scan({"future/spark.py": ast.parse(clean)})
+    assert violations == []
+
+
+def test_property_reader_boundary_cannot_hide_a_same_named_future_helper():
+    dirty = """
+def _write_bronze_iceberg(spark, table):
+    return read_table_properties(spark, table)
+def read_table_properties(spark, table):
+    if current_properties != desired_properties:
+        pass
+"""
+    _, violations = _property_scan({"future/table_properties.py": ast.parse(dirty)})
+    assert any(item[1] == "read_table_properties" for item in violations)
+
+
+def test_property_sweep_still_checks_the_overwrite_executor():
+    dirty = """
+def _write_bronze_iceberg(spark, table):
+    plan = execute_full_refresh_overwrite(
+        spark, table, table_properties=desired_table_properties(declaration))
+    if plan.mechanism == 'replace_table':
+        pass
+def execute_full_refresh_overwrite(spark, table, table_properties):
+    current = read_table_properties(spark, table)
+    if current != table_properties:
+        pass
+"""
+    _, violations = _property_scan({"future/overwrite_exec.py": ast.parse(dirty)})
+    assert {item[1] for item in violations} == {"execute_full_refresh_overwrite"}

@@ -196,9 +196,13 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
         "RawArtifactIntegrityError",
         "SIDECAR_SUFFIX",
         "WritePartitioningPlan",
+        "TablePropertyReconciliation",
         "apply_write_partitioning",
         "desired_table_properties",
+        "build_set_tblproperties_sql",
+        "plan_table_property_reconciliation",
         "plan_write_partitioning",
+        "read_table_properties",
         "render_tblproperties_clause",
     ),
     "janus.writers.partitioning": (
@@ -208,7 +212,11 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     ),
     "janus.writers.table_properties": (
         "MANAGED_TABLE_PROPERTIES",
+        "TablePropertyReconciliation",
+        "build_set_tblproperties_sql",
         "desired_table_properties",
+        "plan_table_property_reconciliation",
+        "read_table_properties",
         "render_tblproperties_clause",
     ),
 }
