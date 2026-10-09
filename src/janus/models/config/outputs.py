@@ -6,6 +6,7 @@ written result — and none of them depends on how the data was fetched.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import Any
 
 from janus.models.config.coercion import (
@@ -21,9 +22,12 @@ from janus.models.config.coercion import (
 from janus.models.config.constants import (
     DEFAULT_HANDOFF_MAX_ARTIFACT_MB,
     DEFAULT_HANDOFF_MODE,
+    DEFAULT_TARGET_FILE_SIZE_MB,
+    MAX_TARGET_FILE_SIZE_MB,
     RETIRED_QUALITY_KEYS,
     RETIRED_SCHEMA_KEYS,
     SUPPORTED_DATA_FORMATS,
+    SUPPORTED_DISTRIBUTION_MODES,
     SUPPORTED_HANDOFF_MODES,
     SUPPORTED_WRITE_MODES,
 )
@@ -36,7 +40,10 @@ from janus.models.config.types import (
     SchemaConfig,
     SparkConfig,
     SparkHandoffConfig,
+    SparkWriteConfig,
+    SparkWriteDefaults,
 )
+from janus.utils.catalog_options import non_empty_text
 
 
 def _build_schema_config(raw_value: Any, issues: list[ValidationIssue]) -> SchemaConfig:
@@ -56,7 +63,12 @@ def _build_schema_config(raw_value: Any, issues: list[ValidationIssue]) -> Schem
     return SchemaConfig(contract=contract)
 
 
-def _build_spark_config(raw_value: Any, issues: list[ValidationIssue]) -> SparkConfig:
+def _build_spark_config(
+    raw_value: Any,
+    issues: list[ValidationIssue],
+    *,
+    write_defaults: SparkWriteDefaults | None = None,
+) -> SparkConfig:
     """Validate the Spark-facing options that later tasks will consume."""
     data = _require_mapping(raw_value, "spark", issues)
     input_format = _require_enum(data, "input_format", SUPPORTED_DATA_FORMATS, issues, "spark")
@@ -65,6 +77,9 @@ def _build_spark_config(raw_value: Any, issues: list[ValidationIssue]) -> SparkC
     partition_by = tuple(_optional_string_list(data, "partition_by", issues, "spark"))
     read_options = _optional_string_mapping(data, "read_options", issues, "spark")
     handoff = _build_spark_handoff_config(data.get("handoff"), issues)
+    write = _build_spark_write_config(
+        data.get("write"), issues, partition_by=partition_by, defaults=write_defaults
+    )
 
     return SparkConfig(
         input_format=input_format,
@@ -73,7 +88,99 @@ def _build_spark_config(raw_value: Any, issues: list[ValidationIssue]) -> SparkC
         partition_by=partition_by,
         read_options=read_options,
         handoff=handoff,
+        write=write,
     )
+
+
+def _build_spark_write_config(
+    raw_value: Any,
+    issues: list[ValidationIssue],
+    *,
+    partition_by: tuple[str, ...],
+    defaults: SparkWriteDefaults | None = None,
+) -> SparkWriteConfig:
+    """Source keys override profile values, then partition-aware built-ins.
+
+    An absent block is valid. Malformed declarations append issues without raising.
+    This declaration is consumed by later partitioning and table-property tasks.
+    """
+    data = {} if raw_value is None else _require_mapping(raw_value, "spark.write", issues)
+    profile = defaults or SparkWriteDefaults()
+    size = _optional_int(
+        data, "target_file_size_mb", issues, "spark.write",
+        default=profile.target_file_size_mb or DEFAULT_TARGET_FILE_SIZE_MB, minimum=1,
+    )
+    _check_target_file_size(size, issues, "spark.write")
+    mode = _write_distribution_mode(
+        data, issues, "spark.write",
+        default=profile.distribution_mode or ("hash" if partition_by else "none"),
+    )
+    partitions = _optional_int(data, "partitions", issues, "spark.write", minimum=1)
+    return SparkWriteConfig(target_file_size_mb=size, distribution_mode=mode, partitions=partitions)
+
+
+def _build_spark_write_defaults(
+    raw_value: Any, issues: list[ValidationIssue]
+) -> SparkWriteDefaults:
+    """Missing profile defaults are valid; wrong values collect structural issues.
+
+    Environment expansion produces numeric strings. Accept those only at this profile
+    boundary, and use the shared empty guard for an undeclared distribution mode.
+    """
+    data = dict(
+        {} if raw_value is None else _require_mapping(raw_value, "spark.write_defaults", issues)
+    )
+    size_value = data.get("target_file_size_mb")
+    if isinstance(size_value, str):
+        # Leave invalid text for the integer validator to report.
+        with suppress(ValueError):
+            data["target_file_size_mb"] = int(size_value)
+    size = _optional_int(data, "target_file_size_mb", issues, "spark.write_defaults", minimum=1)
+    _check_target_file_size(size, issues, "spark.write_defaults")
+    data["distribution_mode"] = non_empty_text(data.get("distribution_mode"))
+    mode = _write_distribution_mode(data, issues, "spark.write_defaults")
+    return SparkWriteDefaults(target_file_size_mb=size, distribution_mode=mode or None)
+
+
+def resolve_spark_write_defaults(raw_value: Any) -> SparkWriteDefaults:
+    """The profile boundary raises once, after its builder has collected every issue."""
+    issues: list[ValidationIssue] = []
+    defaults = _build_spark_write_defaults(raw_value, issues)
+    if issues:
+        raise ValueError(
+            "Invalid Spark write defaults:\n" + "\n".join(issue.render() for issue in issues)
+        )
+    return defaults
+
+
+def _check_target_file_size(
+    size: int | None, issues: list[ValidationIssue], prefix: str
+) -> None:
+    if size is not None and size > MAX_TARGET_FILE_SIZE_MB:
+        issues.append(
+            ValidationIssue(
+                f"{prefix}.target_file_size_mb", f"must be <= {MAX_TARGET_FILE_SIZE_MB}"
+            )
+        )
+
+
+def _write_distribution_mode(
+    data: Any, issues: list[ValidationIssue], prefix: str, *, default: str = ""
+) -> str:
+    mode_issues: list[ValidationIssue] = []
+    mode = _optional_enum(
+        data, "distribution_mode", SUPPORTED_DISTRIBUTION_MODES,
+        mode_issues, prefix, default=default,
+    )
+    if mode_issues:
+        issues.append(
+            ValidationIssue(
+                f"{prefix}.distribution_mode",
+                f"must be one of: {', '.join(sorted(SUPPORTED_DISTRIBUTION_MODES))}",
+            )
+        )
+        return default
+    return mode
 
 
 def _build_spark_handoff_config(

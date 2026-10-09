@@ -25,6 +25,7 @@ import pytest
 import janus.cli.run as main_module
 import janus.runtime.spark_lifecycle as spark_lifecycle
 from janus.main import main
+from janus.models import SparkWriteDefaults
 from janus.runtime import SparkSessionProvider
 
 SOURCE_ID = "federal_open_data_example"
@@ -78,6 +79,7 @@ class ExecutionSpy:
     raises: Exception | None = None
     status: str = "succeeded"
     failure_stage: str | None = None
+    write_defaults: SparkWriteDefaults | None = None
 
     def run(self, provider: SparkSessionProvider) -> RecordingRun:
         self.seen_provider = provider
@@ -110,10 +112,23 @@ def cli(monkeypatch, tmp_path):
 
     monkeypatch.setattr(main_module, "load_environment_config", lambda *a, **k: ENVIRONMENT_CONFIG)
     monkeypatch.setattr(main_module, "prepare_runtime", lambda *a, **k: {"root_dir": tmp_path})
+    registry_snapshot = object()
+
+    def load_registry(project_root, *, write_defaults=None):
+        del project_root
+        spy.write_defaults = write_defaults
+        return registry_snapshot
+
+    def plan(request, *, registry=None):
+        del request
+        assert registry is registry_snapshot
+        return _planned_run_double()
+
+    monkeypatch.setattr(main_module, "load_registry", load_registry)
     monkeypatch.setattr(
         main_module,
         "Planner",
-        lambda: SimpleNamespace(plan=lambda request: _planned_run_double()),
+        lambda: SimpleNamespace(plan=plan),
     )
     monkeypatch.setattr(
         spark_lifecycle,
@@ -154,6 +169,22 @@ def test_execute_hands_the_executor_a_provider_that_has_not_started_anything(cli
     assert exit_code == 0
     assert isinstance(cli.seen_provider, SparkSessionProvider)
     assert cli.was_started_on_entry is False
+    _summary(capsys)
+
+
+def test_profile_write_defaults_reach_registry_without_starting_spark(cli, capsys, monkeypatch):
+    config = {
+        **ENVIRONMENT_CONFIG,
+        "spark": {
+            **ENVIRONMENT_CONFIG["spark"],
+            "write_defaults": {"target_file_size_mb": "256", "distribution_mode": "range"},
+        },
+    }
+    monkeypatch.setattr(main_module, "load_environment_config", lambda *a, **k: config)
+    assert main(["--execute", "--source-id", SOURCE_ID]) == 0
+    assert cli.write_defaults == SparkWriteDefaults(256, "range")
+    assert cli.was_started_on_entry is False
+    assert cli.sessions == []
     _summary(capsys)
 
 

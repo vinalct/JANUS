@@ -493,7 +493,7 @@ def test_no_load_input_can_switch_the_pass_off() -> None:
     def inputs(target: Callable[..., object]) -> set[str]:
         return set(inspect.signature(target).parameters)
 
-    loader_inputs = {"project_root", "policy", "strategy_registry", "hook_ids"}
+    loader_inputs = {"project_root", "policy", "strategy_registry", "hook_ids", "write_defaults"}
     assert inputs(load_registry) == loader_inputs
     assert inputs(SourceRegistry.load) == loader_inputs
     assert inputs(SourceRegistry) == {

@@ -37,6 +37,7 @@ from janus.utils.environment import (
     RuntimeLocation,
     load_environment_config,
     prepare_runtime,
+    read_spark_write_defaults,
 )
 from janus.utils.logging import StructuredLogger, build_structured_logger
 
@@ -178,7 +179,7 @@ def _prepare_batch(args: argparse.Namespace, project_root: Path) -> _PreparedBat
         selection=selection,
         attributes={"resume": "true"} if args.resume else None,
     )
-    registry = load_registry(project_root)
+    registry = load_registry(project_root, write_defaults=read_spark_write_defaults(config))
     plan = BatchPlanner().plan(request, registry=registry)
     resolved_paths = prepare_runtime(config, project_root)
     resolve_openlineage_settings(config)

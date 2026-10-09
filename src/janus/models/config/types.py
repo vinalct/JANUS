@@ -20,6 +20,7 @@ from janus.models.config.constants import (
     DEFAULT_MAX_REDIRECTS,
     DEFAULT_PAST_END_STATUS_CODES,
     DEFAULT_RETRYABLE_STATUS_CODES,
+    DEFAULT_TARGET_FILE_SIZE_MB,
     MAX_REDIRECTS_CEILING,
 )
 
@@ -257,6 +258,31 @@ class SparkHandoffConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SparkWriteDefaults:
+    """Optional profile values, injected when source configurations are parsed."""
+
+    target_file_size_mb: int | None = None
+    distribution_mode: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SparkWriteConfig:
+    """Bronze file sizing, table distribution, and an optional exact task count.
+
+    Size and distribution describe Iceberg table properties. Only ``partitions``
+    controls the DataFrame immediately before a write, including coalescing it.
+    """
+
+    target_file_size_mb: int = DEFAULT_TARGET_FILE_SIZE_MB
+    distribution_mode: str = "hash"
+    partitions: int | None = None
+
+    @property
+    def target_file_size_bytes(self) -> int:
+        return self.target_file_size_mb * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
 class SparkConfig:
     input_format: str
     write_mode: str
@@ -264,6 +290,7 @@ class SparkConfig:
     partition_by: tuple[str, ...] = ()
     read_options: dict[str, str] | None = None
     handoff: SparkHandoffConfig = field(default_factory=SparkHandoffConfig)
+    write: SparkWriteConfig = field(default_factory=SparkWriteConfig)
 
 
 @dataclass(frozen=True, slots=True)

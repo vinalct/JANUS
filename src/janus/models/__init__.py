@@ -24,6 +24,8 @@ from janus.models.config import (
     SchemaConfig,
     SourceConfigValidationError,
     SparkConfig,
+    SparkWriteConfig,
+    SparkWriteDefaults,
     ValidationIssue,
     ValidationPolicy,
 )
@@ -113,6 +115,8 @@ __all__ = [
     "SourceDependencyNode",
     "SourceReference",
     "SparkConfig",
+    "SparkWriteConfig",
+    "SparkWriteDefaults",
     "ValidationIssue",
     "ValidationPolicy",
     "WriteResult",

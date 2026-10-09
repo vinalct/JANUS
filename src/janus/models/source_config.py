@@ -124,6 +124,8 @@ from janus.models.config.types import (
     SchemaConfig,
     SparkConfig,
     SparkHandoffConfig,
+    SparkWriteConfig,
+    SparkWriteDefaults,
 )
 
 __all__ = [
@@ -174,6 +176,8 @@ __all__ = [
     "SourceConfigValidationError",
     "SparkConfig",
     "SparkHandoffConfig",
+    "SparkWriteConfig",
+    "SparkWriteDefaults",
     "StrategyRegistry",
     "ValidationIssue",
     "ValidationPolicy",
@@ -247,15 +251,18 @@ class SourceConfig:
         *,
         policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
         registry: StrategyRegistry = STRATEGY_REGISTRY,
+        write_defaults: SparkWriteDefaults | None = None,
     ) -> Self:
         """Validate a raw source mapping and return the typed source contract.
 
-        ``policy`` and ``registry`` are the two injection seams, both keyword-only with
+        ``policy`` and ``registry`` are validation seams, both keyword-only with
         their canonical defaults so every existing call site keeps working. ``policy``
         owns the phase-scope decisions — which source types, strategies and federation
         levels JANUS has chosen to onboard, whether a strategy must match its source
         type, and whether a source must be public. ``registry`` owns the strategy
         family/variant set. Broadening either is an injected object, not an edit here.
+        ``write_defaults`` supplies the profile's optional Spark write values; source
+        declarations override them without modifying the profile or process state.
 
         Policy methods append to ``issues`` and never raise: the single raise site below
         is what makes a config with five problems report five.
@@ -293,7 +300,7 @@ class SourceConfig:
         access = _build_access_config(data.get("access"), source_type, issues)
         extraction = _build_extraction_config(data.get("extraction"), issues)
         schema = _build_schema_config(data.get("schema"), issues)
-        spark = _build_spark_config(data.get("spark"), issues)
+        spark = _build_spark_config(data.get("spark"), issues, write_defaults=write_defaults)
         outputs = _build_outputs_config(data.get("outputs"), issues)
         quality = _build_quality_config(data.get("quality"), issues)
 

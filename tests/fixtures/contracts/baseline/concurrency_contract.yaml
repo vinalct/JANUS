@@ -1,7 +1,7 @@
 apiVersion: v3.2.0
 kind: DataContract
 id: test.concurrency_contract
-name: Order-19 D-1 baseline concurrency_contract
+name: D-1 baseline concurrency_contract
 version: 1.0.0
 status: active
 domain: test

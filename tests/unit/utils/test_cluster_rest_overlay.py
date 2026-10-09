@@ -21,6 +21,7 @@ from janus.utils.environment import (
     build_spark_options,
     load_environment_config,
     materialize_runtime_paths,
+    read_spark_write_defaults,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -107,6 +108,12 @@ def test_the_overlay_changes_the_catalog_and_nothing_else():
     }
 
     assert differing == CATALOG_OVERLAY_KEYS | AUTH_OVERLAY_KEYS | COSMETIC_OVERLAY_KEYS
+
+
+def test_rest_overlay_inherits_cluster_write_defaults():
+    defaults = read_spark_write_defaults(_overlaid_config())
+    assert defaults.target_file_size_mb == 256
+    assert defaults.distribution_mode is None
 
 
 def test_the_object_store_settings_are_identical_in_both_overlays():

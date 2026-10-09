@@ -13,6 +13,9 @@ spark:
   master: ${JANUS_SPARK_MASTER:-local[*]}
   warehouse_dir: ${JANUS_SPARK_WAREHOUSE_DIR:-data/metadata/spark-warehouse}
   ivy_dir: ${JANUS_SPARK_IVY_DIR:-data/metadata/ivy}
+  write_defaults:
+    target_file_size_mb: ${JANUS_SPARK_TARGET_FILE_SIZE_MB:-256}
+    distribution_mode: ${JANUS_SPARK_DISTRIBUTION_MODE:-}
   iceberg:
     catalog_name: ${JANUS_ICEBERG_CATALOG_NAME:-janus}
     catalog_type: ${JANUS_ICEBERG_CATALOG_TYPE:-jdbc}

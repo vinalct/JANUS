@@ -12,6 +12,8 @@ from typing import Any
 
 import yaml
 
+from janus.models.config.outputs import resolve_spark_write_defaults
+from janus.models.config.types import SparkWriteDefaults
 from janus.utils.catalog_options import (
     CATALOG_AUTH_KEY,
     CATALOG_AUTH_OPTIONS,
@@ -111,7 +113,14 @@ def load_environment_config(environment: str, project_root: Path) -> dict[str, A
     if not isinstance(data, dict):
         raise ValueError(f"Environment config must be a mapping: {config_path}")
 
-    return expand_env_vars(data)
+    config = expand_env_vars(data)
+    read_spark_write_defaults(config)
+    return config
+
+
+def read_spark_write_defaults(config: Mapping[str, Any]) -> SparkWriteDefaults:
+    """Read profile values without choosing defaults by profile or backing store."""
+    return resolve_spark_write_defaults(config.get("spark", {}).get("write_defaults"))
 
 
 def resolve_project_path(project_root: Path, value: str) -> Path:

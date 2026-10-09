@@ -1,15 +1,20 @@
-from dataclasses import fields
+from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from janus.models.config.outputs import _build_spark_config
-from janus.models.source_config import SourceConfig, SourceConfigValidationError, ValidationIssue
+from janus.models.source_config import (
+    SourceConfig,
+    SourceConfigValidationError,
+    SparkWriteConfig,
+    SparkWriteDefaults,
+    ValidationIssue,
+)
 from tests.fixtures.handoff.cases import source_mapping
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 @pytest.mark.parametrize(
     ("partition_by", "mode"),
     [((), "none"), (("ingestion_date",), "hash")],
@@ -24,7 +29,6 @@ def test_absent_write_uses_builtin_defaults_and_partition_aware_distribution(par
     assert config.spark.write.partitions is None
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 @pytest.mark.parametrize(
     ("declaration", "profile_size", "profile_mode", "expected_size", "expected_mode"),
     [
@@ -59,7 +63,6 @@ def test_source_overrides_profile_overrides_builtin(
     assert write.distribution_mode == expected_mode
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 @pytest.mark.parametrize(
     ("declaration", "path"),
     [
@@ -78,7 +81,6 @@ def test_invalid_write_value_collects_exactly_one_issue(declaration, path):
         assert all(value in issues[0].message for value in ("none", "hash", "range"))
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 def test_null_partitions_means_no_exact_partition_count():
     config = SourceConfig.from_mapping(
         source_mapping(spark={"write": {"partitions": None}}), Path("source.yaml")
@@ -125,7 +127,6 @@ def test_validation_issue_keeps_its_two_field_collect_all_contract():
     assert [field.name for field in fields(ValidationIssue)] == ["path", "message"]
 
 
-@pytest.mark.xfail(strict=True, reason="green")
 @pytest.mark.parametrize("mode", ["none", "hash", "range"])
 def test_valid_source_write_override_preserves_all_declared_fields(mode):
     config = SourceConfig.from_mapping(
@@ -144,3 +145,104 @@ def test_valid_source_write_override_preserves_all_declared_fields(mode):
     assert config.spark.write.target_file_size_bytes == 33554432
     assert config.spark.write.distribution_mode == mode
     assert config.spark.write.partitions == 4
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("target_file_size_mb", 0, "must be >= 1"),
+        ("target_file_size_mb", -1, "must be >= 1"),
+        ("target_file_size_mb", 1.5, "must be an integer"),
+        ("target_file_size_mb", True, "must be an integer"),
+        ("target_file_size_mb", "128", "must be an integer"),
+        ("target_file_size_mb", 8193, "must be <= 8192"),
+        ("target_file_size_mb", 128000, "must be <= 8192"),
+        ("distribution_mode", "hashh", "must be one of: hash, none, range"),
+        ("distribution_mode", "", "must be one of: hash, none, range"),
+        ("distribution_mode", 1, "must be one of: hash, none, range"),
+        ("distribution_mode", [], "must be one of: hash, none, range"),
+        ("partitions", 0, "must be >= 1"),
+        ("partitions", -1, "must be >= 1"),
+        ("partitions", 1.5, "must be an integer"),
+        ("partitions", False, "must be an integer"),
+        ("partitions", "4", "must be an integer"),
+    ],
+)
+def test_invalid_write_values_have_one_precise_issue(key, value, message):
+    issues = []
+    _build_spark_config(source_mapping(spark={"write": {key: value}})["spark"], issues)
+    assert issues == [ValidationIssue(f"spark.write.{key}", message)]
+
+
+@pytest.mark.parametrize("value", [False, 128, "hash", []])
+def test_write_block_requires_a_mapping(value):
+    issues = []
+    _build_spark_config(source_mapping(spark={"write": value})["spark"], issues)
+    assert issues == [ValidationIssue("spark.write", "must be a mapping")]
+
+
+def test_write_builder_collects_all_errors_without_hiding_other_source_errors():
+    mapping = source_mapping(
+        spark={"write": {"target_file_size_mb": 0, "distribution_mode": "bad", "partitions": -1}}
+    )
+    mapping["owner"] = None
+    with pytest.raises(SourceConfigValidationError) as raised:
+        SourceConfig.from_mapping(mapping, Path("source.yaml"))
+    assert [issue.path for issue in raised.value.issues] == [
+        "owner", "spark.write.target_file_size_mb", "spark.write.distribution_mode",
+        "spark.write.partitions",
+    ]
+
+
+@pytest.mark.parametrize("size", [1, 8192])
+def test_file_size_limits_are_inclusive(size):
+    config = SourceConfig.from_mapping(
+        source_mapping(spark={"write": {"target_file_size_mb": size}}), Path("source.yaml")
+    )
+    assert config.spark.write.target_file_size_bytes == size * 1024**2
+
+
+@pytest.mark.parametrize("partitions", [None, 1, 4])
+def test_exact_partition_count_is_preserved(partitions):
+    config = SourceConfig.from_mapping(
+        source_mapping(spark={"write": {"partitions": partitions}}), Path("source.yaml")
+    )
+    assert config.spark.write.partitions == partitions
+
+
+def test_profile_defaults_are_injected_per_load_without_mutation_or_global_state():
+    mapping = source_mapping(spark={"write": {"target_file_size_mb": 32}})
+    profile = SparkWriteDefaults(target_file_size_mb=256, distribution_mode="range")
+    injected = SourceConfig.from_mapping(mapping, Path("source.yaml"), write_defaults=profile)
+    builtin = SourceConfig.from_mapping(mapping, Path("source.yaml"))
+    assert injected.spark.write == SparkWriteConfig(32, "range")
+    assert builtin.spark.write == SparkWriteConfig(32, "none")
+    assert profile == SparkWriteDefaults(256, "range")
+    assert mapping["spark"]["write"] == {"target_file_size_mb": 32}
+
+
+def test_write_config_is_frozen_and_has_slots():
+    write = SparkWriteConfig()
+    with pytest.raises(FrozenInstanceError):
+        write.partitions = 4
+    assert not hasattr(write, "__dict__")
+
+
+def test_legacy_repartition_still_parses_independently_until_task16():
+    config = SourceConfig.from_mapping(
+        source_mapping(spark={"repartition": 4}), Path("source.yaml")
+    )
+    assert config.spark.repartition == 4
+    assert config.spark.write.partitions is None
+
+
+def test_partitioned_source_can_explicitly_disable_distribution():
+    config = SourceConfig.from_mapping(
+        source_mapping(
+            spark={"partition_by": ["ingestion_date"], "write": {"distribution_mode": "none"}}
+        ),
+        Path("source.yaml"),
+        write_defaults=SparkWriteDefaults(256, "hash"),
+    )
+    assert config.spark.write.distribution_mode == "none"
+    assert config.spark.write.target_file_size_mb == 256

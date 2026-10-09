@@ -16,10 +16,15 @@ from janus.cli.common import (
 )
 from janus.observability.openlineage import resolve_openlineage_settings
 from janus.planner import Planner, PlannerError, PlanningRequest
-from janus.registry import SourceNotFoundError
+from janus.registry import SourceNotFoundError, load_registry
 from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.scripts import ingest_raw_to_bronze
-from janus.utils.environment import build_spark_session, load_environment_config, prepare_runtime
+from janus.utils.environment import (
+    build_spark_session,
+    load_environment_config,
+    prepare_runtime,
+    read_spark_write_defaults,
+)
 from janus.utils.logging import build_structured_logger
 
 
@@ -171,7 +176,10 @@ def run_command(argv: Sequence[str] | None = None) -> int:
                     started_at=args.started_at,
                     include_disabled=args.include_disabled,
                     attributes=run_attributes,
-                )
+                ),
+                registry=load_registry(
+                    project_root, write_defaults=read_spark_write_defaults(config)
+                ),
             )
         except (FileNotFoundError, PlannerError, SourceNotFoundError, ValueError) as exc:
             print(str(exc), file=sys.stderr)

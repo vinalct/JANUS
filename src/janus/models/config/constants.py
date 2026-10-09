@@ -50,6 +50,10 @@ SUPPORTED_DATA_FORMATS = frozenset(
     {"binary", "csv", "iceberg", "json", "jsonl", "parquet", "text"}
 )
 SUPPORTED_WRITE_MODES = frozenset({"append", "ignore", "overwrite"})
+SUPPORTED_DISTRIBUTION_MODES = frozenset({"none", "hash", "range"})
+# Conservative fallback when neither the source nor its profile declares a size.
+DEFAULT_TARGET_FILE_SIZE_MB = 128
+MAX_TARGET_FILE_SIZE_MB = 8192
 SUPPORTED_HANDOFF_MODES = frozenset({"compact", "pages"})
 DEFAULT_HANDOFF_MODE = "compact"
 DEFAULT_HANDOFF_MAX_ARTIFACT_MB = 256
