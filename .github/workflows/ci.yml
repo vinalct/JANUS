@@ -230,6 +230,9 @@ jobs:
       - name: Assert the compaction live/replay bronze differential executed
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.handoff.test_bronze_unchanged_under_compaction --minimum-passed 8
+      - name: Assert the AC-4 read partition measurement executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.handoff.test_read_partition_reduction --minimum-passed 1
       - name: Assert the AC-2 seeded-query suite executed
         run: |
           if grep -Fq "AC2_SEEDED_QUERY_SUITE_UNAVAILABLE" data/pytest-output.txt; then
