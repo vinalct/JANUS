@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import janus.observability.records
 from janus.checkpoints import CheckpointWriteResult
 from janus.lineage import LineageRecord, RunMetadata, compute_config_version
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext, WriteResult
+from janus.models.source_config import FreshnessConfig, OperationsConfig
 from janus.observability import RunEvidencePaths, RunRecord, vocabulary
 from janus.observability.vocabulary import MAX_FAILURE_REASON_LENGTH, RUN_RECORD_SCHEMA_VERSION
 from janus.quality import ValidationCheck, ValidationReport
@@ -150,17 +152,33 @@ def _records(
     extraction_result: ExtractionResult | None,
     write_results: tuple[WriteResult, ...],
     error: Exception | None = None,
+    duration_budget_seconds: int | None = None,
+    duration_budget_outcome: str | None = None,
+    freshness_max_age_seconds: int | None = None,
 ) -> tuple[RunMetadata, LineageRecord]:
-    """Build the pair exactly as ``RunObserver.record_success``/``record_failure`` does."""
+    """Build the authoritative pair with fixed UTC timestamps and shared run facts."""
     if status == "succeeded":
         assert extraction_result is not None
         run_metadata = RunMetadata.succeeded(
-            plan, extraction_result, write_results, finished_at=FINISHED_AT
+            plan,
+            extraction_result,
+            write_results,
+            finished_at=FINISHED_AT,
+            duration_budget_seconds=duration_budget_seconds,
+            duration_budget_outcome=duration_budget_outcome,
+            freshness_max_age_seconds=freshness_max_age_seconds,
         )
     else:
         assert error is not None
         run_metadata = RunMetadata.failed(
-            plan, error, extraction_result, write_results, finished_at=FINISHED_AT
+            plan,
+            error,
+            extraction_result,
+            write_results,
+            finished_at=FINISHED_AT,
+            duration_budget_seconds=duration_budget_seconds,
+            duration_budget_outcome=duration_budget_outcome,
+            freshness_max_age_seconds=freshness_max_age_seconds,
         )
     lineage_record = LineageRecord.from_runtime(
         plan,
@@ -170,6 +188,9 @@ def _records(
         failure_reason=run_metadata.failure_reason,
         error_type=run_metadata.error_type,
         emitted_at=FINISHED_AT,
+        duration_budget_seconds=run_metadata.duration_budget_seconds,
+        duration_budget_outcome=run_metadata.duration_budget_outcome,
+        freshness_max_age_seconds=run_metadata.freshness_max_age_seconds,
     )
     return run_metadata, lineage_record
 
@@ -194,6 +215,9 @@ def _expected(plan: ExecutionPlan, tmp_path: Path, **overrides: object) -> dict[
         "ended_at": FINISHED_AT,
         "emitted_at": EMITTED_AT,
         "duration_seconds": 5.0,
+        "duration_budget_seconds": None,
+        "duration_budget_outcome": None,
+        "freshness_max_age_seconds": None,
         "config_version": compute_config_version(plan.source_config.config_path),
         "schema_version": None,
         "contract_id": None,
@@ -976,7 +1000,7 @@ class TestOrder23Red:
     @staticmethod
     @pytest.mark.xfail(
         strict=True,
-        reason="seven operational projection fields are absent",
+        reason="extraction counters complete the seven operational projection fields",
     )
     def test_adds_all_seven_typed_projection_fields():
         from dataclasses import fields
@@ -988,19 +1012,12 @@ class TestOrder23Red:
         assert set(NEW_FIELDS) <= declared
 
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True, reason="duration budget and freshness projection is absent"
-    )
     @pytest.mark.parametrize(
         ("budget", "expected"), [(4, "exceeded"), (5, "within"), (6, "within")]
     )
     def test_lifts_recorded_budget_and_freshness_without_changing_success(
         budget, expected, tmp_path
     ):
-        from dataclasses import replace
-
-        from janus.models.source_config import FreshnessConfig, OperationsConfig
-
         plan = _plan(tmp_path, run_id="budget")
         plan = replace(
             plan,
@@ -1016,6 +1033,11 @@ class TestOrder23Red:
             status="succeeded",
             extraction_result=_extraction_result(plan),
             write_results=_write_results(plan),
+            duration_budget_seconds=budget,
+            duration_budget_outcome=plan.source_config.operations.evaluate_duration(
+                (FINISHED_AT - STARTED_AT).total_seconds()
+            ),
+            freshness_max_age_seconds=plan.source_config.operations.freshness.max_age_seconds,
         )
         projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
         assert metadata.duration_budget_seconds == lineage.duration_budget_seconds == budget
@@ -1024,13 +1046,30 @@ class TestOrder23Red:
         assert projected.duration_budget_outcome == expected
         assert projected.freshness_max_age_seconds == 86400
         assert projected.status == metadata.status == lineage.status == "succeeded"
+        assert metadata.duration_seconds == 5.0
+        for record in (metadata, lineage, projected):
+            payload = record.to_dict()
+            assert payload["duration_budget_seconds"] == budget
+            assert payload["duration_budget_outcome"] == expected
+            assert payload["freshness_max_age_seconds"] == 86400
+        assert metadata.metadata == lineage.metadata == (), (
+            "these are run facts, not strategy fields"
+        )
 
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True, reason="undeclared budget projection is absent"
-    )
     def test_absent_budget_is_null_and_undeclared(tmp_path):
-        projected, _ = _shape_success(tmp_path)
+        plan = _plan(tmp_path, run_id="undeclared-budget")
+        operations = OperationsConfig()
+        metadata, lineage = _records(
+            plan,
+            status="succeeded",
+            extraction_result=_extraction_result(plan),
+            write_results=(),
+            duration_budget_outcome=operations.evaluate_duration(
+                (FINISHED_AT - STARTED_AT).total_seconds()
+            ),
+        )
+        projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
         assert projected.duration_budget_seconds is None
         assert projected.duration_budget_outcome == "undeclared"
         assert projected.freshness_max_age_seconds is None
@@ -1070,3 +1109,175 @@ class TestOrder23Red:
             assert getattr(projected, name) is None, "unreported is NULL, not a fabricated zero"
             assert projected.to_dict()[name] is None
         assert projected.dead_letter_count == 0
+
+
+def test_a_missing_duration_is_undeclared_even_with_a_declared_budget(tmp_path):
+    """The fixed clock never finished this run; absence must not turn into a zero duration."""
+    plan = _plan(tmp_path, run_id="interrupted-budget")
+    operations = OperationsConfig(max_duration_seconds=5, freshness=FreshnessConfig(86400))
+    outcome = operations.evaluate_duration(None)
+    metadata, lineage = _records(
+        plan,
+        status="failed",
+        extraction_result=None,
+        write_results=(),
+        error=RuntimeError("interrupted"),
+        duration_budget_outcome=outcome,
+        freshness_max_age_seconds=operations.freshness.max_age_seconds,
+    )
+    metadata = replace(metadata, ended_at=None, duration_seconds=None)
+
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+
+    assert projected.duration_seconds is projected.ended_at is None
+    for record in (metadata, lineage, projected):
+        assert record.duration_budget_seconds is None
+        assert record.duration_budget_outcome == "undeclared"
+        assert record.freshness_max_age_seconds == 86400
+
+
+@pytest.mark.parametrize("budget", [None, 5])
+def test_a_start_record_carries_the_declaration_without_an_outcome(budget, tmp_path):
+    plan = _plan(tmp_path, run_id="start-budget")
+
+    metadata = RunMetadata.started(
+        plan, duration_budget_seconds=budget, freshness_max_age_seconds=86400
+    )
+
+    assert metadata.status == "running"
+    assert metadata.started_at == STARTED_AT
+    assert metadata.ended_at is metadata.duration_seconds is None
+    assert metadata.to_dict()["duration_budget_seconds"] == budget
+    assert metadata.to_dict()["duration_budget_outcome"] is None
+    assert metadata.to_dict()["freshness_max_age_seconds"] == 86400
+
+
+@pytest.mark.parametrize("has_extraction", [False, True])
+def test_a_failed_run_carries_the_same_budget_fields(has_extraction, tmp_path):
+    plan = _plan(tmp_path, run_id="failed-budget")
+    operations = OperationsConfig(max_duration_seconds=4)
+    metadata, lineage = _records(
+        plan,
+        status="failed",
+        extraction_result=_extraction_result(plan) if has_extraction else None,
+        write_results=_write_results(plan) if has_extraction else (),
+        error=RuntimeError("failed slowly"),
+        duration_budget_seconds=operations.max_duration_seconds,
+        duration_budget_outcome=operations.evaluate_duration(
+            (FINISHED_AT - STARTED_AT).total_seconds()
+        ),
+        freshness_max_age_seconds=86400,
+    )
+
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+
+    for record in (metadata, lineage, projected):
+        assert record.status == "failed"
+        assert record.to_dict()["duration_budget_seconds"] == 4
+        assert record.to_dict()["duration_budget_outcome"] == "exceeded"
+        assert record.to_dict()["freshness_max_age_seconds"] == 86400
+
+
+def test_freshness_can_be_carried_without_a_duration_budget(tmp_path):
+    plan = _plan(tmp_path, run_id="freshness-only")
+    operations = OperationsConfig(freshness=FreshnessConfig(86400))
+    metadata, lineage = _records(
+        plan,
+        status="succeeded",
+        extraction_result=_extraction_result(plan),
+        write_results=(),
+        duration_budget_outcome=operations.evaluate_duration(
+            (FINISHED_AT - STARTED_AT).total_seconds()
+        ),
+        freshness_max_age_seconds=operations.freshness.max_age_seconds,
+    )
+
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+
+    for record in (metadata, lineage, projected):
+        assert record.duration_budget_seconds is None
+        assert record.duration_budget_outcome == "undeclared"
+        assert record.freshness_max_age_seconds == 86400
+
+
+def test_the_projection_lifts_the_recorded_outcome_without_evaluating_it(tmp_path, monkeypatch):
+    plan = _plan(tmp_path, run_id="carried-budget")
+    metadata, lineage = _records(
+        plan,
+        status="succeeded",
+        extraction_result=_extraction_result(plan),
+        write_results=(),
+        duration_budget_seconds=100,
+        duration_budget_outcome="exceeded",
+        freshness_max_age_seconds=86400,
+    )
+
+    def unexpected_evaluation(*args, **kwargs):
+        raise AssertionError("the projection must never re-evaluate a recorded outcome")
+
+    monkeypatch.setattr(OperationsConfig, "evaluate_duration", unexpected_evaluation)
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+
+    assert projected.duration_seconds == 5.0
+    assert projected.duration_budget_seconds == 100
+    assert projected.duration_budget_outcome == "exceeded", "carry the evidence byte for byte"
+    assert projected.freshness_max_age_seconds == 86400
+
+
+@pytest.mark.parametrize("kind", ["metadata", "lineage", "projection"])
+@pytest.mark.parametrize(
+    ("seconds", "outcome", "message"),
+    [
+        (None, "invented", "duration_budget_outcome must be one of: exceeded, undeclared, within"),
+        (None, "exceeded", "duration_budget_seconds is present exactly when"),
+        (None, "within", "duration_budget_seconds is present exactly when"),
+        (5, "undeclared", "duration_budget_seconds is present exactly when"),
+        (5, None, "duration_budget_seconds is present exactly when"),
+    ],
+)
+def test_budget_field_contradictions_are_rejected(kind, seconds, outcome, message, tmp_path):
+    plan = _plan(tmp_path, run_id="invalid-budget")
+    metadata, lineage = _records(
+        plan,
+        status="succeeded",
+        extraction_result=_extraction_result(plan),
+        write_results=(),
+    )
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+    record = {"metadata": metadata, "lineage": lineage, "projection": projected}[kind]
+
+    with pytest.raises(ValueError, match=message):
+        replace(record, duration_budget_seconds=seconds, duration_budget_outcome=outcome)
+
+
+def test_all_record_constructors_default_the_new_keys_to_null(tmp_path):
+    plan = _plan(tmp_path, run_id="legacy-budget")
+    succeeded, success_lineage = _records(
+        plan,
+        status="succeeded",
+        extraction_result=_extraction_result(plan),
+        write_results=(),
+    )
+    failed, failure_lineage = _records(
+        plan,
+        status="failed",
+        extraction_result=None,
+        write_results=(),
+        error=RuntimeError("legacy failure"),
+    )
+    records = (
+        RunMetadata.started(plan),
+        succeeded,
+        failed,
+        success_lineage,
+        failure_lineage,
+        RunRecord.from_run(succeeded, success_lineage, emitted_at=EMITTED_AT),
+        RunRecord.from_run(failed, failure_lineage, emitted_at=EMITTED_AT),
+    )
+    for record in records:
+        payload = record.to_dict()
+        for field in (
+            "duration_budget_seconds", "duration_budget_outcome", "freshness_max_age_seconds"
+        ):
+            assert field in payload
+            assert payload[field] is None

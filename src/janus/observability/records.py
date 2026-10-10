@@ -10,6 +10,11 @@ from typing import Any, Self
 
 from janus.checkpoints.store import SUPPORTED_CHECKPOINT_DECISIONS, CheckpointWriteResult
 from janus.lineage.models import LineageRecord, MaterializedOutput, RunMetadata
+from janus.models.config.constants import (
+    DURATION_BUDGET_EXCEEDED,
+    DURATION_BUDGET_OUTCOMES,
+    DURATION_BUDGET_WITHIN,
+)
 from janus.observability.vocabulary import (
     BRONZE_ZONE,
     MALFORMED_ROWS_CHECK_NAME,
@@ -95,6 +100,10 @@ class RunRecord:
     contract_preflight_outcome: str | None = None
     schema_evolution: str | None = None
     malformed_rows: int | None = None
+    # Declared expectations, evaluated once before persistence and carried here.
+    duration_budget_seconds: int | None = None
+    duration_budget_outcome: str | None = None
+    freshness_max_age_seconds: int | None = None
 
     def __post_init__(self) -> None:
         if self.status not in RUN_RECORD_STATUSES:
@@ -103,6 +112,12 @@ class RunRecord:
         if self.quality_outcome not in SUPPORTED_QUALITY_OUTCOMES:
             allowed = ", ".join(sorted(SUPPORTED_QUALITY_OUTCOMES))
             raise ValueError(f"quality_outcome must be one of: {allowed}")
+        if (
+            self.duration_budget_outcome is not None
+            and self.duration_budget_outcome not in DURATION_BUDGET_OUTCOMES
+        ):
+            allowed = ", ".join(sorted(DURATION_BUDGET_OUTCOMES))
+            raise ValueError(f"duration_budget_outcome must be one of: {allowed}")
         if (
             self.checkpoint_decision is not None
             and self.checkpoint_decision not in SUPPORTED_CHECKPOINT_DECISIONS
@@ -142,6 +157,13 @@ class RunRecord:
 
     def _validate_three_valued_columns(self) -> None:
         """Pin the NULL / zero / empty-list distinctions a later refactor would collapse."""
+        if (self.duration_budget_seconds is not None) != (
+            self.duration_budget_outcome in {DURATION_BUDGET_WITHIN, DURATION_BUDGET_EXCEEDED}
+        ):
+            raise ValueError(
+                "duration_budget_seconds is present exactly when duration_budget_outcome "
+                "is within or exceeded"
+            )
         if (self.status == "failed") != (self.failure_reason is not None):
             raise ValueError("a failed run must carry a failure_reason, and a success must not")
         reason_companions = (self.failure_reason_truncated, self.failure_reason_length)
@@ -228,6 +250,9 @@ class RunRecord:
             ended_at=run_metadata.ended_at,
             emitted_at=emitted_at,
             duration_seconds=run_metadata.duration_seconds,
+            duration_budget_seconds=run_metadata.duration_budget_seconds,
+            duration_budget_outcome=run_metadata.duration_budget_outcome,
+            freshness_max_age_seconds=run_metadata.freshness_max_age_seconds,
             config_version=lineage_record.config_version,
             schema_version=lineage_record.schema_version,
             contract_id=lineage_record.contract_id,
@@ -286,6 +311,9 @@ class RunRecord:
             "ended_at": self.ended_at,
             "emitted_at": self.emitted_at,
             "duration_seconds": self.duration_seconds,
+            "duration_budget_seconds": self.duration_budget_seconds,
+            "duration_budget_outcome": self.duration_budget_outcome,
+            "freshness_max_age_seconds": self.freshness_max_age_seconds,
             "config_version": self.config_version,
             "source_config_path": self.source_config_path,
             "records_extracted": self.records_extracted,
