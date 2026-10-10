@@ -572,13 +572,12 @@ def test_catalog_detector_rejects_a_second_derivation_and_accepts_shared_helpers
     assert _catalog_boundary_findings(clean) == ()
 
 
-def test_required_ci_jobs_do_not_configure_http_openlineage() -> None:
+def _required_ci_surface():
     workflow_root = _workflow_root()
     workflows = sorted(workflow_root.glob("*.yml")) + sorted(workflow_root.glob("*.yaml"))
     assert workflows, "the workflow sweep matched no YAML files"
     ci_path = workflow_root / "ci.yml"
     assert ci_path in workflows, "the workflow sweep did not find .github/workflows/ci.yml"
-
     document = yaml.safe_load(ci_path.read_text(encoding="utf-8"))
     assert isinstance(document, Mapping)
     jobs = document.get("jobs")
@@ -586,13 +585,95 @@ def test_required_ci_jobs_do_not_configure_http_openlineage() -> None:
     assert set(jobs) >= REQUIRED_CI_JOBS, (
         f"the workflow sweep missed required jobs: {sorted(REQUIRED_CI_JOBS - set(jobs))}"
     )
-    required_surface = {
+    return {
         "global_env": document.get("env", {}),
         "jobs": {name: jobs[name] for name in REQUIRED_CI_JOBS},
     }
-    assert not _workflow_lineage_findings(required_surface), (
-        "a required CI job configures an HTTP OpenLineage destination: "
-        f"{_workflow_lineage_findings(required_surface)}"
+
+
+def test_required_ci_jobs_do_not_configure_http_openlineage() -> None:
+    findings = _workflow_lineage_findings(_required_ci_surface())
+    assert not findings, f"a required CI job configures an HTTP OpenLineage destination: {findings}"
+
+
+def _metrics_assignment_findings(key, value, path):
+    if key == "JANUS_METRICS_TRANSPORT":
+        if str(value).strip().lower() not in {"disabled", "file", "textfile"}:
+            return (f"{path}: external or unresolved metrics transport",)
+    elif key == "JANUS_METRICS_DIR":
+        directory = str(value).strip()
+        for workspace in ("${{ github.workspace }}/", "$GITHUB_WORKSPACE/", "${GITHUB_WORKSPACE}/"):
+            if directory.startswith(workspace):
+                directory = directory.removeprefix(workspace)
+                break
+        if (
+            Path(directory).is_absolute()
+            or ".." in Path(directory).parts
+            or "://" in directory
+            or "$" in directory
+        ):
+            return (f"{path}: metrics path escapes or cannot be resolved inside the workspace",)
+    return ()
+
+
+def _workflow_metrics_findings(value, path="workflow"):
+    findings = []
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            current = f"{path}.{key}"
+            findings.extend(_metrics_assignment_findings(str(key).upper(), nested, current))
+            findings.extend(_workflow_metrics_findings(nested, current))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            findings.extend(_workflow_metrics_findings(nested, f"{path}[{index}]"))
+    elif isinstance(value, str):
+        assignments = re.finditer(
+            r"\b(JANUS_METRICS_TRANSPORT|JANUS_METRICS_DIR)\s*=\s*"
+            r"(?:\"([^\"]*)\"|'([^']*)'|([^\s;]+))",
+            value,
+        )
+        for assignment in assignments:
+            declared = next(group for group in assignment.groups()[1:] if group is not None)
+            findings.extend(_metrics_assignment_findings(assignment[1], declared, path))
+    return tuple(findings)
+
+
+def test_required_ci_jobs_do_not_configure_external_metrics() -> None:
+    findings = _workflow_metrics_findings(_required_ci_surface())
+    assert not findings, f"a required CI job configures external metrics: {findings}"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "env:\n  JANUS_METRICS_TRANSPORT: statsd\n",
+        "jobs:\n  fast:\n    env:\n      JANUS_METRICS_TRANSPORT: STATSD\n",
+        "jobs:\n  spark:\n    steps:\n      - run: JANUS_METRICS_TRANSPORT=statsd pytest\n",
+        "jobs:\n  adapter:\n    steps:\n"
+        "      - run: export JANUS_METRICS_TRANSPORT='statsd'; pytest\n",
+        "env:\n  JANUS_METRICS_TRANSPORT: textfile\n  JANUS_METRICS_DIR: /tmp/metrics\n",
+        "env:\n  JANUS_METRICS_DIR: ../metrics\n",
+        "env:\n  JANUS_METRICS_DIR: ${{ github.workspace }}/../metrics\n",
+        "env:\n  JANUS_METRICS_TRANSPORT: ${{ secrets.TRANSPORT }}\n",
+        "steps:\n  - run: JANUS_METRICS_DIR=/var/lib/node-exporter pytest\n",
+        "steps:\n  - run: export JANUS_METRICS_DIR=../../metrics; pytest\n",
+    ],
+)
+def test_workflow_metrics_detector_rejects_external_configuration(source):
+    assert _workflow_metrics_findings(yaml.safe_load(source))
+
+
+@pytest.mark.parametrize("transport", ["disabled", "file", "textfile"])
+@pytest.mark.parametrize(
+    "directory",
+    ["metrics", "data/metadata/metrics", "${{ github.workspace }}/data/metadata/metrics"],
+)
+def test_workflow_metrics_detector_accepts_hermetic_configuration(transport, directory):
+    assert not _workflow_metrics_findings(
+        {"env": {"JANUS_METRICS_TRANSPORT": transport, "JANUS_METRICS_DIR": directory}}
+    )
+    assert not _workflow_metrics_findings(
+        {"run": f"JANUS_METRICS_TRANSPORT='{transport}' JANUS_METRICS_DIR='{directory}' pytest"}
     )
 
 

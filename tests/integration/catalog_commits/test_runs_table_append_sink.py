@@ -439,7 +439,7 @@ class TestOrder23Evolution:
         original_spec = table.spec()
         original_uuid = table.metadata.table_uuid
         original_ids = {field.name: field.field_id for field in table.schema().fields}
-        old = _older_row(_v3_record("order23-before"), 3, old_columns)
+        old = _older_row(_v3_record("before"), 3, old_columns)
         table.append(pa.Table.from_pylist([old], schema=table.schema().as_arrow()))
         values = VALUES
         result = append_run_record(

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -181,9 +182,6 @@ def test_absolute_and_parent_escape_paths_are_refused_at_directory_resolution(
         resolve_metrics_directory(block.directory, {"metadata_dir": tmp_path})
 
 
-@pytest.mark.xfail(
-    strict=True, reason="shipped profiles lack explicit disabled metrics"
-)
 @pytest.mark.parametrize("profile", ["local", "cluster"])
 def test_every_shipped_profile_declares_metrics_disabled_by_default(profile):
     root = Path(__file__).resolve().parents[4]
@@ -201,6 +199,120 @@ def test_shipped_profiles_resolve_to_disabled(profile, tmp_path):
     config = _load_clean_profile("cluster" if profile == "cluster-rest" else profile, overrides)
     assert resolve_metrics_settings(config) is DISABLED_METRICS_SETTINGS
     assert not list(tmp_path.rglob("*"))
+
+
+@pytest.fixture
+def shipped_metrics_profiles(monkeypatch):
+    for name in tuple(os.environ):
+        if name.startswith("JANUS_"):
+            monkeypatch.delenv(name)
+    profiles = sorted((PROJECT_ROOT / "conf/environments").glob("*.yaml"))
+    assert profiles, "the metrics profile sweep matched no files"
+    return profiles
+
+
+def test_every_shipped_profile_resolves_to_disabled_metrics(shipped_metrics_profiles, tmp_path):
+    from janus.observability.metrics.sink import build_metrics_sink
+
+    for path in shipped_metrics_profiles:
+        config = load_environment_config(path.stem, PROJECT_ROOT)
+        assert resolve_metrics_settings(config) is DISABLED_METRICS_SETTINGS, path.name
+        destination = build_metrics_sink(config, {"metadata_dir": tmp_path})
+        assert destination.emit(record(tmp_path), budget_seconds=1).outcome.value == "skipped"
+    assert not list(tmp_path.rglob("*"))
+    # cluster-rest uses cluster.yaml with a catalog environment overlay.
+    assert (
+        _load_clean_profile("cluster", {"JANUS_ICEBERG_CATALOG_TYPE": "rest"})["observability"][
+            "metrics"
+        ]["transport"]
+        == "disabled"
+    )
+
+
+def _raw_metrics(path):
+    return (yaml.safe_load(path.read_text()) or {}).get("observability", {}).get("metrics", {})
+
+
+def test_tracked_metrics_values_are_environment_expansions(shipped_metrics_profiles):
+    blocks = 0
+    for path in shipped_metrics_profiles:
+        block = _raw_metrics(path)
+        blocks += bool(block)
+        document = yaml.safe_load(path.read_text())
+        if "observability" in document:
+            assert set(block) == {"transport", "path", "host", "port", "prefix"}
+        else:
+            assert not block, "an absent observability mapping must retain its disabled default"
+        for key, value in block.items():
+            assert isinstance(value, str) and re.fullmatch(
+                r"\$\{[A-Z][A-Z0-9_]*:-[^{}]*\}", value
+            ), f"{path.name}:metrics.{key} is a literal"
+    assert blocks, "the metrics value sweep matched no configured blocks"
+
+
+def test_tracked_metrics_have_no_host_literal_or_escaping_path(shipped_metrics_profiles):
+    blocks = 0
+    for path in shipped_metrics_profiles:
+        block = _raw_metrics(path)
+        if not block:
+            continue
+        blocks += 1
+        assert block["host"] == "${JANUS_METRICS_STATSD_HOST:-}", path.name
+        config = load_environment_config(path.stem, PROJECT_ROOT)
+        assert config["observability"]["metrics"]["host"] == "", path.name
+        directory = config["observability"]["metrics"]["path"]
+        assert directory and not Path(directory).is_absolute(), path.name
+        assert ".." not in Path(directory).parts and "://" not in directory, path.name
+        assert resolve_metrics_directory(
+            directory, {"metadata_dir": PROJECT_ROOT / "data/metadata"}
+        )
+    assert blocks, "the metrics endpoint sweep matched no configured blocks"
+
+
+def test_tracked_metrics_have_no_credential_literals(shipped_metrics_profiles):
+    blocks = 0
+    for path in shipped_metrics_profiles:
+        block = _raw_metrics(path)
+        if not block:
+            continue
+        blocks += 1
+        assert set(block) <= {"transport", "path", "host", "port", "prefix"}, path.name
+        assert all("@" not in value for value in block.values()), path.name
+    assert blocks, "the metrics credential sweep matched no configured blocks"
+
+
+def test_textfile_opt_in_uses_the_same_tracked_local_profile(
+    shipped_metrics_profiles, tmp_path, monkeypatch
+):
+    from janus.observability.metrics.sink import build_metrics_sink
+    from janus.observability.metrics.transport import TextfileMetricsTransport
+
+    assert PROJECT_ROOT / "conf/environments/local.yaml" in shipped_metrics_profiles
+    monkeypatch.setenv("JANUS_METRICS_TRANSPORT", "textfile")
+    config = load_environment_config("local", PROJECT_ROOT)
+    settings = resolve_metrics_settings(config)
+    assert settings.kind is MetricsTransportKind.TEXTFILE
+    assert settings.textfile.directory == "metrics"
+    destination = build_metrics_sink(config, {"metadata_dir": tmp_path})
+    assert isinstance(destination.transport, TextfileMetricsTransport)
+    assert destination.emit(record(tmp_path), budget_seconds=5).emitted
+    assert (tmp_path / "metrics/fixture_api.prom").stat().st_size > 0
+
+
+@pytest.mark.parametrize("profile", ["local", "cluster"])
+def test_metrics_environment_examples_are_commented_out(profile):
+    path = PROJECT_ROOT / "conf/environments" / f"{profile}.env.example"
+    lines = path.read_text().splitlines()
+    expected = {
+        "JANUS_METRICS_TRANSPORT",
+        "JANUS_METRICS_DIR",
+        "JANUS_METRICS_STATSD_HOST",
+        "JANUS_METRICS_STATSD_PORT",
+        "JANUS_METRICS_PREFIX",
+    }
+    entries = {line[2:].partition("=")[0] for line in lines if line.startswith("# JANUS_METRICS_")}
+    assert entries == expected
+    assert not any(line.startswith("JANUS_METRICS_") for line in lines)
 
 
 @pytest.mark.parametrize(

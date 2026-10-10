@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import platform
 import statistics
 import sys
 import time
@@ -34,11 +36,16 @@ class TimedObserver(baseline.FixedObserver):
     """The captured observer, timed in place: it does exactly what it did before."""
 
     calls: ClassVar[list[tuple[str, int]]] = []
+    metadata_dir: ClassVar[Path]
 
     def __init__(self) -> None:
         if GUARDED_EMISSION or METRICS:
             super().__init__(
-                emitter=build_run_event_emitter({}, {}, runs_table_sink=_successful_sink)
+                emitter=build_run_event_emitter(
+                    {"observability": {"metrics": {"transport": "file"}}} if METRICS else {},
+                    {"metadata_dir": self.metadata_dir},
+                    runs_table_sink=_successful_sink,
+                )
             )
         else:
             super().__init__()
@@ -83,12 +90,18 @@ def measure(case: str, repeats: int = REPEATS) -> None:
         TimedObserver.calls = []
         with TemporaryDirectory(prefix=f"overhead-{case}-") as temporary:
             root = Path(temporary).resolve()
+            TimedObserver.metadata_dir = root / "data/metadata"
             original = baseline.FixedObserver
             baseline.FixedObserver = TimedObserver
             try:
                 started = time.perf_counter_ns()
                 baseline.capture_case(root, case)
                 end_to_end.append(time.perf_counter_ns() - started)
+                if METRICS:
+                    files = list((TimedObserver.metadata_dir / "metrics").glob("*.ndjson"))
+                    assert files and all(path.stat().st_size > 0 for path in files), (
+                        "--metrics must measure a real file-metrics emission"
+                    )
             finally:
                 baseline.FixedObserver = original
         for name, duration in TimedObserver.calls:
@@ -111,6 +124,11 @@ def measure(case: str, repeats: int = REPEATS) -> None:
 
 def main() -> None:
     print(f"python {sys.version.split()[0]}  repeats={REPEATS}  timer=time.perf_counter_ns")
+    print(f"machine={platform.platform()} cpus={os.cpu_count()} load={os.getloadavg()}")
+    print(
+        f"guarded_emission={GUARDED_EMISSION or METRICS} "
+        f"metrics_transport={'file' if METRICS else 'disabled'}"
+    )
     for case in MEASURED_CASES:
         measure(case)
 

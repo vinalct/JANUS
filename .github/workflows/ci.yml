@@ -44,8 +44,11 @@ jobs:
           python -I -m janus.main --help >/dev/null
       - name: Validate every checked-in data contract against the pinned ODCS schema
         run: make test-contract-schema PYTHON=python
-      - name: Assert required jobs configure no HTTP lineage destination
-        run: python -m pytest -q tests/unit/observability/test_architecture_guardrails.py::test_required_ci_jobs_do_not_configure_http_openlineage
+      - name: Assert required jobs configure hermetic observability
+        run: |
+          python -m pytest -q \
+            tests/unit/observability/test_architecture_guardrails.py::test_required_ci_jobs_do_not_configure_http_openlineage \
+            tests/unit/observability/test_architecture_guardrails.py::test_required_ci_jobs_do_not_configure_external_metrics
       - name: Lint (ruff, pinned 0.11.6)
         run: |
           ruff --version
@@ -186,6 +189,11 @@ jobs:
         run: make test-maintenance
       - name: Exercise make maintain-dry-run against a populated fixture catalog
         run: make test-maintenance-smoke
+      - name: Assert all six frozen metrics acceptance cases executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml \
+              --class-name tests.unit.observability.test_acceptance_evidence.TestReferenceContainerGoldens --minimum-passed 6
       - name: Prove both runtime engines are importable in the image
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \

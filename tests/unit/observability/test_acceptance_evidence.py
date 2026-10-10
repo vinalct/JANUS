@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
@@ -287,82 +290,131 @@ def test_budget_outcome_reaches_terminal_summary_and_source_attempt(
     assert calls == [5.0], "summaries and pipeline evidence must not evaluate again"
 
 
-class TestOrder23Red:
-    @staticmethod
-    @pytest.mark.xfail(
-        strict=True,
-        reason="metrics-enabled exact-byte baseline acceptance is absent",
+METRICS_PROFILE = {
+    "transport": "${JANUS_METRICS_TRANSPORT:-disabled}",
+    "path": "${JANUS_METRICS_DIR:-metrics}",
+}
+
+
+def _capture_metrics_case(root, case, enabled, monkeypatch, capsys):
+    from janus.main import main
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+    from janus.utils.environment import load_environment_config
+    from tests.support.metrics_order23 import exit_code, write_profile
+
+    write_profile(root, METRICS_PROFILE if enabled else None)
+    monkeypatch.setenv("JANUS_METRICS_TRANSPORT", "file")
+    monkeypatch.setenv("JANUS_METRICS_DIR", "acceptance-metrics")
+    config = load_environment_config("local", root)
+    emitter = build_run_event_emitter(
+        config,
+        {"metadata_dir": root / "data/metadata"},
+        runs_table_sink=lambda *args, **kwargs: IcebergAppendResult(
+            IcebergAppendOutcome.EMITTED, "metadata.runs"
+        ),
     )
+    fixed = baseline.FixedObserver
+
+    class MetricsObserver(fixed):
+        def __init__(self):
+            super().__init__(emitter=emitter)
+
+    captured = []
+    owner = baseline.RawToBronzeLoader if case == "replay" else baseline.SourceExecutor
+    method = "ingest" if case == "replay" else "execute"
+    original = getattr(owner, method)
+
+    def capture_result(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        captured.append(result)
+        return result
+
+    monkeypatch.setattr(owner, method, capture_result)
+    monkeypatch.setattr(baseline, "FixedObserver", MetricsObserver)
+    manifest = baseline.capture_case(root, case)
+    assert len(captured) == 1
+    result = emitter.last_result
+    assert result is not None
+    metrics_files = list((root / "data/metadata").rglob("*.ndjson"))
+    if enabled:
+        assert result.metrics is not None
+        assert result.metrics.outcome is MetricsEmissionOutcome.EMITTED
+        assert result.metrics.sample_count > 0
+        assert metrics_files and all(path.stat().st_size > 0 for path in metrics_files)
+        batches = [
+            json.loads(line) for path in metrics_files for line in path.read_bytes().splitlines()
+        ]
+        assert len(batches) == 1
+        assert batches[0]["samples"]
+    else:
+        assert result.metrics is None
+        assert not metrics_files
+
+    files = _authoritative_files(root / "data/metadata")
+    assert files, "the differential must compare authoritative bytes"
+    monkeypatch.setattr(owner, method, lambda *args, **kwargs: captured[0])
+    monkeypatch.setattr(
+        "janus.cli.run.load_registry", lambda *args, **kwargs: SimpleNamespace(sources=())
+    )
+    monkeypatch.setattr(
+        "janus.cli.run.Planner.plan", lambda *args, **kwargs: captured[0].planned_run
+    )
+    invocation = ["run", "--project-root", str(root), "--source-id", manifest["source_id"]]
+    invocation += (
+        ["--ingest-raw-to-bronze", "--bronze-table", "bronze.baseline_replay"]
+        if case == "replay"
+        else ["--execute"]
+    )
+    code = exit_code(lambda: main(invocation))
+    assert code == (0 if manifest["status"] == "succeeded" else 1)
+    assert _authoritative_files(root / "data/metadata") == files
+    capsys.readouterr()
+    return files, captured[0].status, code
+
+
+@pytest.mark.parametrize("case", baseline.BASELINE_CASES)
+def test_metrics_off_and_on_preserve_exact_bytes_status_and_cli_exit(
+    case, tmp_path, monkeypatch, capsys
+):
+    root = tmp_path / "project"
+    with monkeypatch.context() as off_patch:
+        disabled = _capture_metrics_case(root, case, False, off_patch, capsys)
+    shutil.rmtree(root)
+    with monkeypatch.context() as on_patch:
+        enabled = _capture_metrics_case(root, case, True, on_patch, capsys)
+    assert enabled == disabled
+
+
+@pytest.mark.skipif(
+    Path("/workspace") != PROJECT_ROOT,
+    reason="frozen absolute-path goldens require the /workspace reference container",
+)
+class TestReferenceContainerGoldens:
+    @staticmethod
     @pytest.mark.parametrize("case", baseline.BASELINE_CASES)
-    def test_metrics_preserve_exact_golden_bytes_status_and_cli_exit(
-        case, tmp_path, monkeypatch, capsys
+    def test_metrics_preserve_frozen_task07_golden_bytes_status_and_cli_exit(
+        case, monkeypatch, capsys
     ):
-        import shutil
-        from uuid import uuid4
-
-        from janus.main import main
-        from janus.observability.metrics.transport import MetricsEmissionOutcome
-        from tests.support.metrics_order23 import exit_code, write_profile
-
         goldens = PROJECT_ROOT / "tests/fixtures/observability/goldens" / case / "metadata"
         expected = _authoritative_files(goldens)
         assert expected, "exact-byte acceptance cannot compare two empty trees"
         run_json = next(goldens.rglob("runs/*.json"))
         expected_run = json.loads(run_json.read_bytes())
         root = Path(expected_run["source_config_path"]).parents[2]
-        assert root == Path("/workspace/data/metadata/evidence/golden-project") / case
+        assert root == PROJECT_ROOT / "data/metadata/evidence/golden-project" / case
         backup = root.with_name(f".{case}.saved-{uuid4().hex}")
-        fixed = baseline.FixedObserver
-        emitter = build_run_event_emitter(
-            {"observability": {"metrics": {"transport": "file", "path": "metrics"}}},
-            {"metadata_dir": root / "data/metadata"},
-            runs_table_sink=lambda *args, **kwargs: IcebergAppendResult(
-                IcebergAppendOutcome.SKIPPED, "metadata.runs", reason="fixture_disabled"
-            ),
-        )
-
-        class MetricsObserver(fixed):
-            def __init__(self):
-                super().__init__(emitter=emitter)
-
-        captured = []
-        original = (
-            baseline.RawToBronzeLoader.ingest
-            if case == "replay"
-            else baseline.SourceExecutor.execute
-        )
-
-        def capture_result(self, *args, **kwargs):
-            result = original(self, *args, **kwargs)
-            captured.append(result)
-            return result
-
-        owner = baseline.RawToBronzeLoader if case == "replay" else baseline.SourceExecutor
-        method = "ingest" if case == "replay" else "execute"
-        monkeypatch.setattr(owner, method, capture_result)
-        monkeypatch.setattr(baseline, "FixedObserver", MetricsObserver)
         if root.exists():
             root.rename(backup)
         try:
-            manifest = baseline.capture_case(root, case)
-            assert _authoritative_files(root / "data/metadata") == expected
-            assert manifest["status"] == expected_run["status"]
-            assert len(captured) == 1
-            assert emitter.last_result.metrics.outcome is MetricsEmissionOutcome.EMITTED
-            assert list((root / "data/metadata/metrics").glob("*.ndjson"))
-            monkeypatch.setattr(owner, method, lambda *args, **kwargs: captured[0])
-            write_profile(root, {"transport": "file", "path": "metrics"})
-            invocation = ["run", "--project-root", str(root), "--source-id", manifest["source_id"]]
-            invocation += (
-                ["--ingest-raw-to-bronze", "--bronze-table", "bronze.baseline_replay"]
-                if case == "replay"
-                else ["--execute"]
-            )
-            assert exit_code(lambda: main(invocation)) == (
-                0 if expected_run["status"] == "succeeded" else 1
-            )
-            capsys.readouterr()
-            assert _authoritative_files(root / "data/metadata") == expected
+            captures = []
+            for enabled in (False, True):
+                with monkeypatch.context() as patch:
+                    captured = _capture_metrics_case(root, case, enabled, patch, capsys)
+                assert captured[0] == expected
+                assert captured[1] == expected_run["status"]
+                captures.append(captured)
+                shutil.rmtree(root)
+            assert captures[0] == captures[1]
         finally:
             if root.exists():
                 shutil.rmtree(root)

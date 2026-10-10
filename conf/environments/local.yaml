@@ -48,6 +48,12 @@ observability:
     timeout_seconds: ${JANUS_OPENLINEAGE_TIMEOUT_SECONDS:-}
     auth:
       token: ${JANUS_OPENLINEAGE_API_KEY:-}
+  metrics:
+    transport: ${JANUS_METRICS_TRANSPORT:-disabled}
+    path: ${JANUS_METRICS_DIR:-metrics}
+    host: ${JANUS_METRICS_STATSD_HOST:-}
+    port: ${JANUS_METRICS_STATSD_PORT:-}
+    prefix: ${JANUS_METRICS_PREFIX:-janus}
 maintenance:
   item_timeout_seconds: 1800
   bronze:

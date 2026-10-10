@@ -333,6 +333,7 @@ ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63)
 	@$(MAKE) --no-print-directory test-maintenance
 	@$(MAKE) --no-print-directory test-maintenance-smoke
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name tests.unit.observability.test_acceptance_evidence.TestReferenceContainerGoldens --minimum-passed 6)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_SINK_CLASS) --minimum-passed 4)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_DECLARATION_CLASS) --minimum-passed 1)
