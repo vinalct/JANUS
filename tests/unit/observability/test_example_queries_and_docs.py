@@ -176,3 +176,61 @@ def test_the_operator_register_documents_the_three_columns():
     for column in ENFORCEMENT_COLUMNS:
         assert f"| `{column}` |" in register
     assert SCHEMA_DRIFT_QUERY in guide
+
+
+import pytest
+
+
+def _order23_query_and_register():
+    from tests.support.metrics_order23 import NEW_FIELDS
+
+    queries = _queries()
+    assert queries and NEW_FIELDS
+    assert "stale-sources.sql" in queries
+    guide = OPERATOR_GUIDE.read_text(encoding="utf-8")
+    register = guide.split("## Column register", 1)[1].split("## Published Spark SQL", 1)[0]
+    documented = set(re.findall(r"^\| `([a-z][a-z0-9_]*)` \|", register, flags=re.MULTILINE))
+    assert documented
+    assert set(NEW_FIELDS) <= documented
+    return queries, documented, guide
+
+
+class TestOrder23Red:
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True,
+        reason="stale-sources query and operator documentation are absent",
+    )
+    def test_order23_stale_sources_query_preserves_latest_run_logic_and_outcome_precedence():
+        queries, _, guide = _order23_query_and_register()
+        sql = queries["stale-sources.sql"]
+        assert sql.strip() and sql.count(";") == 1 and sql.rstrip().endswith(";")
+        assert "PARTITION BY run_id" in sql and "ORDER BY emitted_at DESC" in sql
+        assert "row_rank = 1" in sql
+        assert "status = 'succeeded'" in sql and "MAX(" in sql and "ended_at" in sql
+        assert all(
+            f"'{outcome}'" in sql for outcome in ("undeclared", "never_ran", "stale", "fresh")
+        )
+        assert (
+            sql.index("'undeclared'")
+            < sql.index("'never_ran'")
+            < sql.index("'stale'")
+            < sql.index("'fresh'")
+        )
+        assert "stale-sources.sql" in guide and "janus status" in guide
+
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True,
+        reason="seven-column query/register/schema coverage is absent",
+    )
+    def test_order23_all_seven_columns_have_query_uses_and_documented_schema_parity():
+        from tests.support.metrics_order23 import NEW_FIELDS
+
+        queries, documented, _ = _order23_query_and_register()
+        columns = {column.name for column in RUNS_TABLE_SCHEMA}
+        used = set(re.findall(r"\b[a-z][a-z0-9_]*\b", "\n".join(queries.values())))
+        assert columns and used and documented
+        assert set(NEW_FIELDS) <= columns
+        assert columns <= used
+        assert columns == documented

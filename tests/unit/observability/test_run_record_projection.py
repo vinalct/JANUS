@@ -971,3 +971,102 @@ def test_an_operator_reset_moves_the_next_comparison_but_never_becomes_its_decis
     assert record.checkpoint_decision == "advanced", "2026-07-02 is behind 07-03, ahead of 07-01"
     assert record.checkpoint_history_path == str(persisted.checkpoint_result.history_path)
     assert Path(record.checkpoint_history_path).name == "after-reset.json"
+
+class TestOrder23Red:
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True,
+        reason="seven operational projection fields are absent",
+    )
+    def test_adds_all_seven_typed_projection_fields():
+        from dataclasses import fields
+
+        from tests.support.metrics_order23 import NEW_FIELDS
+
+        declared = {field.name for field in fields(RunRecord)}
+        assert declared and NEW_FIELDS
+        assert set(NEW_FIELDS) <= declared
+
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True, reason="duration budget and freshness projection is absent"
+    )
+    @pytest.mark.parametrize(
+        ("budget", "expected"), [(4, "exceeded"), (5, "within"), (6, "within")]
+    )
+    def test_lifts_recorded_budget_and_freshness_without_changing_success(
+        budget, expected, tmp_path
+    ):
+        from dataclasses import replace
+
+        from janus.models.source_config import FreshnessConfig, OperationsConfig
+
+        plan = _plan(tmp_path, run_id="budget")
+        plan = replace(
+            plan,
+            source_config=replace(
+                plan.source_config,
+                operations=OperationsConfig(
+                    max_duration_seconds=budget, freshness=FreshnessConfig(86400)
+                ),
+            ),
+        )
+        metadata, lineage = _records(
+            plan,
+            status="succeeded",
+            extraction_result=_extraction_result(plan),
+            write_results=_write_results(plan),
+        )
+        projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+        assert metadata.duration_budget_seconds == lineage.duration_budget_seconds == budget
+        assert metadata.duration_budget_outcome == lineage.duration_budget_outcome == expected
+        assert projected.duration_budget_seconds == budget
+        assert projected.duration_budget_outcome == expected
+        assert projected.freshness_max_age_seconds == 86400
+        assert projected.status == metadata.status == lineage.status == "succeeded"
+
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True, reason="undeclared budget projection is absent"
+    )
+    def test_absent_budget_is_null_and_undeclared(tmp_path):
+        projected, _ = _shape_success(tmp_path)
+        assert projected.duration_budget_seconds is None
+        assert projected.duration_budget_outcome == "undeclared"
+        assert projected.freshness_max_age_seconds is None
+
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True, reason="typed extraction counter projection is absent"
+    )
+    def test_lifts_all_four_counter_strings_as_integers(tmp_path):
+        from tests.support.metrics_order23 import plan, project
+
+        counts = {
+            "request_count": "10",
+            "retry_count": "2",
+            "attempt_count": "12",
+            "dead_letter_count": "0",
+        }
+        projected = project(plan(tmp_path), metadata=counts)
+        assert {name: getattr(projected, name) for name in counts} == {
+            "request_count": 10,
+            "retry_count": 2,
+            "attempt_count": 12,
+            "dead_letter_count": 0,
+        }
+        assert all(type(getattr(projected, name)) is int for name in counts)
+
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True, reason="file-family NULL counter projection is absent"
+    )
+    def test_file_family_missing_http_counters_are_null_and_dead_letters_are_real(tmp_path):
+        from tests.support.metrics_order23 import plan, project
+
+        projected = project(plan(tmp_path, family="file"), metadata={"dead_letter_count": "0"})
+        assert projected.strategy_family == "file"
+        for name in ("request_count", "retry_count", "attempt_count"):
+            assert getattr(projected, name) is None, "unreported is NULL, not a fabricated zero"
+            assert projected.to_dict()[name] is None
+        assert projected.dead_letter_count == 0

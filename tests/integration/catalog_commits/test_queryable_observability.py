@@ -582,3 +582,124 @@ def test_published_ac2_queries_execute_verbatim_with_retry_and_window_boundaries
     assert drift_rows[1]["validation_report_path"] == (
         f"data/metadata/{drift_source}/validations/{drift_token}_malformed.json"
     )
+
+
+class TestOrder23Red:
+    @staticmethod
+    @pytest.mark.spark
+    @pytest.mark.skipif(not CATALOG_ACCEPTANCE_AVAILABLE, reason=AC2_QUERY_SKIP_REASON)
+    @pytest.mark.xfail(
+        strict=True,
+        reason="published stale-sources SQL and status reader parity are absent",
+    )
+    def test_order23_stale_query_and_both_status_readers_return_the_same_breaches(
+        catalog_target: CatalogTarget, shared_catalog_session, tmp_path, capsys
+    ):
+        import json
+        from dataclasses import replace
+
+        import yaml
+
+        from janus.lineage import LineageRecord
+        from janus.lineage.persistence import write_json_atomic
+        from janus.main import main
+        from janus.models import ExecutionPlan, RunContext
+        from janus.observability import RunRecord
+        from janus.registry import load_registry
+        from tests.support.metadata_zone_fixture import build_metadata_zone
+        from tests.support.metrics_order23 import exit_code
+
+        sql = (QUERY_DIRECTORY / "stale-sources.sql").read_text(encoding="utf-8")
+        assert sql.strip()
+        zone = build_metadata_zone(
+            tmp_path / "freshness", now=datetime(2026, 9, 18, 12, tzinfo=UTC), seed=23
+        )
+        config = catalog_target.environment_config()
+        config["storage"] = {
+            "root_dir": "data",
+            **{f"{name}_dir": f"data/{name}" for name in ("raw", "bronze", "metadata")},
+        }
+        directory = zone.root / "conf/environments"
+        directory.mkdir(parents=True)
+        (directory / "local.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+        template = next(
+            source for source in zone.sources if source.source_id == "fixture.never"
+        ).runs[0]
+        empty = next(source for source in zone.sources if source.source_id == "fixture.empty")
+        empty_run = replace(template, source_id=empty.source_id, run_id="order23-empty-failed")
+        write_json_atomic(
+            empty.metadata_dir / "runs" / f"{empty_run.run_id}.json", empty_run.to_dict()
+        )
+        registry = load_registry(zone.root)
+        for source in zone.sources:
+            runs = source.runs or (empty_run,)
+            threshold = (
+                (21600 if source.source_id == "fixture.never" else 86400)
+                if source.max_age
+                else None
+            )
+            for run in runs:
+                plan = ExecutionPlan.from_source_config(
+                    registry.get_source(source.source_id),
+                    RunContext.create(
+                        run_id=run.run_id,
+                        environment="local",
+                        project_root=zone.root,
+                        started_at=run.started_at,
+                    ),
+                )
+                lineage = LineageRecord.from_runtime(
+                    plan,
+                    status=run.status,
+                    extraction_result=None,
+                    write_results=(),
+                    emitted_at=run.ended_at,
+                )
+                record = replace(
+                    RunRecord.from_run(run, lineage, emitted_at=run.ended_at),
+                    freshness_max_age_seconds=threshold,
+                )
+                assert (
+                    append_run_record(record, config, catalog_target.resolved_paths).outcome
+                    is IcebergAppendOutcome.EMITTED
+                )
+        argv = [
+            "status",
+            "--project-root",
+            str(zone.root),
+            "--now",
+            zone.now.isoformat(),
+            "--format",
+            "json",
+        ]
+        assert exit_code(lambda: main(argv)) == 1
+        metadata = json.loads(capsys.readouterr().out)
+        assert exit_code(lambda: main([*argv, "--from-runs-table"])) == 1
+        table = json.loads(capsys.readouterr().out)
+        rows = shared_catalog_session.sql(
+            sql,
+            args={
+                "window_start_day": datetime(2026, 9, 1).date(),
+                "window_start": datetime(2026, 9, 1, tzinfo=UTC),
+                "window_end": datetime(2026, 10, 1, tzinfo=UTC),
+                "evaluated_at": zone.now,
+            },
+        ).collect()
+        ids = set(zone.expected_outcomes)
+        expected = {
+            source_id
+            for source_id, outcome in zone.expected_outcomes.items()
+            if outcome in {"stale", "never_ran"}
+        }
+        assert ids and expected and rows
+        assert {
+            row["source_id"]
+            for row in rows
+            if row["source_id"] in ids and row["outcome"] in {"stale", "never_ran"}
+        } == expected
+        for payload in (metadata, table):
+            assert {
+                row["source_id"]
+                for row in payload["sources"]
+                if row["outcome"] in {"stale", "never_ran"}
+            } == expected

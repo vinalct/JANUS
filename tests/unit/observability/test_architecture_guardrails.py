@@ -617,3 +617,69 @@ def test_workflow_detector_accepts_hermetic_lineage_configuration() -> None:
         "      JANUS_OPENLINEAGE_EVENTS_DIR: data/lineage\n"
     )
     assert _workflow_lineage_findings(yaml.safe_load(source)) == ()
+
+
+def _order23_session_free_modules():
+    anchors = {
+        "metrics/__init__.py",
+        "metrics/settings.py",
+        "metrics/catalogue.py",
+        "metrics/transport.py",
+        "metrics/exposition.py",
+        "metrics/sink.py",
+        "freshness.py",
+    }
+    modules = _modules(OBSERVABILITY_ROOT)
+    _assert_surface(modules, anchors, "janus.observability")
+    selected = {
+        name: source
+        for name, source in modules.items()
+        if name.startswith("metrics/") or name == "freshness.py"
+    }
+    status = PACKAGE_ROOT / "cli/status.py"
+    operations = PACKAGE_ROOT / "models/config/operations.py"
+    assert status.is_file() and operations.is_file()
+    selected["cli/status.py"] = status.read_text(encoding="utf-8")
+    selected["models/config/operations.py"] = operations.read_text(encoding="utf-8")
+    assert selected
+    return selected
+
+
+class TestOrder23Red:
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True,
+        reason="metrics, budget and status isolation anchors are absent",
+    )
+    def test_order23_metrics_budget_and_status_sweep_is_anchored_and_session_free():
+        modules = _order23_session_free_modules()
+        assert modules
+        violations = {
+            name: findings
+            for name, source in modules.items()
+            if (findings := _spark_references(source))
+        }
+        assert violations == {}
+
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True,
+        reason="positive Spark detector meta-test awaits new-path anchors",
+    )
+    def test_order23_new_path_detector_rejects_a_deliberate_spark_import():
+        modules = _order23_session_free_modules()
+        assert modules
+        for name, source in modules.items():
+            assert _spark_references(source + "\nfrom pyspark.sql import SparkSession\n"), name
+
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True,
+        reason="negative Spark detector meta-test awaits new-path anchors",
+    )
+    def test_order23_new_path_detector_accepts_clean_profile_and_record_access():
+        modules = _order23_session_free_modules()
+        assert modules
+        clean = "def labels(record, config):\n    return record.source_id, config.get('spark')\n"
+        assert _spark_references(clean) == ()
+        assert all(not _spark_references(source) for source in modules.values())

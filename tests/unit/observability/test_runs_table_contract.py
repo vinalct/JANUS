@@ -376,3 +376,51 @@ def test_the_declaration_has_48_columns_and_nothing_was_renumbered():
 
 def test_new_run_records_use_schema_version_three():
     assert RUN_RECORD_SCHEMA_VERSION == 3
+
+
+class TestOrder23Red:
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True, reason="runs-table field ids 50-56 are absent"
+    )
+    def test_field_ids_and_nullable_types_are_stable_after_all_reserved_ids():
+        appended = tuple(
+            (column.field_id, column.name, column.iceberg_type, column.nullable)
+            for column in RUNS_TABLE_SCHEMA[-7:]
+        )
+        assert appended == (
+            (50, "duration_budget_seconds", IcebergType.INTEGER, True),
+            (51, "duration_budget_outcome", IcebergType.STRING, True),
+            (52, "freshness_max_age_seconds", IcebergType.INTEGER, True),
+            (53, "request_count", IcebergType.LONG, True),
+            (54, "retry_count", IcebergType.LONG, True),
+            (55, "attempt_count", IcebergType.LONG, True),
+            (56, "dead_letter_count", IcebergType.LONG, True),
+        )
+        assert [column.field_id for column in RUNS_TABLE_SCHEMA] == [*range(1, 43), *range(44, 57)]
+        assert (
+            tuple(
+                (column.name, column.iceberg_type, column.nullable)
+                for column in RUNS_TABLE_SCHEMA[:-7]
+            )
+            == EXPECTED_SCHEMA
+        )
+        assert RUNS_TABLE_SCHEMA[32].element_id == 43
+
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True,
+        reason="seven-field schema/projection drift coverage is absent",
+    )
+    def test_extended_schema_and_projection_cover_each_other_both_ways():
+        from dataclasses import fields
+
+        from tests.support.metrics_order23 import NEW_FIELDS
+
+        projected = {field.name for field in fields(RunRecord)}
+        columns = {column.name for column in RUNS_TABLE_SCHEMA}
+        assert projected and columns and NEW_FIELDS
+        assert set(NEW_FIELDS) <= projected
+        assert set(NEW_FIELDS) <= columns
+        assert projected - columns == set()
+        assert columns - projected == set()

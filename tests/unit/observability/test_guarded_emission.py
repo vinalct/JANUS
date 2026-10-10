@@ -563,3 +563,175 @@ def _writes(plan: ExecutionPlan) -> tuple[WriteResult, ...]:
             records_written=3,
         ),
     )
+
+
+def _emitter(
+    events, *, metrics_action=None, lineage_action=None, append_action=None, **kwargs
+):
+    from types import SimpleNamespace
+
+    from janus.observability.metrics.transport import MetricsEmissionOutcome, MetricsEmissionResult
+    from janus.observability.openlineage.transport import (
+        OpenLineageEmissionOutcome,
+        OpenLineageEmissionResult,
+    )
+
+    class LineageSink:
+        transport = SimpleNamespace(kind="file")
+
+        def emit(self, *args, **fields):
+            events.append("openlineage")
+            if lineage_action:
+                lineage_action(fields["budget_seconds"])
+            return OpenLineageEmissionResult(OpenLineageEmissionOutcome.EMITTED, "file")
+
+    class MetricsSink:
+        transport = SimpleNamespace(kind="file")
+
+        def emit(self, record, **fields):
+            events.append("metrics")
+            if metrics_action:
+                metrics_action(record, fields["budget_seconds"])
+            return MetricsEmissionResult(MetricsEmissionOutcome.EMITTED, "file")
+
+    def append(record, *args, **fields):
+        events.append("runs_table")
+        if append_action:
+            append_action(fields["timeout_seconds"])
+        return IcebergAppendResult(IcebergAppendOutcome.EMITTED, "metadata.runs")
+
+    return build_run_event_emitter(
+        {},
+        {},
+        openlineage_sink=LineageSink(),
+        runs_table_sink=append,
+        metrics_sink=MetricsSink(),
+        **kwargs,
+    )
+
+
+class TestOrder23Red:
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True,
+        reason="third metrics destination is absent from guarded fan-out",
+    )
+    def test_fanout_keeps_openlineage_then_runs_table_then_metrics_and_projects_once(
+        tmp_path,
+    ):
+        persisted = _terminal_artifacts(tmp_path, status="succeeded")
+        events, projected, received = [], [], []
+
+        def projector(artifacts):
+            projected.append(emission._project_run_record(artifacts))
+            return projected[-1]
+
+        emitter = _emitter(
+            events,
+            projector=projector,
+            metrics_action=lambda record, budget: received.append(record),
+        )
+        emitter.emit_succeeded(_plan(tmp_path, "unused"), persisted)
+        assert events == ["openlineage", "runs_table", "metrics"]
+        assert len(projected) == len(received) == 1
+        assert received[0] is projected[0]
+        assert emitter.last_result.to_summary()["metrics"]["outcome"] == "emitted"
+
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True,
+        reason="metrics do not yet share the five-second total emission budget",
+    )
+    def test_order23_slowest_metrics_transport_stays_inside_one_five_second_budget(
+        tmp_path, monkeypatch
+    ):
+        import threading
+        import time
+
+        events, budgets, joins = [], [], []
+        release = threading.Event()
+        worker_thread = threading.Thread
+
+        class TrackingThread(worker_thread):
+            def join(self, timeout=None):
+                joins.append(timeout)
+                return super().join(timeout)
+
+        def prior_destination(budget):
+            budgets.append(budget)
+            time.sleep(0.1)
+
+        def slow_metrics(record, budget):
+            budgets.append(budget)
+            release.wait(10)
+
+        emitter = _emitter(
+            events,
+            lineage_action=prior_destination,
+            append_action=prior_destination,
+            metrics_action=slow_metrics,
+        )
+        assert emitter.timeout_seconds == emission.DEFAULT_EMISSION_TIMEOUT_SECONDS == 5.0
+        monkeypatch.setattr(emission.threading, "Thread", TrackingThread)
+        persisted = _terminal_artifacts(tmp_path, status="succeeded")
+        started = time.monotonic()
+        try:
+            emitter.emit_succeeded(_plan(tmp_path, "unused"), persisted)
+            elapsed = time.monotonic() - started
+            assert 4.9 <= elapsed < 5.5
+            assert events == ["openlineage", "runs_table", "metrics"]
+            assert joins == [5.0]
+            assert len(budgets) == 3 and 0 < budgets[2] < budgets[1] < budgets[0] <= 5
+            assert emitter.last_result.outcome is RunEmissionOutcome.FAILED
+            assert emitter.last_result.stage == "budget"
+        finally:
+            release.set()
+
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True, reason="metrics failure reporting and containment are absent"
+    )
+    def test_order23_raising_metrics_sink_is_failed_evidence_and_preserves_authoritative_json(
+        tmp_path,
+    ):
+        events = []
+        persisted = _terminal_artifacts(tmp_path, status="succeeded")
+        files = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+        assert files
+
+        def raise_metrics(record, budget):
+            raise OSError("metrics receiver down")
+
+        emitter = _emitter(events, metrics_action=raise_metrics)
+        emitter.emit_succeeded(_plan(tmp_path, "unused"), persisted)
+        assert emitter.last_result.outcome is RunEmissionOutcome.FAILED
+        assert emitter.last_result.to_summary()["metrics"]["outcome"] == "failed"
+        executed = ExecutedRun(
+            planned_run=Planner().plan(
+                PlanningRequest.create(
+                    source_id="federal_open_data_example",
+                    environment="local",
+                    project_root=PROJECT_ROOT,
+                    run_id="summary",
+                    started_at=STARTED_AT,
+                )
+            ),
+            status="succeeded",
+            run_event_emission=emitter.last_result,
+        )
+        assert executed.to_summary()["run_event_emission"]["metrics"]["outcome"] == "failed"
+        assert executed.is_successful
+        assert {path: path.read_bytes() for path in tmp_path.rglob("*.json")} == files
+
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True, reason="terminal-only metrics destination is absent"
+    )
+    def test_order23_start_emits_no_metrics(tmp_path):
+        events = []
+        emitter = _emitter(events)
+        plan = _plan(tmp_path, "start")
+        persisted = RunObserver().start_run(plan)
+        emitter.emit_started(plan, persisted)
+        assert events == ["openlineage"]
+        assert emitter.last_result is None

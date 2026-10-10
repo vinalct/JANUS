@@ -233,3 +233,86 @@ def test_every_captured_terminal_shape_carries_the_ac1_fields(tmp_path, monkeypa
         assert record.ended_at == baseline.FINISHED_AT
         assert record.config_version == compute_config_version(Path(record.source_config_path))
         assert record.record_schema_version == 3
+
+
+class TestOrder23Red:
+    @staticmethod
+    @pytest.mark.xfail(
+        strict=True,
+        reason="metrics-enabled exact-byte baseline acceptance is absent",
+    )
+    @pytest.mark.parametrize("case", baseline.BASELINE_CASES)
+    def test_metrics_preserve_exact_golden_bytes_status_and_cli_exit(
+        case, tmp_path, monkeypatch, capsys
+    ):
+        import shutil
+        from uuid import uuid4
+
+        from janus.main import main
+        from janus.observability.metrics.transport import MetricsEmissionOutcome
+        from tests.support.metrics_order23 import exit_code, write_profile
+
+        goldens = PROJECT_ROOT / "tests/fixtures/observability/goldens" / case / "metadata"
+        expected = _authoritative_files(goldens)
+        assert expected, "exact-byte acceptance cannot compare two empty trees"
+        run_json = next(goldens.rglob("runs/*.json"))
+        expected_run = json.loads(run_json.read_bytes())
+        root = Path(expected_run["source_config_path"]).parents[2]
+        assert root == Path("/workspace/data/metadata/evidence/golden-project") / case
+        backup = root.with_name(f".{case}.saved-{uuid4().hex}")
+        fixed = baseline.FixedObserver
+        emitter = build_run_event_emitter(
+            {"observability": {"metrics": {"transport": "file", "path": "metrics"}}},
+            {"metadata_dir": root / "data/metadata"},
+            runs_table_sink=lambda *args, **kwargs: IcebergAppendResult(
+                IcebergAppendOutcome.SKIPPED, "metadata.runs", reason="fixture_disabled"
+            ),
+        )
+
+        class MetricsObserver(fixed):
+            def __init__(self):
+                super().__init__(emitter=emitter)
+
+        captured = []
+        original = (
+            baseline.RawToBronzeLoader.ingest
+            if case == "replay"
+            else baseline.SourceExecutor.execute
+        )
+
+        def capture_result(self, *args, **kwargs):
+            result = original(self, *args, **kwargs)
+            captured.append(result)
+            return result
+
+        owner = baseline.RawToBronzeLoader if case == "replay" else baseline.SourceExecutor
+        method = "ingest" if case == "replay" else "execute"
+        monkeypatch.setattr(owner, method, capture_result)
+        monkeypatch.setattr(baseline, "FixedObserver", MetricsObserver)
+        if root.exists():
+            root.rename(backup)
+        try:
+            manifest = baseline.capture_case(root, case)
+            assert _authoritative_files(root / "data/metadata") == expected
+            assert manifest["status"] == expected_run["status"]
+            assert len(captured) == 1
+            assert emitter.last_result.metrics.outcome is MetricsEmissionOutcome.EMITTED
+            assert list((root / "data/metadata/metrics").glob("*.ndjson"))
+            monkeypatch.setattr(owner, method, lambda *args, **kwargs: captured[0])
+            write_profile(root, {"transport": "file", "path": "metrics"})
+            invocation = ["run", "--project-root", str(root), "--source-id", manifest["source_id"]]
+            invocation += (
+                ["--ingest-raw-to-bronze", "--bronze-table", "bronze.baseline_replay"]
+                if case == "replay"
+                else ["--execute"]
+            )
+            assert exit_code(lambda: main(invocation)) == (
+                0 if expected_run["status"] == "succeeded" else 1
+            )
+            capsys.readouterr()
+            assert _authoritative_files(root / "data/metadata") == expected
+        finally:
+            if root.exists():
+                shutil.rmtree(root)
+            if backup.exists():
+                backup.rename(root)
