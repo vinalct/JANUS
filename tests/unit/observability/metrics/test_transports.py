@@ -17,10 +17,6 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from tests.support.metrics_order23 import NOW, WarningSpy, record, sink
 
-SINK_RED = pytest.mark.xfail(
-    strict=True,
-    reason="metrics sink warning and degradation paths are absent",
-)
 pytestmark = pytest.mark.filterwarnings("error::ResourceWarning")
 SCHEMA = Path(__file__).resolve().parents[3] / "fixtures/observability/metrics_ndjson.schema.json"
 
@@ -1338,9 +1334,7 @@ def test_observability_has_exactly_one_dns_resolution_call_in_the_statsd_builder
     assert builder.lineno <= calls[0][1] <= builder.end_lineno
 
 
-@pytest.mark.parametrize(
-    "kind", [pytest.param("file", marks=SINK_RED), pytest.param("textfile", marks=SINK_RED)]
-)
+@pytest.mark.parametrize("kind", ["file", "textfile"])
 def test_unwritable_directory_is_a_failed_result_and_one_warning(kind, tmp_path):
     from janus.observability.metrics.transport import MetricsEmissionOutcome
 
@@ -1352,7 +1346,6 @@ def test_unwritable_directory_is_a_failed_result_and_one_warning(kind, tmp_path)
     assert len(warnings.warnings) == 1
 
 
-@SINK_RED
 def test_raising_file_write_is_reported_without_exception_or_secret(tmp_path, monkeypatch):
     from janus.observability.metrics.transport import MetricsEmissionOutcome
 

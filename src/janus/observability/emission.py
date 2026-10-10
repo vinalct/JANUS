@@ -30,6 +30,14 @@ from janus.observability.iceberg_sink import (
     IcebergAppendResult,
     append_run_record,
 )
+from janus.observability.metrics.sink import (
+    MetricsRunSink,
+    build_metrics_sink,
+    complete_metrics_result,
+    disabled_metrics_sink,
+    emit_guarded_metrics,
+)
+from janus.observability.metrics.transport import MetricsEmissionResult
 from janus.observability.openlineage.sink import (
     OpenLineageRunSink,
     build_openlineage_sink,
@@ -86,6 +94,7 @@ class RunEmissionResult:
     exception_type: str | None = None
     duration_seconds: float = 0.0
     openlineage: OpenLineageEmissionResult | None = None
+    metrics: MetricsEmissionResult | None = None
 
     @property
     def emitted(self) -> bool:
@@ -106,6 +115,8 @@ class RunEmissionResult:
             summary["exception_type"] = self.exception_type
         if self.openlineage is not None:
             summary["openlineage"] = self.openlineage.to_summary()
+        if self.metrics is not None:
+            summary["metrics"] = self.metrics.to_summary()
         return summary
 
 
@@ -140,6 +151,7 @@ class GuardedRunEventEmitter:
     )
     runs_table_sink: _RunRecordAppender = append_run_record
     openlineage_sink: OpenLineageRunSink = field(default_factory=disabled_openlineage_sink)
+    metrics_sink: MetricsRunSink = field(default_factory=disabled_metrics_sink)
     last_result: RunEmissionResult | None = field(default=None, init=False)
     last_started_result: RunEmissionResult | None = field(default=None, init=False)
 
@@ -180,6 +192,9 @@ class GuardedRunEventEmitter:
             lambda results: self._run_terminal_worker(
                 results, lifecycle, persisted, data_contract, started_at, table_identifier
             ),
+        )
+        result = replace(
+            result, metrics=complete_metrics_result(self.metrics_sink, result, logger=self.logger)
         )
         self._finish(result, started_at)
 
@@ -289,7 +304,7 @@ class GuardedRunEventEmitter:
             )
             return
 
-        # One projection, both destinations: the event and the row cannot disagree.
+        # One projection feeds every terminal destination.
         openlineage = self._emit_openlineage(
             persisted.run_metadata,
             started_at,
@@ -307,6 +322,7 @@ class GuardedRunEventEmitter:
                     stage="budget",
                     exception_type="EmissionTimeoutError",
                     openlineage=openlineage,
+                    metrics=self._emit_metrics(record, started_at),
                 )
             )
             return
@@ -319,17 +335,29 @@ class GuardedRunEventEmitter:
                 logger=self.logger,
                 timeout_seconds=remaining,
             )
-            results.append(_from_sink_result(lifecycle, sink_result, openlineage))
+            result = _from_sink_result(lifecycle, sink_result, openlineage)
         except Exception as exc:
-            results.append(
-                _failed(
-                    lifecycle,
-                    table_identifier,
-                    stage="runs_table",
-                    exception_type=type(exc).__name__,
-                    openlineage=openlineage,
-                )
+            result = _failed(
+                lifecycle,
+                table_identifier,
+                stage="runs_table",
+                exception_type=type(exc).__name__,
+                openlineage=openlineage,
             )
+        metrics = self._emit_metrics(record, started_at, result)
+        results.append(replace(result, metrics=metrics))
+
+    def _emit_metrics(
+        self, record: RunRecord, started_at: float, result: RunEmissionResult | None = None
+    ) -> MetricsEmissionResult | None:
+        return emit_guarded_metrics(
+            self.metrics_sink,
+            record,
+            timeout_seconds=self.timeout_seconds,
+            started_at=started_at,
+            emission_result=result,
+            logger=self.logger,
+        )
 
     def _emit_openlineage(
         self,
@@ -379,6 +407,7 @@ def build_run_event_emitter(
     projector: Callable[[PersistedArtifacts], RunRecord] | None = None,
     runs_table_sink: _RunRecordAppender | None = None,
     openlineage_sink: OpenLineageRunSink | None = None,
+    metrics_sink: MetricsRunSink | None = None,
 ) -> GuardedRunEventEmitter:
     """Build one isolated emitter from one execution's resolved environment profile.
 
@@ -396,6 +425,11 @@ def build_run_event_emitter(
             openlineage_sink
             if openlineage_sink is not None
             else build_openlineage_sink(config, resolved_paths, logger=logger)
+        ),
+        metrics_sink=(
+            metrics_sink
+            if metrics_sink is not None
+            else build_metrics_sink(config, resolved_paths, logger=logger)
         ),
     )
 
@@ -451,6 +485,7 @@ def _from_sink_result(
     lifecycle: str,
     result: IcebergAppendResult,
     openlineage: OpenLineageEmissionResult | None = None,
+    metrics: MetricsEmissionResult | None = None,
 ) -> RunEmissionResult:
     return RunEmissionResult(
         lifecycle=lifecycle,
@@ -460,6 +495,7 @@ def _from_sink_result(
         stage=result.step,
         exception_type=result.exception_type,
         openlineage=openlineage,
+        metrics=metrics,
     )
 
 
@@ -470,6 +506,7 @@ def _failed(
     stage: str,
     exception_type: str,
     openlineage: OpenLineageEmissionResult | None = None,
+    metrics: MetricsEmissionResult | None = None,
 ) -> RunEmissionResult:
     return RunEmissionResult(
         lifecycle=lifecycle,
@@ -479,6 +516,7 @@ def _failed(
         stage=stage,
         exception_type=exception_type,
         openlineage=openlineage,
+        metrics=metrics,
     )
 
 

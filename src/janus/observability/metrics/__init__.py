@@ -1,4 +1,4 @@
-"""Engine-free profile settings for metrics emission."""
+"""Engine-free settings, run projection and transports for metrics emission."""
 
 from janus.observability.metrics.settings import (
     DEFAULT_METRIC_PREFIX,
@@ -17,6 +17,21 @@ from janus.observability.metrics.settings import (
     resolve_metrics_directory,
     resolve_metrics_settings,
 )
+from janus.observability.metrics.sink import (
+    MetricsRunSink,
+    build_metrics_sink,
+    disabled_metrics_sink,
+)
+from janus.observability.metrics.transport import (
+    DisabledMetricsTransport,
+    FileMetricsTransport,
+    MetricSample,
+    MetricsEmissionOutcome,
+    MetricsEmissionResult,
+    MetricsTransport,
+    StatsdMetricsTransport,
+    TextfileMetricsTransport,
+)
 
 __all__ = [
     "DEFAULT_METRICS_DIRECTORY",
@@ -26,12 +41,23 @@ __all__ = [
     "DISABLED_METRICS_SETTINGS",
     "SUPPORTED_METRICS_KEYS",
     "SUPPORTED_TRANSPORTS",
+    "DisabledMetricsTransport",
     "FileMetricsSettings",
+    "FileMetricsTransport",
+    "MetricSample",
+    "MetricsEmissionOutcome",
+    "MetricsEmissionResult",
     "MetricsProfileError",
+    "MetricsRunSink",
     "MetricsSettings",
+    "MetricsTransport",
     "MetricsTransportKind",
     "StatsdMetricsSettings",
+    "StatsdMetricsTransport",
     "TextfileMetricsSettings",
+    "TextfileMetricsTransport",
+    "build_metrics_sink",
+    "disabled_metrics_sink",
     "resolve_metrics_directory",
     "resolve_metrics_settings",
 ]

@@ -625,10 +625,6 @@ def _emitter(
 
 class TestOrder23Red:
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True,
-        reason="third metrics destination is absent from guarded fan-out",
-    )
     def test_fanout_keeps_openlineage_then_runs_table_then_metrics_and_projects_once(
         tmp_path,
     ):
@@ -651,10 +647,6 @@ class TestOrder23Red:
         assert emitter.last_result.to_summary()["metrics"]["outcome"] == "emitted"
 
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True,
-        reason="metrics do not yet share the five-second total emission budget",
-    )
     def test_order23_slowest_metrics_transport_stays_inside_one_five_second_budget(
         tmp_path, monkeypatch
     ):
@@ -687,9 +679,10 @@ class TestOrder23Red:
         assert emitter.timeout_seconds == emission.DEFAULT_EMISSION_TIMEOUT_SECONDS == 5.0
         monkeypatch.setattr(emission.threading, "Thread", TrackingThread)
         persisted = _terminal_artifacts(tmp_path, status="succeeded")
+        plan = _plan(tmp_path, "unused")
         started = time.monotonic()
         try:
-            emitter.emit_succeeded(_plan(tmp_path, "unused"), persisted)
+            emitter.emit_succeeded(plan, persisted)
             elapsed = time.monotonic() - started
             assert 4.9 <= elapsed < 5.5
             assert events == ["openlineage", "runs_table", "metrics"]
@@ -697,13 +690,12 @@ class TestOrder23Red:
             assert len(budgets) == 3 and 0 < budgets[2] < budgets[1] < budgets[0] <= 5
             assert emitter.last_result.outcome is RunEmissionOutcome.FAILED
             assert emitter.last_result.stage == "budget"
+            assert emitter.last_result.metrics.step == "budget"
+            assert emitter.last_result.metrics.exception_type == "EmissionTimeoutError"
         finally:
             release.set()
 
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True, reason="metrics failure reporting and containment are absent"
-    )
     def test_order23_raising_metrics_sink_is_failed_evidence_and_preserves_authoritative_json(
         tmp_path,
     ):
@@ -717,7 +709,7 @@ class TestOrder23Red:
 
         emitter = _emitter(events, metrics_action=raise_metrics)
         emitter.emit_succeeded(_plan(tmp_path, "unused"), persisted)
-        assert emitter.last_result.outcome is RunEmissionOutcome.FAILED
+        assert emitter.last_result.outcome is RunEmissionOutcome.EMITTED
         assert emitter.last_result.to_summary()["metrics"]["outcome"] == "failed"
         executed = ExecutedRun(
             planned_run=Planner().plan(
@@ -737,9 +729,6 @@ class TestOrder23Red:
         assert {path: path.read_bytes() for path in tmp_path.rglob("*.json")} == files
 
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True, reason="terminal-only metrics destination is absent"
-    )
     def test_order23_start_emits_no_metrics(tmp_path):
         events = []
         emitter = _emitter(events)
@@ -748,3 +737,214 @@ class TestOrder23Red:
         emitter.emit_started(plan, persisted)
         assert events == ["openlineage"]
         assert emitter.last_result is None
+        assert emitter.last_started_result.metrics is None
+        assert "metrics" not in emitter.last_started_result.to_summary()
+
+
+@pytest.mark.parametrize("lifecycle", ["succeeded", "failed"])
+@pytest.mark.parametrize("configured", [False, True])
+def test_metrics_none_means_unconfigured_and_failure_has_a_separate_outcome(
+    lifecycle, configured, tmp_path
+):
+    from tests.support.metrics_order23 import WarningSpy
+
+    persisted = _terminal_artifacts(tmp_path, status=lifecycle)
+    warnings = WarningSpy()
+
+    def raising_metrics(record, budget):
+        raise OSError("https://private.invalid/?token=secret-token")
+
+    events = []
+    if configured:
+        emitter = _emitter(events, metrics_action=raising_metrics, logger=warnings)
+    else:
+        emitter = build_run_event_emitter(
+            {"observability": {"metrics": {"transport": "disabled"}}},
+            {},
+            logger=warnings,
+            runs_table_sink=lambda *args, **kwargs: IcebergAppendResult(
+                IcebergAppendOutcome.EMITTED, "metadata.runs"
+            ),
+        )
+    getattr(emitter, f"emit_{lifecycle}")(_plan(tmp_path, "unused"), persisted)
+    result = emitter.last_result
+    assert result.outcome is RunEmissionOutcome.EMITTED
+    assert (result.metrics is not None) == configured
+    assert ("metrics" in result.to_summary()) == configured
+    assert len(warnings.warnings) == configured
+    if configured:
+        assert events == ["openlineage", "runs_table", "metrics"]
+        assert result.metrics.to_summary() == {
+            "outcome": "failed",
+            "transport": "file",
+            "sample_count": 0,
+            "reason": "metrics_failed",
+            "step": "metrics",
+            "exception_type": "OSError",
+        }
+        assert "secret-token" not in repr(warnings.warnings)
+
+
+@pytest.mark.parametrize("exhausted_after", ["openlineage", "runs_table"])
+def test_metrics_starvation_is_explicit_and_does_not_attempt_send(
+    exhausted_after, tmp_path, monkeypatch
+):
+    events, now = [], [0.0]
+
+    def exhaust(budget):
+        assert budget == 5.0
+        now[0] = 5.1
+
+    emitter = _emitter(
+        events,
+        lineage_action=exhaust if exhausted_after == "openlineage" else None,
+        append_action=exhaust if exhausted_after == "runs_table" else None,
+    )
+    persisted = _terminal_artifacts(tmp_path, status="succeeded")
+    plan = _plan(tmp_path, "unused")
+    monkeypatch.setattr(emission.time, "monotonic", lambda: now[0])
+    emitter.emit_succeeded(plan, persisted)
+    result = emitter.last_result
+    assert events == (["openlineage"] if exhausted_after == "openlineage" else [
+        "openlineage", "runs_table"
+    ])
+    assert result.metrics.outcome.value == "failed"
+    assert result.metrics.step == "budget"
+    assert result.metrics.exception_type == "EmissionTimeoutError"
+    assert result.outcome is (
+        RunEmissionOutcome.FAILED
+        if exhausted_after == "openlineage"
+        else RunEmissionOutcome.EMITTED
+    )
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
+def test_invalid_emission_budget_has_explicit_metrics_failure(timeout, tmp_path):
+    events = []
+    emitter = _emitter(events, timeout_seconds=timeout)
+    persisted = _terminal_artifacts(tmp_path, status="succeeded")
+    emitter.emit_succeeded(_plan(tmp_path, "unused"), persisted)
+    assert events == []
+    assert emitter.last_result.metrics.step == "budget"
+    assert emitter.last_result.metrics.exception_type == "InvalidEmissionTimeout"
+
+
+def test_projection_failure_carries_metrics_failure_without_a_second_projection(tmp_path):
+    events = []
+
+    def raising_projection(persisted):
+        raise ValueError("projection failed")
+
+    emitter = _emitter(events, projector=raising_projection)
+    persisted = _terminal_artifacts(tmp_path, status="failed")
+    emitter.emit_failed(_plan(tmp_path, "unused"), persisted)
+    assert events == []
+    assert emitter.last_result.stage == emitter.last_result.metrics.step == "projection"
+    assert emitter.last_result.metrics.exception_type == "ValueError"
+
+
+def test_runs_table_exception_still_attempts_metrics_last(tmp_path):
+    events = []
+
+    def raising_append(budget):
+        raise OSError("catalog down")
+
+    emitter = _emitter(events, append_action=raising_append)
+    persisted = _terminal_artifacts(tmp_path, status="succeeded")
+    emitter.emit_succeeded(_plan(tmp_path, "unused"), persisted)
+    assert events == ["openlineage", "runs_table", "metrics"]
+    assert emitter.last_result.outcome is RunEmissionOutcome.FAILED
+    assert emitter.last_result.stage == "runs_table"
+    assert emitter.last_result.metrics.emitted
+
+
+def test_metrics_keyboard_interrupt_crosses_the_worker_boundary(tmp_path):
+    def interrupt(record, budget):
+        raise KeyboardInterrupt()
+
+    emitter = _emitter([], metrics_action=interrupt)
+    persisted = _terminal_artifacts(tmp_path, status="succeeded")
+    with pytest.raises(KeyboardInterrupt):
+        emitter.emit_succeeded(_plan(tmp_path, "unused"), persisted)
+    assert emitter.last_result is None
+
+
+@pytest.mark.parametrize("case", baseline.BASELINE_CASES)
+@pytest.mark.parametrize("metrics_mode", ["file", "raising"])
+def test_metrics_preserve_baseline_artifact_bytes_status_and_cli_exit(
+    case, metrics_mode, tmp_path, monkeypatch, capsys
+):
+    import shutil
+    from types import SimpleNamespace
+
+    from janus.main import main
+    from tests.support.metrics_order23 import WarningSpy, exit_code, write_profile
+
+    root = tmp_path / "project"
+    expected = baseline.capture_case(root, case)
+    files = {path.relative_to(root): path.read_bytes() for path in root.rglob("*.json")}
+    assert files
+    shutil.rmtree(root)
+    warnings = WarningSpy()
+
+    class RaisingMetricsSink:
+        transport = SimpleNamespace(kind="file")
+
+        def emit(self, record, *, budget_seconds, logger):
+            raise OSError("https://private.invalid/?token=secret-token")
+
+    emitter = build_run_event_emitter(
+        {"observability": {"metrics": {"transport": "file"}}},
+        {"metadata_dir": root / "data/metadata"},
+        logger=warnings,
+        metrics_sink=RaisingMetricsSink() if metrics_mode == "raising" else None,
+        runs_table_sink=lambda *args, **kwargs: IcebergAppendResult(
+            IcebergAppendOutcome.EMITTED, "metadata.runs"
+        ),
+    )
+    fixed = baseline.FixedObserver
+
+    class EmittingObserver(fixed):
+        def __init__(self):
+            super().__init__(emitter=emitter)
+
+    captured = []
+    owner = baseline.RawToBronzeLoader if case == "replay" else baseline.SourceExecutor
+    method = "ingest" if case == "replay" else "execute"
+    original = getattr(owner, method)
+
+    def capture_result(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        captured.append(result)
+        return result
+
+    monkeypatch.setattr(baseline, "FixedObserver", EmittingObserver)
+    monkeypatch.setattr(owner, method, capture_result)
+    actual = baseline.capture_case(root, case)
+    assert actual["status"] == expected["status"]
+    assert actual["events"] == expected["events"]
+    assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*.json")} == files
+    assert emitter.last_result.outcome is RunEmissionOutcome.EMITTED
+    assert emitter.last_result.metrics.outcome.value == (
+        "failed" if metrics_mode == "raising" else "emitted"
+    )
+    assert len(warnings.warnings) == (metrics_mode == "raising")
+    assert "secret-token" not in repr(warnings.warnings)
+    assert len(captured) == 1
+    monkeypatch.setattr(owner, method, lambda *args, **kwargs: captured[0])
+    monkeypatch.setattr(
+        "janus.cli.run.load_registry", lambda *args, **kwargs: SimpleNamespace(sources=())
+    )
+    monkeypatch.setattr(
+        "janus.cli.run.Planner.plan", lambda *args, **kwargs: captured[0].planned_run
+    )
+    write_profile(root, {"transport": "file"})
+    invocation = ["run", "--project-root", str(root), "--source-id", actual["source_id"]]
+    invocation += (
+        ["--ingest-raw-to-bronze", "--bronze-table", "bronze.baseline_replay"]
+        if case == "replay"
+        else ["--execute"]
+    )
+    assert exit_code(lambda: main(invocation)) == (0 if expected["status"] == "succeeded" else 1)
+    capsys.readouterr()
+    assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*.json")} == files

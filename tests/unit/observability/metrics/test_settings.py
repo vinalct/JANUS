@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from copy import deepcopy
@@ -38,7 +39,6 @@ SHIPPED_PROFILES = tuple(
 )
 
 
-@pytest.mark.xfail(strict=True, reason="metrics sink is absent")
 @pytest.mark.parametrize("profile", ["local", "cluster", "cluster-rest"])
 def test_absent_block_disables_emission_and_writes_no_metadata_file(profile, tmp_path):
     from janus.observability.metrics.settings import MetricsTransportKind, resolve_metrics_settings
@@ -59,7 +59,6 @@ def test_absent_block_disables_emission_and_writes_no_metadata_file(profile, tmp
     assert not list(tmp_path.rglob("*"))
 
 
-@pytest.mark.xfail(strict=True, reason="disabled metrics transport is absent")
 def test_explicit_disabled_is_a_real_silent_transport(tmp_path):
     from janus.observability.metrics.transport import (
         DisabledMetricsTransport,
@@ -108,7 +107,6 @@ def test_bad_transport_makes_both_entry_points_exit_two_before_registry_load(
     load.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason="metrics sink and fan-out are absent")
 def test_bad_in_run_block_warns_once_and_preserves_status_exit_and_authoritative_bytes(
     tmp_path, monkeypatch
 ):
@@ -135,6 +133,7 @@ def test_bad_in_run_block_warns_once_and_preserves_status_exit_and_authoritative
             super().__init__(emitter=emitter)
 
     monkeypatch.setattr(baseline, "FixedObserver", EmittingObserver)
+    shutil.rmtree(root)
     actual = baseline.capture_case(root, "api_success")
     assert actual["status"] == baseline_manifest["status"] == "succeeded"
     assert actual["summary"]["executed_run"]["status"] == "succeeded"
