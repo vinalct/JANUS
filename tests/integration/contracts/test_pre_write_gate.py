@@ -115,7 +115,8 @@ def _assert_failed_before_commit(run: ExecutedRun, *, failure_stage: str) -> Non
 
 def test_a_missing_column_fails_before_the_full_refresh_commits(factory, tmp_path):
     case = EnforcementCase.for_source(
-        "ac1_missing_column", ID_AMOUNT, raw_format="jsonl", write_mode="overwrite", page_size=2
+        "ac1_missing_column", ID_AMOUNT, input_format="csv", raw_format="jsonl",
+        write_mode="overwrite", page_size=2,
     )
     first = _run(case, tmp_path, factory, GOOD_PAGES, run_id="ac1-missing-1")
     assert first.status == "succeeded", first.failure_reason
@@ -177,7 +178,7 @@ def test_a_failing_first_batch_never_creates_the_table(factory, tmp_path, kind):
     options: dict[str, Any] = {}
     if kind == "missing_column":
         case = EnforcementCase.for_source(
-            source_id, ID_AMOUNT, raw_format="jsonl", write_mode="overwrite"
+            source_id, ID_AMOUNT, input_format="csv", raw_format="jsonl", write_mode="overwrite"
         )
         pages = NO_AMOUNT_PAGES[:1]
     elif kind == "type_mismatch":

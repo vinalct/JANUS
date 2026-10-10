@@ -1,6 +1,6 @@
 {
   "config_versions": {
-    "federal_open_data_example": "79a9c6d67f52eee2f5cad61b573b1a83349f5a3d91dc7a1ee18dd9813b3ccf02"
+    "federal_open_data_example": "893e08cd5df8fcf2ef0ba47bb319f6d687d306d7d2ba077ed5a297249dbf6f13"
   },
   "graph": {
     "edges": []
@@ -89,7 +89,7 @@
           }
         }
       ],
-      "config_version": "79a9c6d67f52eee2f5cad61b573b1a83349f5a3d91dc7a1ee18dd9813b3ccf02",
+      "config_version": "893e08cd5df8fcf2ef0ba47bb319f6d687d306d7d2ba077ed5a297249dbf6f13",
       "failure": {
         "error_type": "ContractPreflightError",
         "phase": "execution",

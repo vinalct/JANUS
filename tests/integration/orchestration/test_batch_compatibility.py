@@ -248,7 +248,11 @@ def _capture_batch(root: Path, case: str):
     upstreams = ("A",) if case.endswith("consumer") else ()
     selected = SourceSpec("B" if upstreams else "C", upstreams, family=family)
     graph = GraphCase((SourceSpec("A"), selected)) if upstreams else GraphCase((selected,))
-    write_project(root, source_documents(graph))
+    documents = source_documents(graph)
+    for document in documents:
+        if document["strategy"] == "api":
+            document["spark"]["handoff"] = "pages"
+    write_project(root, documents)
 
     events: list[str] = []
     tables: dict[str, Any] = {}

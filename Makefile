@@ -23,12 +23,21 @@ DAGSTER_VERSION := 1.13.22
 DAGSTER_TEST_REPORT := data/metadata/test-reports/dagster.xml
 FAST_TEST_REPORT := data/metadata/test-reports/fast.xml
 CI_TEST_REPORT := data/metadata/test-reports/ci.xml
+CI_UNIT_TEST_REPORT := data/metadata/test-reports/ci-unit.xml
+CI_LARGE_TEST_REPORT := data/metadata/test-reports/ci-large.xml
+CI_GATE_REPORTS := $(CI_TEST_REPORT) --additional-report $(CI_UNIT_TEST_REPORT) --additional-report $(CI_LARGE_TEST_REPORT)
 MAINTENANCE_TEST_REPORT := data/metadata/test-reports/maintenance.xml
 MAINTENANCE_SMOKE_ROOT := data/metadata/maintenance-smoke
 MAINTENANCE_SMOKE_OUTPUT := data/metadata/test-reports/maintenance-dry-run.json
 DAGSTER_TESTS := tests/unit/adapters/test_dagster_adapter.py \
 	tests/integration/dagster \
 	tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
+SPARK_UNIT_TEST_ARGS := -ra -m 'not cluster' tests/unit \
+	--ignore=tests/unit/adapters/test_dagster_adapter.py \
+	--deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
+SPARK_INTEGRATION_TEST_ARGS := -ra -m 'not cluster and not large_handoff' tests/integration \
+	--ignore=tests/integration/dagster
+SPARK_LARGE_TEST_ARGS := -ra -m 'not cluster and large_handoff' tests/integration/writers
 # The release-then-resume module is session-free but for its bronze case, which needs Spark:
 # the fast job runs the rest, and `ci` requires every case, that one included.
 FAST_TEST_ARGS := tests/unit \
@@ -60,6 +69,16 @@ FAST_REQUIRED_CLASSES := \
 	tests.unit.observability.test_pyiceberg_append_sink \
 	tests.unit.observability.test_run_record_projection \
 	tests.unit.observability.test_runs_table_contract
+COMPACTION_REQUIRED_CLASSES := \
+	tests.unit.strategies.api.test_handoff_compaction \
+	tests.unit.strategies.api.test_handoff_layout \
+	tests.unit.runtime.test_handoff_format_seam \
+	tests.unit.scripts.test_replay_excludes_handoff \
+	tests.unit.writers.test_write_partitioning_plan \
+	tests.unit.writers.test_no_partitioning_branch_in_spark_path \
+	tests.unit.writers.test_table_properties \
+	tests.unit.models.test_spark_write_block \
+	tests.unit.models.test_spark_handoff_block
 GUARDRAIL_CLASSES := \
 	tests.unit.strategies.http.test_transport_boundary \
 	tests.unit.strategies.http.test_no_second_opener \
@@ -91,6 +110,8 @@ CROSS_ENGINE_CLASS := tests.integration.catalog_commits.test_pyiceberg_round_tri
 CONTRACTS_GOLDEN_CLASS := tests.integration.contracts.test_bronze_unchanged_after_migration
 HANDOFF_GOLDEN_CLASS := tests.integration.handoff.test_bronze_unchanged_under_compaction
 HANDOFF_READ_PARTITIONS_CLASS := tests.integration.handoff.test_read_partition_reduction
+WRITE_PROPERTIES_CLASS := tests.integration.writers.test_table_properties
+WRITE_PARTITIONING_CLASS := tests.integration.writers.test_write_partitioning_execution
 PRE_WRITE_GATE_CLASS := tests.integration.contracts.test_pre_write_gate
 MALFORMED_ROWS_CLASS := tests.integration.contracts.test_malformed_rows
 EVOLUTION_MATRIX_CLASS := tests.integration.contracts.test_evolution_matrix
@@ -135,7 +156,7 @@ define RUN_COMPOSE
 	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-contract-schema test-adapter test-maintenance test-maintenance-smoke ci require-environment maintain-dry-run maintain-apply validate run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
+.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-handoff test-write-sizing test-contract-schema test-adapter test-maintenance test-maintenance-smoke ci require-environment maintain-dry-run maintain-apply validate run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
 
 # Guard every setup prerequisite too, so even `make -j` refuses before touching containers.
 ifneq ($(filter maintain-dry-run maintain-apply,$(MAKECMDGOALS)),)
@@ -245,14 +266,23 @@ lint: ensure-up
 typecheck: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
 
+# Match CI's local selections and isolate the 2 GiB case from earlier Spark sessions.
 test: ensure-up
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m pytest)
+	$(call RUN_COMPOSE,exec -T -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_UNIT_TEST_ARGS))
+	$(call RUN_COMPOSE,exec -T -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_INTEGRATION_TEST_ARGS))
+	$(call RUN_COMPOSE,exec -T -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_LARGE_TEST_ARGS))
+
+test-handoff:          
+	$(PYTHON) -m pytest tests/integration/handoff -v
+
+test-write-sizing:     
+	$(PYTHON) -m pytest tests/integration/writers -v
 
 # Dependency-free orchestration and repository guardrails, matching CI's host-side fast job.
 test-fast:
 	@mkdir -p "$(dir $(FAST_TEST_REPORT))"
 	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --junitxml="$(FAST_TEST_REPORT)"
-	@for class_name in $(FAST_REQUIRED_CLASSES); do \
+	@for class_name in $(FAST_REQUIRED_CLASSES) $(COMPACTION_REQUIRED_CLASSES); do \
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
@@ -292,33 +322,36 @@ test-maintenance-smoke: ensure-up
 	@cat "$(MAINTENANCE_SMOKE_OUTPUT)"
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.maintenance_smoke verify $(MAINTENANCE_SMOKE_ROOT) $(MAINTENANCE_SMOKE_OUTPUT))
 
-# Reproduce CI locally: same lint + type check + full suite the container CI job runs,
-# in the container so the Spark/Iceberg path is exercised. Keep in lockstep with .github/workflows/ci.yml.
+# Reproduce CI locally, with fresh Spark processes for units, integration and the 2 GiB case.
+# Coverage appends and required JUnit gates combine all three reports. Keep in lockstep with CI.
 ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m ruff check src tests)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
-	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage $(SERVICE) python -m pytest -ra -m 'not cluster' --cov=janus --cov-report=term-missing --cov-report=xml:data/coverage.xml --junitxml=$(CI_TEST_REPORT))
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63)
+	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_UNIT_TEST_ARGS) --cov=janus --cov-report= --junitxml=$(CI_UNIT_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_INTEGRATION_TEST_ARGS) --cov=janus --cov-append --cov-report= --junitxml=$(CI_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_LARGE_TEST_ARGS) --cov=janus --cov-append --cov-report=term-missing --cov-report=xml:data/coverage.xml --junitxml=$(CI_LARGE_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63)
 	@$(MAKE) --no-print-directory test-maintenance
 	@$(MAKE) --no-print-directory test-maintenance-smoke
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_SINK_CLASS) --minimum-passed 4)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(RUNS_DECLARATION_CLASS) --minimum-passed 1)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(PREFLIGHT_REAL_CATALOG_CLASS) --minimum-passed 10)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(PRE_WRITE_GATE_CLASS) --minimum-passed 13)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(MALFORMED_ROWS_CLASS) --minimum-passed 9)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(EVOLUTION_MATRIX_CLASS) --minimum-passed 59)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CONTRACTS_GOLDEN_CLASS) --minimum-passed 23)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(HANDOFF_GOLDEN_CLASS) --minimum-passed 8)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(HANDOFF_READ_PARTITIONS_CLASS) --minimum-passed 1)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_TEST_REPORT) --class-name $(DEAD_LETTER_REPLAY_CLASS) --minimum-passed 7)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_SINK_CLASS) --minimum-passed 4)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_DECLARATION_CLASS) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(PREFLIGHT_REAL_CATALOG_CLASS) --minimum-passed 10)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(PRE_WRITE_GATE_CLASS) --minimum-passed 13)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(MALFORMED_ROWS_CLASS) --minimum-passed 9)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(EVOLUTION_MATRIX_CLASS) --minimum-passed 59)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(CONTRACTS_GOLDEN_CLASS) --minimum-passed 23)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(HANDOFF_GOLDEN_CLASS) --minimum-passed 8)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(HANDOFF_READ_PARTITIONS_CLASS) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(WRITE_PROPERTIES_CLASS) --minimum-passed 38)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(WRITE_PARTITIONING_CLASS) --minimum-passed 21)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(DEAD_LETTER_REPLAY_CLASS) --minimum-passed 7)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main validate --environment $(ENVIRONMENT))
 
 # Registry semantics and profile wiring, with no Spark session and no writes.
-# `run-local-config` stays what it is: the environment profile only.
 validate: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main validate --environment $(ENVIRONMENT))
 
@@ -340,8 +373,9 @@ maintain-apply: require-environment ensure-up
 run-local: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main --environment $(ENVIRONMENT) --with-spark)
 
-run-local-config: ensure-up
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main --environment $(ENVIRONMENT))
+# Engine-free registry load and planning, also run by the CI fast job.
+run-local-config:
+	$(PYTHON) -m janus.main validate --environment $(ENVIRONMENT) --project-root .
 
 # ── cluster profile: MinIO + Postgres + S3FileIO ────────────────────────────
 # Opt-in by construction: every target below passes `--profile cluster`, so `make up`
