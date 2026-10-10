@@ -22,9 +22,8 @@ from janus.observability.openlineage.settings import (
 )
 from janus.utils.environment import RuntimeLocation
 from janus.utils.logging import StructuredLogger, redact_url
-from janus.utils.storage import ResolvedOutputTarget
+from janus.utils.storage import resolve_metadata_directory
 
-METADATA_ROOT_KEY = "metadata_dir"
 EVENTS_FILE_PREFIX = "events-"
 EVENTS_FILE_SUFFIX = ".ndjson"
 UNDATED_EVENTS_DAY = "undated"
@@ -310,24 +309,8 @@ def _resolve_events_directory(
     resolved_paths: Mapping[str, RuntimeLocation],
 ) -> Path:
     """Resolve the events directory inside the metadata zone, refusing any way out of it."""
-    metadata_root = resolved_paths.get(METADATA_ROOT_KEY)
-    if metadata_root is None:
-        raise OpenLineageProfileError(
-            "The file transport needs a resolved metadata zone; this profile resolved none"
-        )
-    root = Path(str(metadata_root))
-    if not root.is_absolute():
-        raise OpenLineageProfileError(
-            "The resolved metadata zone must be absolute before events can be written under it"
-        )
-    zone = ResolvedOutputTarget(
-        zone="metadata",
-        configured_path=directory,
-        resolved_path=root,
-        format="ndjson",
-    )
     try:
-        return zone.child(directory)
+        return resolve_metadata_directory(directory, resolved_paths, format="ndjson")
     except ValueError as exc:
         raise OpenLineageProfileError(
             f"The OpenLineage events path must stay inside the metadata zone: {exc}"

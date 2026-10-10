@@ -15,6 +15,7 @@ from janus.cli.common import (
     log_source_config_deprecations,
     parse_started_at,
 )
+from janus.observability.metrics import resolve_metrics_settings
 from janus.observability.openlineage import resolve_openlineage_settings
 from janus.planner import Planner, PlannerError, PlanningRequest
 from janus.registry import SourceNotFoundError, load_registry
@@ -144,6 +145,7 @@ def run_command(argv: Sequence[str] | None = None) -> int:
         config = load_environment_config(args.environment, project_root)
         resolved_paths = prepare_runtime(config, project_root)
         resolve_openlineage_settings(config)
+        resolve_metrics_settings(config)
     except (FileNotFoundError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2

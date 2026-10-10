@@ -18,6 +18,7 @@ from janus.cli.common import (
     log_source_config_deprecations,
     parse_started_at,
 )
+from janus.observability.metrics import resolve_metrics_settings
 from janus.observability.openlineage import resolve_openlineage_settings
 from janus.orchestration import (
     BatchPlan,
@@ -171,6 +172,8 @@ class _PreparedBatch:
 
 def _prepare_batch(args: argparse.Namespace, project_root: Path) -> _PreparedBatch:
     config = load_environment_config(args.environment, project_root)
+    # Fail closed before registry reads without creating paths for an invalid registry.
+    resolve_metrics_settings(config)
     selection = BatchSelection.create(tags=args.tag, domains=args.domain)
     request = BatchPlanRequest.create(
         environment=args.environment,
@@ -184,6 +187,7 @@ def _prepare_batch(args: argparse.Namespace, project_root: Path) -> _PreparedBat
     plan = BatchPlanner().plan(request, registry=registry)
     resolved_paths = prepare_runtime(config, project_root)
     resolve_openlineage_settings(config)
+    resolve_metrics_settings(config)
     return _PreparedBatch(config, resolved_paths, request, registry, plan)
 
 
