@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -226,6 +227,10 @@ def _expected(plan: ExecutionPlan, tmp_path: Path, **overrides: object) -> dict[
         "records_extracted": 2,
         "artifact_count": 1,
         "records_written": 2,
+        "request_count": None,
+        "retry_count": None,
+        "attempt_count": None,
+        "dead_letter_count": None,
         "bronze_table_identifier": BRONZE_TABLE,
         "bronze_write_mode": "overwrite",
         "checkpoint_field": "updated_at",
@@ -998,10 +1003,6 @@ def test_an_operator_reset_moves_the_next_comparison_but_never_becomes_its_decis
 
 class TestOrder23Red:
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True,
-        reason="extraction counters complete the seven operational projection fields",
-    )
     def test_adds_all_seven_typed_projection_fields():
         from dataclasses import fields
 
@@ -1075,9 +1076,6 @@ class TestOrder23Red:
         assert projected.freshness_max_age_seconds is None
 
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True, reason="typed extraction counter projection is absent"
-    )
     def test_lifts_all_four_counter_strings_as_integers(tmp_path):
         from tests.support.metrics_order23 import plan, project
 
@@ -1095,20 +1093,198 @@ class TestOrder23Red:
             "dead_letter_count": 0,
         }
         assert all(type(getattr(projected, name)) is int for name in counts)
+        assert {name: projected.to_dict()[name] for name in counts} == {
+            "request_count": 10,
+            "retry_count": 2,
+            "attempt_count": 12,
+            "dead_letter_count": 0,
+        }
 
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True, reason="file-family NULL counter projection is absent"
-    )
     def test_file_family_missing_http_counters_are_null_and_dead_letters_are_real(tmp_path):
-        from tests.support.metrics_order23 import plan, project
-
-        projected = project(plan(tmp_path, family="file"), metadata={"dead_letter_count": "0"})
+        projected, lineage = _family_counter_projection(tmp_path, "file")
         assert projected.strategy_family == "file"
-        for name in ("request_count", "retry_count", "attempt_count"):
-            assert getattr(projected, name) is None, "unreported is NULL, not a fabricated zero"
-            assert projected.to_dict()[name] is None
+        assert projected.request_count is None
+        assert projected.retry_count is None
+        assert projected.attempt_count is None
         assert projected.dead_letter_count == 0
+        assert type(projected.dead_letter_count) is int
+        payload = projected.to_dict()
+        assert payload["request_count"] is None
+        assert payload["retry_count"] is None
+        assert payload["attempt_count"] is None
+        assert payload["dead_letter_count"] == 0
+        extraction = lineage.extraction_metadata_as_dict()
+        assert "request_count" not in extraction
+        assert "retry_count" not in extraction
+        assert "attempt_count" not in extraction
+        assert extraction["dead_letter_count"] == "0"
+
+
+def _family_counter_projection(tmp_path: Path, family: str) -> tuple[RunRecord, LineageRecord]:
+    """Extract through the family's own builder, with one retry and no live endpoint."""
+    from janus.strategies.api import ApiResponse, ApiStrategy
+    from janus.strategies.catalog import CatalogStrategy
+    from janus.strategies.files import FileStrategy
+    from janus.utils.storage import StorageLayout
+    from tests.support.observability_baseline import RECORDS, source_payload, write_project
+
+    document = source_payload("catalog_success" if family == "catalog" else "api_success")
+    if family == "file":
+        document.update(source_type="file", strategy="file", strategy_variant="static_file")
+        document["access"] = {
+            "url": "https://fixtures.invalid/records.json",
+            "method": "GET",
+            "format": "json",
+            "auth": {"type": "none"},
+            "pagination": {"type": "none"},
+            "rate_limit": {"concurrency": 1},
+        }
+        document["extraction"].update(mode="snapshot", checkpoint_strategy="none")
+        document["extraction"].pop("checkpoint_field")
+        document["spark"].pop("handoff")
+    document["extraction"]["retry"]["max_attempts"] = 2
+    write_project(tmp_path, document)
+    source_config = load_registry(tmp_path).get_source(document["source_id"])
+    plan = ExecutionPlan.from_source_config(
+        source_config,
+        RunContext.create(
+            run_id="family-counters",
+            environment="local",
+            project_root=tmp_path,
+            started_at=STARTED_AT,
+            attributes={"pipeline_attempt": "7"},
+        ),
+    )
+
+    class CounterTransport:
+        def __init__(self):
+            self.statuses = [503, 200]
+
+        def open(self):
+            pass
+
+        def close(self):
+            pass
+
+        def send(self, request):
+            return ApiResponse(
+                request=request,
+                status_code=self.statuses.pop(0),
+                body=json.dumps(list(RECORDS)).encode(),
+            )
+
+    transport = CounterTransport()
+    strategy = {"api": ApiStrategy, "catalog": CatalogStrategy, "file": FileStrategy}[family](
+        transport_factory=lambda: transport,
+        sleeper=lambda _: None,
+        storage_layout_factory=lambda _: StorageLayout.from_environment_config(
+            {
+                "storage": {
+                    "root_dir": "data",
+                    **{f"{zone}_dir": f"data/{zone}" for zone in ("raw", "bronze", "metadata")},
+                }
+            },
+            tmp_path,
+        ),
+    )
+    extraction_result = strategy.extract(plan)
+    assert not transport.statuses, "the fixture must exercise a retry and a successful request"
+    metadata, lineage = _records(
+        plan, status="succeeded", extraction_result=extraction_result, write_results=()
+    )
+    return RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT), lineage
+
+
+@pytest.mark.parametrize("family", ["api", "catalog"])
+def test_http_family_counters_match_the_real_extraction_builder(tmp_path, family):
+    projected, lineage = _family_counter_projection(tmp_path, family)
+    extraction = lineage.extraction_metadata_as_dict()
+    assert projected.strategy_family == family
+    assert projected.request_count == 1
+    assert projected.retry_count == 1
+    assert projected.attempt_count == 2
+    assert projected.dead_letter_count == 0
+    for name in ("request_count", "retry_count", "attempt_count", "dead_letter_count"):
+        value = getattr(projected, name)
+        assert type(value) is int
+        assert value == int(extraction[name])
+        assert projected.to_dict()[name] == value
+    assert projected.pipeline_attempt == 7
+    assert projected.attempt_count != projected.pipeline_attempt
+
+
+def test_a_reported_zero_request_count_projects_to_zero(tmp_path):
+    from tests.support.metrics_order23 import plan, project
+
+    projected = project(plan(tmp_path), metadata={"request_count": "0"})
+    assert projected.strategy_family == "api"
+    assert projected.request_count == 0
+    assert type(projected.request_count) is int
+    assert projected.to_dict()["request_count"] == 0
+
+
+def test_an_absent_request_count_projects_to_null(tmp_path):
+    from tests.support.metrics_order23 import plan, project
+
+    projected = project(plan(tmp_path), metadata={"dead_letter_count": "3"})
+    assert projected.request_count is None
+    assert projected.to_dict()["request_count"] is None
+    assert projected.dead_letter_count == 3
+
+
+@pytest.mark.parametrize("extracted", [False, True])
+def test_absent_extraction_metadata_projects_all_four_counters_to_null(tmp_path, extracted):
+    plan = _plan(tmp_path, run_id="absent-counters")
+    metadata, lineage = _records(
+        plan,
+        status="succeeded" if extracted else "failed",
+        extraction_result=ExtractionResult.from_plan(plan, ()) if extracted else None,
+        write_results=(),
+        error=None if extracted else RuntimeError("extraction did not finish"),
+    )
+    assert lineage.extraction_metadata == ()
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+    assert projected.request_count is None
+    assert projected.retry_count is None
+    assert projected.attempt_count is None
+    assert projected.dead_letter_count is None
+    payload = projected.to_dict()
+    assert payload["request_count"] is None
+    assert payload["retry_count"] is None
+    assert payload["attempt_count"] is None
+    assert payload["dead_letter_count"] is None
+
+
+@pytest.mark.parametrize(
+    "counter", ["request_count", "retry_count", "attempt_count", "dead_letter_count"]
+)
+@pytest.mark.parametrize("raw", ["unknown", "1.5"])
+def test_an_unparseable_counter_is_null_without_losing_other_counters(tmp_path, counter, raw):
+    from tests.support.metrics_order23 import plan, project
+
+    counts = {
+        name: "3" for name in ("request_count", "retry_count", "attempt_count", "dead_letter_count")
+    }
+    counts[counter] = raw
+    projected = project(plan(tmp_path), metadata=counts)
+    assert getattr(projected, counter) is None
+    assert projected.to_dict()[counter] is None
+    for name in counts.keys() - {counter}:
+        assert getattr(projected, name) == 3
+        assert projected.to_dict()[name] == 3
+
+
+@pytest.mark.parametrize(
+    "counter", ["request_count", "retry_count", "attempt_count", "dead_letter_count"]
+)
+def test_each_extraction_counter_is_independently_optional(tmp_path, counter):
+    from tests.support.metrics_order23 import plan, project
+
+    projected = project(plan(tmp_path), metadata={counter: "3"})
+    assert getattr(projected, counter) == 3
+    for name in {"request_count", "retry_count", "attempt_count", "dead_letter_count"} - {counter}:
+        assert getattr(projected, name) is None
 
 
 def test_a_missing_duration_is_undeclared_even_with_a_declared_budget(tmp_path):

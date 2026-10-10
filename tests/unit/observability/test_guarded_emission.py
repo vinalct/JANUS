@@ -438,18 +438,31 @@ def test_live_replay_and_empty_handoff_use_production_wiring(monkeypatch, tmp_pa
 
     live = records[0].to_dict()
     replay = records[2].to_dict()
+    # Live extraction reports counters; raw replay does not measure HTTP activity.
+    assert live["request_count"] == 1
+    assert live["retry_count"] == 0
+    assert live["attempt_count"] == 1
+    assert live["dead_letter_count"] == 0
+    assert replay["request_count"] is None
+    assert replay["retry_count"] is None
+    assert replay["attempt_count"] is None
+    assert replay["dead_letter_count"] is None
     difference_set = {key for key in live if live[key] != replay[key]}
     assert difference_set == {
+        "attempt_count",
         "bronze_table_identifier",
         "checkpoint_advanced",
         "checkpoint_decision",
         "checkpoint_history_path",
         "checkpoint_value",
+        "dead_letter_count",
         "duration_seconds",
         "emitted_at",
         "ended_at",
         "lineage_path",
         "records_extracted",
+        "request_count",
+        "retry_count",
         "run_id",
         "run_metadata_path",
         "source_config_path",

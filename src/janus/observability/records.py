@@ -16,7 +16,9 @@ from janus.models.config.constants import (
     DURATION_BUDGET_WITHIN,
 )
 from janus.observability.vocabulary import (
+    ATTEMPT_COUNT_KEY,
     BRONZE_ZONE,
+    DEAD_LETTER_COUNT_KEY,
     MALFORMED_ROWS_CHECK_NAME,
     MALFORMED_ROWS_CHECK_PHASE,
     MALFORMED_ROWS_COUNT_DETAIL,
@@ -26,6 +28,8 @@ from janus.observability.vocabulary import (
     PREFLIGHT_ATTRIBUTE_NAME,
     PREFLIGHT_OUTCOMES,
     QUALITY_NOT_RUN,
+    REQUEST_COUNT_KEY,
+    RETRY_COUNT_KEY,
     RUN_RECORD_SCHEMA_VERSION,
     RUN_RECORD_STATUSES,
     SCHEMA_EVOLUTION_METADATA_KEY,
@@ -104,6 +108,13 @@ class RunRecord:
     duration_budget_seconds: int | None = None
     duration_budget_outcome: str | None = None
     freshness_max_age_seconds: int | None = None
+    # Extraction volume: a family may not report a counter, or its value may be
+    # unparseable; neither is "counted zero", so neither may render as 0.
+    # attempt_count counts HTTP attempts, not the batch attempt pipeline_attempt.
+    request_count: int | None = None
+    retry_count: int | None = None
+    attempt_count: int | None = None
+    dead_letter_count: int | None = None
 
     def __post_init__(self) -> None:
         if self.status not in RUN_RECORD_STATUSES:
@@ -226,6 +237,7 @@ class RunRecord:
             )
 
         attributes = run_metadata.run_attributes_as_dict()
+        extraction = lineage_record.extraction_metadata_as_dict()
         bronze_outputs = _bronze_outputs(lineage_record)
         reason, reason_truncated, reason_length = _bounded_failure_reason(
             run_metadata.failure_reason
@@ -264,6 +276,10 @@ class RunRecord:
             records_extracted=run_metadata.records_extracted,
             artifact_count=len(lineage_record.artifacts),
             records_written=_sum_records_written(bronze_outputs),
+            request_count=_optional_int(extraction.get(REQUEST_COUNT_KEY)),
+            retry_count=_optional_int(extraction.get(RETRY_COUNT_KEY)),
+            attempt_count=_optional_int(extraction.get(ATTEMPT_COUNT_KEY)),
+            dead_letter_count=_optional_int(extraction.get(DEAD_LETTER_COUNT_KEY)),
             bronze_table_identifier=bronze_outputs[0].path if bronze_outputs else None,
             bronze_write_mode=bronze_outputs[0].mode if bronze_outputs else None,
             checkpoint_field=run_metadata.checkpoint_field,
@@ -319,6 +335,10 @@ class RunRecord:
             "records_extracted": self.records_extracted,
             "artifact_count": self.artifact_count,
             "records_written": self.records_written,
+            "request_count": self.request_count,
+            "retry_count": self.retry_count,
+            "attempt_count": self.attempt_count,
+            "dead_letter_count": self.dead_letter_count,
             "bronze_table_identifier": self.bronze_table_identifier,
             "bronze_write_mode": self.bronze_write_mode,
             "checkpoint_field": self.checkpoint_field,
