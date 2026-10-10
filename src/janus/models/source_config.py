@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from dataclasses import field as _field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Final, Self, overload
@@ -84,6 +85,7 @@ from janus.models.config.extraction import (
     _resolve_retryable_status_codes,
 )
 from janus.models.config.issues import SourceConfigValidationError, ValidationIssue
+from janus.models.config.operations import _build_operations_config
 from janus.models.config.outputs import (
     _build_output_target,
     _build_outputs_config,
@@ -111,8 +113,10 @@ from janus.models.config.types import (
     CombinedRequestInputsConfig,
     DateWindowRequestInputsConfig,
     ExtractionConfig,
+    FreshnessConfig,
     IcebergRowsRequestInputsConfig,
     LimitsConfig,
+    OperationsConfig,
     OutputsConfig,
     OutputTarget,
     PaginationConfig,
@@ -160,8 +164,10 @@ __all__ = [
     "CombinedRequestInputsConfig",
     "DateWindowRequestInputsConfig",
     "ExtractionConfig",
+    "FreshnessConfig",
     "IcebergRowsRequestInputsConfig",
     "LimitsConfig",
+    "OperationsConfig",
     "OutputTarget",
     "OutputsConfig",
     "PaginationConfig",
@@ -185,6 +191,7 @@ __all__ = [
     "_build_auth_config",
     "_build_combined_request_inputs_config",
     "_build_extraction_config",
+    "_build_operations_config",
     "_build_output_target",
     "_build_outputs_config",
     "_build_pagination_config",
@@ -243,6 +250,7 @@ class SourceConfig:
     source_hook: str | None = None
     tags: tuple[str, ...] = ()
     deprecations: tuple[ValidationIssue, ...] = ()
+    operations: OperationsConfig = _field(default_factory=OperationsConfig)
 
     @classmethod
     def from_mapping(
@@ -306,6 +314,7 @@ class SourceConfig:
             data.get("spark"), issues, deprecations=deprecations, write_defaults=write_defaults
         )
         outputs = _build_outputs_config(data.get("outputs"), issues)
+        operations = _build_operations_config(data.get("operations"), issues)
         quality = _build_quality_config(data.get("quality"), issues)
 
         _validate_concurrency_contract(source_type, access, issues)
@@ -334,6 +343,7 @@ class SourceConfig:
             schema=schema,
             spark=spark,
             outputs=outputs,
+            operations=operations,
             quality=quality,
             deprecations=tuple(deprecations),
         )

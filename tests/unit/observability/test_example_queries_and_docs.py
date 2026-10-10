@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from janus.observability.runs_table import RUNS_TABLE_SCHEMA
 from janus.quality import ContractViolationError
 from janus.quality.malformed_rows import MalformedRowsError
@@ -176,9 +178,6 @@ def test_the_operator_register_documents_the_three_columns():
     for column in ENFORCEMENT_COLUMNS:
         assert f"| `{column}` |" in register
     assert SCHEMA_DRIFT_QUERY in guide
-
-
-import pytest
 
 
 def _order23_query_and_register():

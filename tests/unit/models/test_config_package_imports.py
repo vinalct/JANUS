@@ -28,9 +28,11 @@ PUBLIC_NAMES: tuple[str, ...] = (
     "DateWindowRequestInputsConfig",
     "ExtractionConfig",
     "Final",
+    "FreshnessConfig",
     "IcebergRowsRequestInputsConfig",
     "LimitsConfig",
     "Mapping",
+    "OperationsConfig",
     "OutputTarget",
     "OutputsConfig",
     "PaginationConfig",
@@ -86,6 +88,7 @@ PRIVATE_NAMES: tuple[str, ...] = (
     "_build_auth_config",
     "_build_combined_request_inputs_config",
     "_build_extraction_config",
+    "_build_operations_config",
     "_build_output_target",
     "_build_outputs_config",
     "_build_pagination_config",
@@ -189,6 +192,7 @@ LAYER_RANK: dict[str, int] = {
     "policy": 3,  # imports constants, issues and strategy_registry; never crosses types
     "types": 3,
     "extraction": 4,
+    "operations": 4,
     "outputs": 4,
     "request_inputs": 4,
     "bindings": 5,
@@ -199,7 +203,7 @@ LAYER_RANK: dict[str, int] = {
 
 
 BUILDER_MODULES = frozenset(
-    {"access", "bindings", "contracts", "extraction", "outputs", "request_inputs"}
+    {"access", "bindings", "contracts", "extraction", "operations", "outputs", "request_inputs"}
 )
 
 
