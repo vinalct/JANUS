@@ -660,7 +660,8 @@ schema:
 spark:
   input_format: json
   write_mode: overwrite
-  repartition: 1
+  write:
+    partitions: 1
   partition_by:
     - ingestion_date
 

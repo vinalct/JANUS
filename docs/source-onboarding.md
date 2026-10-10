@@ -565,9 +565,137 @@ Iceberg table is checked against it before extraction starts; see
 
 - `spark.input_format` tells JANUS how the normalization handoff should be read.
 - `spark.write_mode` is one of `append`, `overwrite`, or `ignore`.
-- `spark.repartition` is optional.
 - `spark.partition_by` is an optional list of partition columns.
 - `spark.read_options` is an optional string-to-string mapping for reader options such as CSV header, separator, or encoding.
+- `spark.write` is optional and declares how bronze files are sized; see [`spark.write`](#sparkwrite).
+- `spark.handoff` is optional and only matters for API sources; see [`spark.handoff`](#sparkhandoff).
+
+#### `spark.write`
+
+Three keys, all optional. Each one describes something the writer actually does.
+
+```yaml
+spark:
+  write:
+    target_file_size_mb: 128     # integer, 1..8192
+    distribution_mode: hash      # none | hash | range
+    partitions: 1                # integer >= 1, or omit
+```
+
+- `target_file_size_mb` is the size each bronze data file aims for. It defaults to the environment
+  profile's `spark.write_defaults.target_file_size_mb`: **128 in `local`, 256 in `cluster`** (and in
+  the `cluster-rest` overlay, which inherits it). `JANUS_SPARK_TARGET_FILE_SIZE_MB` overrides the
+  profile; a source value overrides both.
+- `distribution_mode` defaults to the profile's `spark.write_defaults.distribution_mode` when one is
+  set (`JANUS_SPARK_DISTRIBUTION_MODE`), and otherwise is **computed**: `hash` when `partition_by`
+  is non-empty, `none` when it is empty. `hash` stops a partitioned table from collecting one small
+  file per task per partition value. A partitioned source may still declare `none` explicitly.
+- `partitions` is an exact task count for the write. JANUS coalesces or repartitions the frame to
+  exactly that many partitions before writing — both directions, so `partitions: 1` really writes
+  with one task.
+
+The first two become Iceberg table properties, `write.target-file-size-bytes` and
+`write.distribution-mode`. They are set when the table is created, and on every later write JANUS
+reads the table's properties and, only if one of those two differs from the declaration, issues one
+`ALTER TABLE … SET TBLPROPERTIES` naming just the keys that changed. A property is never removed, and
+a property JANUS does not manage (anything an operator set by hand) is never touched. The run's write
+metadata records `table_properties_applied=created` on creation and `table_properties_reconciled`
+(`none`, the changed keys, or `read_failed` / `alter_failed`) afterwards; a failed property read or
+alteration is logged and never fails the data write.
+
+**When to declare `partitions`, and when not to.** Without it, the writer sizes the write itself:
+it takes the byte size of the batch's handoff files and plans `ceil(bytes / target_file_size_mb)`
+tasks, coalescing or repartitioning only when that differs from what the read produced. When the size
+cannot be known (a handoff on an object-store URI), it keeps the read's partition count rather than
+guess. That is the right default for most sources.
+
+- Declare `partitions: 1` for a **small, bounded** source: a reference list, an enumeration, an
+  aggregate, a fixed slice. Checked-in examples include the SIAPE and SIAFI agency lists, procurement
+  modalities and management units, the servidores-por-órgão aggregate, the two IBGE slices and the two
+  dados.gov.br metadata catalogs.
+- Declare **nothing** for a source that will grow: national microdata, monthly file pipelines,
+  transaction histories, company-level records. A copied `partitions: 1` on a multi-GiB source
+  serializes the whole write through one task. Every Receita Federal CNPJ file, the INEP census and
+  the large Transparência endpoints (contracts, card spending, procurement, servidores, amendment
+  documents, company-level tax waivers) are size-planned for this reason.
+- Any other exact number is a deliberate override, not a sizing recommendation. The documented
+  example source declares `partitions: 4` only to show the key.
+
+The writer records its decision in write metadata as `write_partitioning` (`none`, `coalesce` or
+`repartition`), `write_input_partitions`, and, when it changed something, `write_partitioning_target`
+and `write_partitioning_reason`.
+
+**Migrating from `spark.repartition`.** The old key is deprecated and no checked-in source uses it.
+It never did what it said: the writer only ever *increased* the partition count, so the 26
+`repartition: 1` declarations it replaced never coalesced anything. An out-of-tree source that still
+declares it loads, with its value mapped to `spark.write.partitions` and one `DeprecationWarning` per
+config file:
+
+```text
+spark.repartition: is deprecated and will be removed in the next order; declare spark.write.partitions instead
+```
+
+Because the mapped value is now honoured in both directions, `repartition: 1` starts coalescing to
+one task on the first run after upgrading. Decide which side of the rule above the source is on: move
+the value to `spark.write.partitions` if the source is small and bounded, delete the key if it will
+grow. Declaring both keys — including `write.partitions: null` — is a validation error:
+
+```text
+spark.write.partitions: must not be declared together with the deprecated spark.repartition
+```
+
+#### `spark.handoff`
+
+For an API source, the materializer does not read the raw pages. It reads a **handoff**: one JSONL
+file per request input, derived from the pages after extraction and written beside them under the
+run's raw prefix (`…/runs/ingestion_date=…/run_id=…/handoff/pages/records-0001.jsonl`, or
+`handoff/request-input-000001/…` for a multi-input source), each with its `.sha256` sidecar. A run of
+10,000 pages is read as one splittable file instead of 10,000 whole-file parses.
+
+```yaml
+spark:
+  handoff: compact            # the default; or `pages`
+  # or, as a mapping:
+  handoff:
+    mode: compact             # compact | pages
+    max_artifact_mb: 256      # split size for one handoff file, integer >= 1
+```
+
+What compaction does **not** change:
+
+- **the raw pages** — their names, paths, bytes, sidecars and modification times are untouched; they
+  are still the resume record and what `--resume` and `--ingest-raw-to-bronze` rediscover;
+- **any bronze row or schema** — a mapping page is one row and an array page contributes its
+  elements, exactly as Spark's page read did, and your contract's schema and `read_options` still
+  apply (`json` and `jsonl` are one Spark reader family);
+- **replay** — `--ingest-raw-to-bronze` ignores any existing `handoff/` directory and derives it again
+  from the pages, byte for byte.
+
+Set `handoff: pages` when:
+
+- the source declares `read_options.multiLine: "true"`. A JSONL handoff is read without `multiLine`;
+  JANUS keeps your option as declared and logs `handoff_compaction_read_option_conflict` suggesting
+  `pages`, but the right fix is to say `pages`;
+- the raw zone is disk-constrained. The handoff is a second copy of the records: on the 10,000-page
+  synthetic fixture it is 52,617,566 bytes beside 69,837,566 bytes of pages (75 %).
+
+Raise `max_artifact_mb` only if you want fewer, larger handoff files; a split rolls over after the
+record that crosses the limit, so no record is ever cut.
+
+Every API run records four keys in extraction metadata, and in the run metadata's `strategy.`
+namespace: `handoff_compaction`, `handoff_source_page_count`, `handoff_artifact_count` and
+`handoff_bytes`. `handoff_compaction` is one of:
+
+| Value | Meaning |
+|---|---|
+| `jsonl` | The pages were compacted into JSONL handoff files. |
+| `pages` | The source declared `handoff: pages`; Spark reads the pages. |
+| `none` | Nothing to compact safely: a `text` or `binary` raw format, or pages not in the expected run-scoped layout. Spark reads the pages. |
+| `hook` | The source hook overrides `on_normalization_handoff` and owns the handoff; it was given the original pages. |
+| `hook_records` | The source hook overrides `extract_records`; its record logic needs the live response, so the pages are read as-is. |
+| `empty` | Extraction produced no artifacts; no Spark session is started. |
+
+File and catalog sources are never compacted and do not carry these keys.
 
 A source that combines `extraction.mode: full_refresh` with `spark.write_mode: overwrite` and an Iceberg
 bronze target **keeps its snapshot history across runs**. Each run replaces every row, but the previous

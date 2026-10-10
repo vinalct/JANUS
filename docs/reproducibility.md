@@ -398,7 +398,7 @@ python -m janus.main --environment local --source-id <id> \
 ```
 
 Step 2 rehydrates the existing raw artifacts and re-materializes bronze through exactly the same
-`BronzeMaterializer` a live run uses — no re-extraction, no network. `--bronze-table` is required;
+`BronzeMaterializer` a live run uses — no re-extraction, no network ([the API handoff is re-derived](#replay-re-derives-the-api-handoff)). `--bronze-table` is required;
 to rebuild the table a live run writes, pass the `bronze_table` that
 `python -m janus.main list --format json` prints for the source. If the raw zone is empty too,
 replace step 2 with a full run (`--execute` instead of `--ingest-raw-to-bronze --bronze-table …`).
@@ -592,6 +592,32 @@ If you are comparing runs across environments, compare:
 - the run id and start time;
 - the resolved storage roots;
 - the source config path and version.
+
+## Replay re-derives the API handoff
+
+An API run's bronze input is not its raw pages but a JSONL **handoff** derived from them, written
+beside the pages under the same run prefix (`…/run_id=…/handoff/`). That would weaken the
+"bronze is a function of raw" claim if replay read the handoff back. It does not:
+
+- replay rediscovers only the **pages**: `scripts/rehydrate.py` excludes every path with a
+  `handoff` component, so an existing handoff, current, stale or edited by hand, is never input;
+- it then calls the same `ApiStrategy.build_normalization_handoff` a live run calls, which derives
+  the handoff again from those pages;
+- derivation is deterministic: the same pages yield the same JSONL bytes and the same `.sha256`
+  sidecars, so the rebuilt handoff is identical to the one the live run wrote.
+
+This strengthens the reproducibility claim. Before, a replay re-read the pages; now it re-derives
+an intermediate artifact from them and must land on the same bytes and the same bronze, and that
+is tested. `tests/integration/handoff/test_bronze_unchanged_under_compaction.py` runs every
+fixture through pages and compacted handoffs, live and replayed, and requires all four cells to
+produce one identifier, schema digest and row digest equal to the golden captured before compaction
+existed. It is a required suite in `make ci` and the CI Spark job.
+`tests/unit/scripts/test_replay_excludes_handoff.py` pins the exclusion and the byte-identical
+rebuild, including from raw zones written before handoffs existed. `--verify-checksums` verifies the
+pages the handoff is rebuilt from.
+
+Deleting a run's `handoff/` directory is safe; the next replay writes it again. A source can
+also opt out with `spark.handoff: pages`, and then both live and replay read the pages directly.
 
 ## Retention and what stays authoritative
 

@@ -107,7 +107,7 @@ The Spark-side writer is the complement to the raw writer.
 
 `SparkDatasetWriter` assumes the input is already a DataFrame and is ready to be written as a structured dataset rather than as a raw payload.
 
-It resolves the output path through the shared storage layout, applies the configured or explicit format, applies the configured write mode, and respects configured partition columns. For bronze writes it can also apply the source-configured repartitioning before persistence.
+It resolves the output path through the shared storage layout, applies the configured or explicit format, applies the configured write mode, and respects configured partition columns. For bronze writes it executes the partitioning plan that the pure `writers/partitioning.py::plan_write_partitioning` derives from the source's `spark.write` declaration and the batch's size, and keeps the table's managed Iceberg write properties in line with that declaration.
 
 This is the writer later strategy implementations are expected to use once raw artifacts have been read and normalized into Spark.
 
