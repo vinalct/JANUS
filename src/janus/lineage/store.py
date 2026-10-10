@@ -11,6 +11,7 @@ from janus.checkpoints.store import CheckpointStore, CheckpointWriteResult
 from janus.lineage.models import LineageRecord, RunMetadata
 from janus.lineage.persistence import MetadataZonePaths, write_json_atomic
 from janus.models import ExecutionPlan, ExtractionResult, WriteResult
+from janus.models.config.constants import DURATION_BUDGET_EXCEEDED, DURATION_BUDGET_UNDECLARED
 from janus.utils.logging import StructuredLogger
 
 if TYPE_CHECKING:
@@ -97,7 +98,7 @@ class RunObserver:
     emitter: RunEventEmitter = field(default_factory=NullRunEventEmitter)
 
     def start_run(self, plan: ExecutionPlan) -> PersistedArtifacts:
-        run_metadata = RunMetadata.started(plan)
+        run_metadata = self._with_operations(plan, RunMetadata.started(plan))
         run_metadata_path = self.run_metadata_store.write(plan, run_metadata)
         persisted = PersistedArtifacts(
             run_metadata=run_metadata,
@@ -127,6 +128,7 @@ class RunObserver:
             finished_at=finished_at,
             metadata=prepared_metadata,
         )
+        run_metadata = self._with_operations(plan, run_metadata)
         run_metadata_path = self.run_metadata_store.write(plan, run_metadata)
 
         lineage_record = LineageRecord.from_runtime(
@@ -136,6 +138,9 @@ class RunObserver:
             write_results=write_results,
             emitted_at=finished_at,
             metadata=prepared_metadata,
+            duration_budget_seconds=run_metadata.duration_budget_seconds,
+            duration_budget_outcome=run_metadata.duration_budget_outcome,
+            freshness_max_age_seconds=run_metadata.freshness_max_age_seconds,
         )
         lineage_path = self.lineage_store.write(plan, lineage_record)
 
@@ -179,6 +184,7 @@ class RunObserver:
             finished_at=finished_at,
             metadata=prepared_metadata,
         )
+        run_metadata = self._with_operations(plan, run_metadata)
         run_metadata_path = self.run_metadata_store.write(plan, run_metadata)
 
         lineage_record = replace(
@@ -191,6 +197,9 @@ class RunObserver:
                 error_type=run_metadata.error_type,
                 emitted_at=finished_at,
                 metadata=prepared_metadata,
+                duration_budget_seconds=run_metadata.duration_budget_seconds,
+                duration_budget_outcome=run_metadata.duration_budget_outcome,
+                freshness_max_age_seconds=run_metadata.freshness_max_age_seconds,
             ),
             failure_stage=run_metadata.failure_stage,
         )
@@ -204,6 +213,35 @@ class RunObserver:
         )
         self._emit_guarded("emit_failed", plan, persisted)
         return persisted
+
+    def _with_operations(self, plan: ExecutionPlan, run_metadata: RunMetadata) -> RunMetadata:
+        """Evaluate once before persistence; START carries declarations only."""
+        operations = plan.source_config.operations
+        outcome = (
+            None
+            if run_metadata.status == "running"
+            else operations.evaluate_duration(run_metadata.duration_seconds)
+        )
+        run_metadata = replace(
+            run_metadata,
+            duration_budget_seconds=(
+                operations.max_duration_seconds if outcome != DURATION_BUDGET_UNDECLARED else None
+            ),
+            duration_budget_outcome=outcome,
+            freshness_max_age_seconds=(
+                operations.freshness.max_age_seconds if operations.freshness else None
+            ),
+        )
+        if outcome == DURATION_BUDGET_EXCEEDED:
+            _log_warning(
+                self.logger,
+                "run_duration_budget_exceeded",
+                source_id=run_metadata.source_id,
+                run_id=run_metadata.run_id,
+                duration_seconds=run_metadata.duration_seconds,
+                duration_budget_seconds=run_metadata.duration_budget_seconds,
+            )
+        return run_metadata
 
     def _emit_guarded(
         self,

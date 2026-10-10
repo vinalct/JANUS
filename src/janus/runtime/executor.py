@@ -60,6 +60,7 @@ class ExecutedRun:
     error_type: str | None = None
     run_event_emission: RunEmissionResult | None = None
     failure_stage: str | None = None
+    duration_budget_outcome: str | None = None
 
     @property
     def is_successful(self) -> bool:
@@ -68,6 +69,7 @@ class ExecutedRun:
     def to_summary(self) -> dict[str, Any]:
         summary: dict[str, Any] = {
             "status": self.status,
+            "duration_budget_outcome": self.duration_budget_outcome,
             "strategy_metadata": self.strategy_metadata,
             "materialized_outputs": [
                 {
@@ -521,4 +523,7 @@ def _build_executed_run(
         failure_reason=failure_reason,
         error_type=error_type,
         failure_stage=failure_stage,
+        duration_budget_outcome=getattr(
+            getattr(persisted, "run_metadata", None), "duration_budget_outcome", None
+        ),
     )

@@ -130,6 +130,8 @@
             "table": "bronze.producer"
           }
         ],
+        "duration_budget_outcome": null,
+        "duration_budget_seconds": null,
         "emitted_at": "2026-07-04T12:00:05+00:00",
         "environment": "local",
         "error_type": "RuntimeError",
@@ -139,6 +141,7 @@
         "extraction_mode": "incremental",
         "failure_reason": "Quality validation failed: data.required_fields",
         "failure_stage": null,
+        "freshness_max_age_seconds": null,
         "malformed_rows": null,
         "materialized_outputs": [
           {

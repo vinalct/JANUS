@@ -19,6 +19,7 @@
   "strategy_family": "api",
   "summary": {
     "executed_run": {
+      "duration_budget_outcome": "undeclared",
       "error_type": "RuntimeError",
       "failure_reason": "scripted extraction failure",
       "materialized_outputs": [],

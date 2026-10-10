@@ -235,6 +235,58 @@ def test_every_captured_terminal_shape_carries_the_ac1_fields(tmp_path, monkeypa
         assert record.record_schema_version == 3
 
 
+@pytest.mark.parametrize("case", baseline.BASELINE_CASES)
+@pytest.mark.parametrize(
+    ("budget", "outcome"), [(None, "undeclared"), (5, "within"), (4, "exceeded")]
+)
+def test_budget_outcome_reaches_terminal_summary_and_source_attempt(
+    case, budget, outcome, tmp_path, monkeypatch
+):
+    from janus.models.config.types import OperationsConfig
+    from janus.orchestration import ExecutionTiming, SourceAttempt
+
+    source_payload = baseline.source_payload
+    evaluate = OperationsConfig.evaluate_duration
+    calls, executed = [], []
+
+    def budget_source(case):
+        payload = source_payload(case)
+        if budget is not None:
+            payload["operations"] = {"max_duration_seconds": budget}
+        return payload
+
+    def count_evaluation(self, duration_seconds):
+        calls.append(duration_seconds)
+        return evaluate(self, duration_seconds)
+
+    owner = baseline.RawToBronzeLoader if case == "replay" else baseline.SourceExecutor
+    method = "ingest" if case == "replay" else "execute"
+    original = getattr(owner, method)
+
+    def capture_result(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        executed.append(result)
+        return result
+
+    monkeypatch.setattr(baseline, "source_payload", budget_source)
+    monkeypatch.setattr(OperationsConfig, "evaluate_duration", count_evaluation)
+    monkeypatch.setattr(owner, method, capture_result)
+    manifest = baseline.capture_case(tmp_path, case)
+    assert calls == [5.0]
+    assert len(executed) == 1
+    result = executed[0]
+    assert result.duration_budget_outcome == outcome
+    assert manifest["summary"]["executed_run"]["duration_budget_outcome"] == outcome
+    assert result.status == ("failed" if case.endswith("failure") else "succeeded")
+    attempt = SourceAttempt.from_executed_run(
+        result,
+        timing=ExecutionTiming(baseline.STARTED_AT, baseline.FINISHED_AT, 5.0),
+    )
+    assert attempt.evidence["duration_budget_outcome"] == outcome
+    assert attempt.to_summary()["evidence"]["duration_budget_outcome"] == outcome
+    assert calls == [5.0], "summaries and pipeline evidence must not evaluate again"
+
+
 class TestOrder23Red:
     @staticmethod
     @pytest.mark.xfail(

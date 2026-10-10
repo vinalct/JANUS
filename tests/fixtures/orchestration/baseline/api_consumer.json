@@ -50,6 +50,8 @@
       ],
       "contract_id": "example.minimal",
       "contract_version": "1.0.0",
+      "duration_budget_outcome": "undeclared",
+      "duration_budget_seconds": null,
       "emitted_at": "2026-09-13T12:00:05+00:00",
       "environment": "local",
       "extraction_metadata": {
@@ -72,6 +74,7 @@
         "upstream_table_name": "a"
       },
       "extraction_mode": "full_refresh",
+      "freshness_max_age_seconds": null,
       "materialized_outputs": [
         {
           "format": "json",
@@ -172,10 +175,13 @@
       ],
       "contract_id": "example.minimal",
       "contract_version": "1.0.0",
+      "duration_budget_outcome": "undeclared",
+      "duration_budget_seconds": null,
       "duration_seconds": 5.0,
       "ended_at": "2026-09-13T12:00:05+00:00",
       "environment": "local",
       "extraction_mode": "full_refresh",
+      "freshness_max_age_seconds": null,
       "materialized_outputs": [
         {
           "format": "json",
@@ -358,6 +364,7 @@
         }
       ],
       "checkpoint_value": null,
+      "duration_budget_outcome": "undeclared",
       "extraction_metadata": {
         "attempt_count": "1",
         "auth_type": "none",

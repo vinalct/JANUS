@@ -64,6 +64,9 @@ LINEAGE_FIELD_MAPPING: dict[str, str] = {
     "plan_notes": "run.facets.janusRun.plan_notes",
     "extraction_metadata": "run.facets.janusRun.extraction_metadata",
     "metadata": "run.facets.janusRun.metadata",
+    "duration_budget_seconds": "run.facets.janusRun.duration_budget_seconds",
+    "duration_budget_outcome": "run.facets.janusRun.duration_budget_outcome",
+    "freshness_max_age_seconds": "run.facets.janusRun.freshness_max_age_seconds",
 }
 DELIBERATELY_DROPPED_LINEAGE_FIELDS: frozenset[str] = frozenset()
 
@@ -89,6 +92,9 @@ CUSTOM_ONLY_LINEAGE_FIELDS = frozenset(
         "plan_notes",
         "extraction_metadata",
         "metadata",
+        "duration_budget_seconds",
+        "duration_budget_outcome",
+        "freshness_max_age_seconds",
     }
 )
 

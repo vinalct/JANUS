@@ -18,6 +18,7 @@
   "strategy_family": "api",
   "summary": {
     "executed_run": {
+      "duration_budget_outcome": "undeclared",
       "handoff_artifact_count": 1,
       "materialized_outputs": [
         {

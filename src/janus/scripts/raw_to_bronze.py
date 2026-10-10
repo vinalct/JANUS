@@ -94,6 +94,7 @@ class RawToBronzeRun:
     error_type: str | None = None
     run_event_emission: RunEmissionResult | None = None
     failure_stage: str | None = None
+    duration_budget_outcome: str | None = None
 
     @property
     def is_successful(self) -> bool:
@@ -107,6 +108,7 @@ class RawToBronzeRun:
         )
         summary: dict[str, Any] = {
             "status": self.status,
+            "duration_budget_outcome": self.duration_budget_outcome,
             "raw_artifact_count": len(self.extraction_result.artifacts),
             "handoff_artifact_count": len(self.handoff.artifacts),
             "target_table": actual_bronze_path,
@@ -541,4 +543,7 @@ def _build_result(
         failure_reason=failure_reason,
         error_type=error_type,
         failure_stage=failure_stage,
+        duration_budget_outcome=getattr(
+            getattr(persisted, "run_metadata", None), "duration_budget_outcome", None
+        ),
     )
