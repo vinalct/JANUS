@@ -2,20 +2,28 @@
 
 Textfiles replace last-run state atomically. Failed runs preserve the previous
 last-success gauge: deleting it would stop freshness alerts when a source fails.
+
+StatsD uses the stdlib socket directly: JANUS has no UDP primitive to compose.
+It is fire-and-forget; a successful send cannot confirm that a receiver got it.
+DNS is resolved once when building the transport, outside the emission budget.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import re
+import socket
+import time
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from janus.observability.metrics.catalogue import (
@@ -24,7 +32,7 @@ from janus.observability.metrics.catalogue import (
     MetricType,
 )
 from janus.observability.metrics.exposition import ParsedSample, parse_exposition, render_exposition
-from janus.observability.metrics.settings import MetricsTransportKind
+from janus.observability.metrics.settings import MetricsTransportKind, StatsdMetricsSettings
 from janus.observability.openlineage.transport import PartialWriteError, WarningLogger, _append_line
 from janus.utils.storage import sanitize_identifier_segment
 
@@ -32,6 +40,10 @@ NOT_CONFIGURED_REASON = "transport_not_configured"
 PROFILE_ERROR_REASON = "transport_profile_error"
 METRICS_FILE_PREFIX = "metrics-"
 METRICS_FILE_SUFFIX = ".ndjson"
+SAFE_DATAGRAM_BYTES = 1432  # 1500-byte MTU - 20-byte IPv4 - 8-byte UDP - 40-byte margin.
+SEND_TIMEOUT_SECONDS = 0.5
+_STATSD_NAME = re.compile(r"[A-Za-z0-9_]+")
+_STATSD_TAG_SEPARATORS = str.maketrans({char: "_" for char in ",|:\n\r"})
 _LAST_SUCCESS = "janus_last_success_timestamp_seconds"
 _LOG = logging.getLogger(__name__)
 
@@ -317,6 +329,150 @@ class TextfileMetricsTransport:
             step=step,
             exception_type=type(exception).__name__,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class StatsdMetricsTransport:
+    """One UDP batch per run, using a pre-resolved address. No response or retry."""
+
+    address: tuple[str, int]
+    prefix: str
+    logger: WarningLogger | None = None
+
+    @property
+    def kind(self) -> str:
+        return MetricsTransportKind.STATSD.value
+
+    def send(
+        self, samples: Sequence[MetricSample], *, budget_seconds: float
+    ) -> MetricsEmissionResult:
+        started_at = time.monotonic()
+        step = "render"
+        connection = None
+        failure = None
+        current: tuple[MetricSample, ...] = ()
+        datagrams: tuple[bytes, ...] = ()
+        try:
+            current = tuple(sample for sample in samples if sample.value is not None)
+            if not current:
+                return MetricsEmissionResult(
+                    MetricsEmissionOutcome.SKIPPED, self.kind, reason="no_samples"
+                )
+            datagrams = _statsd_datagrams(current, self.prefix)
+            step = "budget"
+            if not math.isfinite(budget_seconds) or budget_seconds <= 0:
+                raise ValueError("a StatsD send requires a positive finite budget")
+            deadline = started_at + budget_seconds
+            if time.monotonic() >= deadline:
+                raise TimeoutError("the metrics emission budget is exhausted")
+            step = "socket_create"
+            connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            for payload in datagrams:
+                step = "budget"
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("the metrics emission budget is exhausted")
+                step = "settimeout"
+                connection.settimeout(min(remaining, SEND_TIMEOUT_SECONDS))
+                step = "send"
+                if connection.sendto(payload, self.address) != len(payload):
+                    raise PartialWriteError("the UDP send did not write a complete datagram")
+        except Exception as exc:
+            failure = (step, exc)
+        finally:
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception as exc:
+                    if failure is None:
+                        failure = ("close", exc)
+        if failure is not None:
+            step, exception = failure
+            result = MetricsEmissionResult(
+                MetricsEmissionOutcome.FAILED,
+                self.kind,
+                reason="partial_write"
+                if isinstance(exception, PartialWriteError)
+                else f"{step}_failed",
+                step=step,
+                exception_type=type(exception).__name__,
+            )
+            _statsd_warning(self.logger, {**result.to_summary(), "port": self.address[1]})
+            return result
+        return MetricsEmissionResult(
+            MetricsEmissionOutcome.EMITTED,
+            self.kind,
+            reason=f"datagrams_sent:{len(datagrams)}" if len(datagrams) > 1 else None,
+            sample_count=len(current),
+        )
+
+
+def build_statsd_transport(
+    settings: StatsdMetricsSettings, *, logger: WarningLogger | None = None
+) -> MetricsTransport:
+    """Resolve once before emission; report only the port and resolver failure type."""
+    try:
+        resolved = socket.getaddrinfo(
+            settings.host, settings.port, family=socket.AF_INET, type=socket.SOCK_DGRAM
+        )[0][4]
+    except OSError as exc:
+        reason = "statsd_address_unresolvable"
+        _statsd_warning(
+            logger,
+            {
+                "transport": MetricsTransportKind.STATSD.value,
+                "outcome": MetricsEmissionOutcome.SKIPPED.value,
+                "reason": reason,
+                "step": "address_resolution",
+                "port": settings.port,
+                "exception_type": type(exc).__name__,
+            },
+        )
+        return DisabledMetricsTransport(reason=reason, detail=type(exc).__name__)
+    # AF_INET restricts the resolver's union-typed address to an IPv4 pair.
+    return StatsdMetricsTransport(cast(tuple[str, int], resolved), settings.prefix, logger)
+
+
+def _statsd_datagrams(samples: Sequence[MetricSample], prefix: str) -> tuple[bytes, ...]:
+    """Pack whole lines greedily; an oversized single line cannot be split safely."""
+    if _STATSD_NAME.fullmatch(prefix) is None:
+        raise ValueError("invalid StatsD prefix")
+    datagrams: list[bytes] = []
+    batch = b""
+    for sample in samples:
+        name = sample.name.removeprefix("janus_")
+        if _STATSD_NAME.fullmatch(name) is None:
+            raise ValueError("invalid StatsD metric name")
+        if isinstance(sample.value, bool) or not isinstance(sample.value, int | float):
+            raise TypeError("metric values must be numeric")
+        if not math.isfinite(sample.value):
+            raise ValueError("metric values must be finite")
+        tags = ",".join(
+            f"{key}:{value.translate(_STATSD_TAG_SEPARATORS)}"
+            for key, value in sorted(_labels(sample).items())
+        )
+        metric_type = "g" if sample.metric_type is MetricType.GAUGE else "c"
+        line = f"{prefix}.{name}:{sample.value}|{metric_type}"
+        payload = (line + (f"|#{tags}" if tags else "")).encode("utf-8")
+        if len(payload) > SAFE_DATAGRAM_BYTES:
+            raise ValueError("one StatsD sample exceeds the safe datagram size")
+        if batch and len(batch) + 1 + len(payload) > SAFE_DATAGRAM_BYTES:
+            datagrams.append(batch)
+            batch = b""
+        batch = batch + b"\n" + payload if batch else payload
+    if batch:
+        datagrams.append(batch)
+    return tuple(datagrams)
+
+
+def _statsd_warning(logger: WarningLogger | None, fields: Mapping[str, Any]) -> None:
+    try:
+        if logger is None:
+            _LOG.warning("metrics_statsd_degraded", extra={"event_fields": dict(fields)})
+        else:
+            logger.warning("metrics_statsd_degraded", **fields)
+    except Exception:
+        pass
 
 
 def _textfile_samples(
