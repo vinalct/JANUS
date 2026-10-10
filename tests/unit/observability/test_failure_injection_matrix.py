@@ -147,7 +147,8 @@ def _sink_failure(
             )
 
         monkeypatch.setattr(iceberg_sink, "_append_unbounded", hang)
-    return config, paths, failure, release
+    expected_step = "schema_evolution" if failure == "schema_validation" else failure
+    return config, paths, expected_step, release
 
 
 @pytest.mark.parametrize("failure", RUNS_TABLE_FAILURES)

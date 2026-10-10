@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -191,6 +191,15 @@ V1_COLUMN_COUNT = 42
 V2_COLUMN_COUNT = 45
 V2_COLUMNS = ("schema_version", "contract_id", "contract_version")
 V3_COLUMNS = ("contract_preflight_outcome", "schema_evolution", "malformed_rows")
+ORDER23_COLUMNS = (
+    "duration_budget_seconds",
+    "duration_budget_outcome",
+    "freshness_max_age_seconds",
+    "request_count",
+    "retry_count",
+    "attempt_count",
+    "dead_letter_count",
+)
 
 
 def _v1_schema(dependencies):
@@ -515,14 +524,18 @@ def test_v1_schema_evolves_once_reloads_and_appends(monkeypatch, tmp_path):
     result = append_run_record(_record(), _config(), _paths(tmp_path))
 
     assert result.outcome is IcebergAppendOutcome.EMITTED
-    assert table.schema_update_count == 1, "v2 and v3 columns land in one transaction"
+    assert table.schema_update_count == 1, "all newer columns land in one transaction"
     assert catalog.loaded_tables == ["metadata.runs", "metadata.runs"]
-    assert [field.field_id for field in table.schema().fields[-6:]] == [*range(44, 50)]
-    assert [field.name for field in table.schema().fields[-6:]] == [*V2_COLUMNS, *V3_COLUMNS]
+    assert [field.field_id for field in table.schema().fields[V1_COLUMN_COUNT:]] == [*range(44, 57)]
+    assert [field.name for field in table.schema().fields[V1_COLUMN_COUNT:]] == [
+        *V2_COLUMNS,
+        *V3_COLUMNS,
+        *ORDER23_COLUMNS,
+    ]
     assert len(table.appended) == 1
 
 
-def test_v2_schema_evolves_to_v3_once_reloads_and_appends(monkeypatch, tmp_path):
+def test_v2_schema_evolves_once_reloads_and_appends(monkeypatch, tmp_path):
     catalog = FakeCatalog()
     dependencies, _captured = _dependencies(catalog)
     table = FakeTable(_v2_schema(dependencies))
@@ -535,9 +548,12 @@ def test_v2_schema_evolves_to_v3_once_reloads_and_appends(monkeypatch, tmp_path)
     assert table.schema_update_count == 1
     assert catalog.loaded_tables == ["metadata.runs", "metadata.runs"]
     assert len(table.schema().fields) == len(RUNS_TABLE_SCHEMA)
-    assert [field.field_id for field in table.schema().fields[-3:]] == [47, 48, 49]
-    assert [field.name for field in table.schema().fields[-3:]] == [*V3_COLUMNS]
-    assert all(not field.required for field in table.schema().fields[-3:])
+    assert [field.field_id for field in table.schema().fields[V2_COLUMN_COUNT:]] == [*range(47, 57)]
+    assert [field.name for field in table.schema().fields[V2_COLUMN_COUNT:]] == [
+        *V3_COLUMNS,
+        *ORDER23_COLUMNS,
+    ]
+    assert all(not field.required for field in table.schema().fields[V2_COLUMN_COUNT:])
     assert len(table.appended) == 1
 
 
@@ -568,10 +584,11 @@ def test_schema_evolution_refuses_unexpected_assigned_field_ids(monkeypatch, tmp
 
     result = append_run_record(_record(), _config(), _paths(tmp_path))
 
-    assert result.outcome is IcebergAppendOutcome.SKIPPED
+    assert result.outcome is IcebergAppendOutcome.FAILED
     assert result.reason == "live_schema_does_not_match_declaration_after_evolution"
-    assert result.step == "schema_validation"
-    assert [field.field_id for field in table.schema().fields[-6:]] == [*range(45, 51)]
+    assert result.step == "schema_evolution"
+    assert result.offending_field_ids == tuple(range(44, 58))
+    assert [field.field_id for field in table.schema().fields[V1_COLUMN_COUNT:]] == [*range(45, 58)]
     assert table.appended == []
 
 
@@ -592,7 +609,7 @@ def test_schema_evolution_work_remains_inside_the_append_budget(monkeypatch, tmp
     assert result.exception_type == "AppendTimeoutError"
 
 
-def test_schema_mismatch_skips_without_altering_or_appending(monkeypatch, tmp_path):
+def test_schema_mismatch_fails_without_altering_or_appending(monkeypatch, tmp_path):
     catalog = FakeCatalog()
     dependencies, _captured = _dependencies(catalog)
     mismatched = FakeTable(
@@ -603,8 +620,10 @@ def test_schema_mismatch_skips_without_altering_or_appending(monkeypatch, tmp_pa
 
     result = append_run_record(_record(), _config(), _paths(tmp_path))
 
-    assert result.outcome is IcebergAppendOutcome.SKIPPED
+    assert result.outcome is IcebergAppendOutcome.FAILED
     assert result.reason == "live_schema_does_not_match_declaration"
+    assert result.step == "schema_evolution"
+    assert 999 in result.offending_field_ids
     assert mismatched.live_schema == FakeSchema(
         (FakeField(999, "unexpected", FakePrimitive("string"), False),)
     )
@@ -634,3 +653,82 @@ def test_hung_catalog_work_is_bounded(monkeypatch, tmp_path):
     assert result.step == "budget"
     assert result.exception_type == "AppendTimeoutError"
     assert elapsed < 0.2
+
+
+@pytest.mark.parametrize("old_count", (V1_COLUMN_COUNT, V2_COLUMN_COUNT, 48))
+def test_order23_evolution_preserves_existing_fields_and_happens_only_once(
+    monkeypatch,
+    tmp_path,
+    old_count,
+):
+    catalog = FakeCatalog()
+    dependencies, _captured = _dependencies(catalog)
+    original = sink._declared_schema(dependencies, RUNS_TABLE_SCHEMA[:old_count])
+    table = FakeTable(original)
+    catalog.tables["metadata.runs"] = table
+    monkeypatch.setattr(sink, "_load_engine_dependencies", lambda: dependencies)
+    record = replace(_record(), request_count=2**31 + 1, dead_letter_count=0)
+    before = record.to_dict()
+    logger = CapturingLogger()
+
+    first = append_run_record(record, _config(), _paths(tmp_path), logger=logger)
+    second = append_run_record(record, _config(), _paths(tmp_path), logger=logger)
+
+    assert first.emitted and second.emitted
+    assert table.schema_update_count == 1
+    assert table.schema().fields[:old_count] == original.fields
+    assert [field.field_id for field in table.schema().fields[-7:]] == list(range(50, 57))
+    assert [field.name for field in table.schema().fields[-7:]] == list(ORDER23_COLUMNS)
+    assert len(table.appended) == 2
+    assert FakeArrowTable.rows[0]["request_count"] == 2**31 + 1
+    assert FakeArrowTable.rows[0]["dead_letter_count"] == 0
+    assert record.to_dict() == before
+    assert logger.warnings == []
+
+
+@pytest.mark.parametrize("conflict", ("rename", "retype", "requiredness", "unknown", "dropped"))
+def test_order23_schema_conflicts_name_ids_and_log_one_redacted_warning(
+    monkeypatch,
+    tmp_path,
+    conflict,
+):
+    catalog = FakeCatalog()
+    dependencies, _captured = _dependencies(catalog)
+    fields = list(sink._declared_schema(dependencies, RUNS_TABLE_SCHEMA[:48]).fields)
+    offending_id = fields[1].field_id
+    if conflict == "rename":
+        fields[1] = replace(fields[1], name="private_token=secret")
+    elif conflict == "retype":
+        fields[1] = replace(fields[1], field_type=FakePrimitive("private_secret_type"))
+    elif conflict == "requiredness":
+        fields[1] = replace(fields[1], required=False)
+    elif conflict == "unknown":
+        offending_id = 999
+        fields.append(
+            FakeField(offending_id, "private_secret_column", FakePrimitive("string"), False)
+        )
+    else:
+        del fields[1]
+    original = FakeSchema(tuple(fields))
+    table = FakeTable(original)
+    catalog.tables["metadata.runs"] = table
+    monkeypatch.setattr(sink, "_load_engine_dependencies", lambda: dependencies)
+    logger = CapturingLogger()
+    record = _record()
+    before = record.to_dict()
+
+    result = append_run_record(record, _config(), _paths(tmp_path), logger=logger)
+
+    assert result.outcome is IcebergAppendOutcome.FAILED
+    assert result.step == "schema_evolution"
+    assert offending_id in result.offending_field_ids
+    assert len(logger.warnings) == 1
+    event, warning = logger.warnings[0]
+    assert event == "runs_table_append_degraded"
+    assert warning["offending_field_ids"] == result.offending_field_ids
+    assert "private" not in repr(logger.warnings)
+    assert "secret" not in repr(logger.warnings)
+    assert table.schema() == original
+    assert table.schema_update_count == 0
+    assert table.appended == []
+    assert record.to_dict() == before

@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from janus.observability.records import RunRecord
 from janus.observability.runs_table import (
@@ -20,6 +20,16 @@ from janus.observability.runs_table import (
     RunsTableColumn,
     RunsTableTarget,
     resolve_runs_table,
+)
+from janus.observability.runs_table_evolution import (  # noqa: F401 -- preserve sink imports
+    AdditivePlan,
+    SchemaFieldInput,
+    SchemaFieldSignature,
+    _conflicting_field_ids,
+    _creation_columns,
+    _normalize_schema_field,
+    _plan_additive_evolution,
+    _schema_field_signatures,
 )
 from janus.utils.catalog_properties import (
     HadoopCatalogUnrepresentableError,
@@ -32,15 +42,6 @@ DEFAULT_APPEND_TIMEOUT_SECONDS = 5.0
 _UNRESOLVED_TABLE_IDENTIFIER = DEFAULT_RUNS_TABLE_IDENTIFIER
 _PARTITION_FIELD_ID_START = 1000
 _LOG = logging.getLogger(__name__)
-
-
-SchemaFieldSignature = tuple[int, str, str, bool, int | None, bool | None]
-_SCHEMA_FIELD_WITHOUT_NESTED_IDS_LENGTH = 4
-_SCHEMA_FIELD_WITH_ELEMENT_ID_LENGTH = 5
-_SCHEMA_FIELD_SIGNATURE_LENGTH = 6
-SchemaFieldInput = (
-    tuple[int, str, str, bool] | tuple[int, str, str, bool, int | None] | SchemaFieldSignature
-)
 
 
 class IcebergAppendReason(StrEnum):
@@ -68,6 +69,7 @@ class IcebergAppendResult:
     reason: str | None = None
     step: str | None = None
     exception_type: str | None = None
+    offending_field_ids: tuple[int, ...] = ()
 
     @property
     def emitted(self) -> bool:
@@ -76,13 +78,6 @@ class IcebergAppendResult:
 
 class _WarningLogger(Protocol):
     def warning(self, event: str, **fields: Any) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class AdditivePlan:
-    """Nullable declared columns that may be added to a live schema."""
-
-    columns: tuple[SchemaFieldSignature, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,12 +291,7 @@ def _validate_or_evolve_schema(
 
         plan = _plan_additive_evolution(live_fields, declared_fields)
         if plan is None:
-            return None, _skipped(
-                identifier,
-                reason=IcebergAppendReason.LIVE_SCHEMA_MISMATCH.value,
-                step="schema_validation",
-                exception_type="RunsTableSchemaMismatch",
-            )
+            return None, _schema_mismatch(identifier, live_fields, declared_fields)
         if not plan.columns:
             return live_schema, None
 
@@ -333,11 +323,11 @@ def _validate_or_evolve_schema(
             )
 
         if _schema_field_signatures(live_schema) != declared_fields:
-            return None, _skipped(
+            return None, _schema_mismatch(
                 identifier,
-                reason=IcebergAppendReason.LIVE_SCHEMA_MISMATCH_AFTER_EVOLUTION.value,
-                step="schema_validation",
-                exception_type="RunsTableSchemaMismatch",
+                _schema_field_signatures(live_schema),
+                declared_fields,
+                after_evolution=True,
             )
         return live_schema, None
     except Exception as exc:
@@ -346,6 +336,28 @@ def _validate_or_evolve_schema(
             step="schema_validation",
             exception_type=type(exc).__name__,
         )
+
+
+def _schema_mismatch(
+    identifier: str,
+    live: Sequence[SchemaFieldSignature],
+    declared: Sequence[SchemaFieldSignature],
+    *,
+    after_evolution: bool = False,
+) -> IcebergAppendResult:
+    reason = (
+        IcebergAppendReason.LIVE_SCHEMA_MISMATCH_AFTER_EVOLUTION
+        if after_evolution
+        else IcebergAppendReason.LIVE_SCHEMA_MISMATCH
+    )
+    return IcebergAppendResult(
+        IcebergAppendOutcome.FAILED,
+        identifier,
+        reason=reason.value,
+        step="schema_evolution",
+        exception_type="RunsTableSchemaMismatch",
+        offending_field_ids=_conflicting_field_ids(live, declared),
+    )
 
 
 def _ensure_namespace(
@@ -397,20 +409,6 @@ def _ensure_table(
     return table, None
 
 
-def _creation_columns(
-    columns: Sequence[RunsTableColumn] = RUNS_TABLE_SCHEMA,
-) -> tuple[RunsTableColumn, ...]:
-    """The longest declared prefix a fresh ``create_table`` numbers exactly as declared."""
-    for size in range(len(columns), 0, -1):
-        prefix = tuple(columns[:size])
-        element_ids = [column.element_id for column in prefix if column.element_id is not None]
-        if all(column.field_id == index for index, column in enumerate(prefix, 1)) and (
-            element_ids == list(range(size + 1, size + 1 + len(element_ids)))
-        ):
-            return prefix
-    return tuple(columns)
-
-
 def _declared_schema(
     dependencies: _EngineDependencies,
     columns: Sequence[RunsTableColumn] = RUNS_TABLE_SCHEMA,
@@ -436,74 +434,6 @@ def _iceberg_column_type(column: RunsTableColumn, dependencies: _EngineDependenc
             element_required=True,
         )
     return dependencies.primitive_types[column.iceberg_type]()
-
-
-def _schema_field_signatures(schema: Any) -> tuple[SchemaFieldSignature, ...]:
-    """Return the field identity needed to decide whether a change is additive."""
-    return tuple(
-        (
-            field.field_id,
-            field.name,
-            str(field.field_type),
-            field.required,
-            getattr(field.field_type, "element_id", None),
-            getattr(field.field_type, "element_required", None),
-        )
-        for field in schema.fields
-    )
-
-
-def _plan_additive_evolution(
-    live: Sequence[SchemaFieldInput],
-    declared: Sequence[SchemaFieldInput],
-) -> AdditivePlan | None:
-    """Plan only newer nullable IDs from 4/5/6-item host tuples; reject conflicts."""
-    live_fields = tuple(_normalize_schema_field(field) for field in live)
-    declared_fields = tuple(_normalize_schema_field(field) for field in declared)
-    live_by_id = {field[0]: field for field in live_fields}
-    declared_by_id = {field[0]: field for field in declared_fields}
-    live_by_name = {field[1]: field for field in live_fields}
-    declared_by_name = {field[1]: field for field in declared_fields}
-    if (
-        len(live_by_id) != len(live)
-        or len(declared_by_id) != len(declared)
-        or len(live_by_name) != len(live)
-        or len(declared_by_name) != len(declared)
-    ):
-        return None
-
-    for field in live_fields:
-        expected = declared_by_id.get(field[0])
-        same_name = declared_by_name.get(field[1])
-        if expected != field or same_name != field:
-            return None
-
-    missing = tuple(field for field in declared_fields if field[0] not in live_by_id)
-    highest_live_id = max(
-        (max(field[0], field[4] or 0) for field in live_fields),
-        default=0,
-    )
-    if any(field[3] or field[0] <= highest_live_id for field in missing):
-        return None
-    return AdditivePlan(columns=missing)
-
-
-def _normalize_schema_field(field: SchemaFieldInput) -> SchemaFieldSignature:
-    values = cast(tuple[Any, ...], field)
-    if len(values) not in {
-        _SCHEMA_FIELD_WITHOUT_NESTED_IDS_LENGTH,
-        _SCHEMA_FIELD_WITH_ELEMENT_ID_LENGTH,
-        _SCHEMA_FIELD_SIGNATURE_LENGTH,
-    }:
-        raise ValueError("schema field signatures must contain four, five, or six items")
-    return (
-        values[0],
-        values[1],
-        values[2],
-        values[3],
-        values[4] if len(values) > _SCHEMA_FIELD_WITHOUT_NESTED_IDS_LENGTH else None,
-        values[5] if len(values) > _SCHEMA_FIELD_WITH_ELEMENT_ID_LENGTH else None,
-    )
 
 
 def _declared_partition_spec(dependencies: _EngineDependencies) -> Any:
@@ -603,13 +533,15 @@ def _report(
 ) -> IcebergAppendResult:
     if result.emitted:
         return result
-    fields = {
+    fields: dict[str, Any] = {
         "outcome": result.outcome,
         "reason": result.reason,
         "step": result.step,
         "exception_type": result.exception_type,
         "table_identifier": result.table_identifier,
     }
+    if result.offending_field_ids:
+        fields["offending_field_ids"] = result.offending_field_ids
     try:
         if logger is None:
             _LOG.warning("runs_table_append_degraded", extra={"event_fields": fields})

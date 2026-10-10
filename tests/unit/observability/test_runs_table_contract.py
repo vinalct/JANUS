@@ -30,7 +30,7 @@ from janus.utils.environment import load_environment_config
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REST_ENV_PATH = PROJECT_ROOT / "conf" / "environments" / "cluster-rest.env.example"
 FORBIDDEN_IMPORT_ROOTS = ("pyspark", "pyiceberg", "pyarrow")
-EXPECTED_COLUMN_COUNT = 48
+EXPECTED_COLUMN_COUNT = 55
 V2_COLUMN_COUNT = 45
 
 EXPECTED_SCHEMA = (
@@ -82,6 +82,13 @@ EXPECTED_SCHEMA = (
     ("contract_preflight_outcome", "string", True),
     ("schema_evolution", "string", True),
     ("malformed_rows", "long", True),
+    ("duration_budget_seconds", "int", True),
+    ("duration_budget_outcome", "string", True),
+    ("freshness_max_age_seconds", "int", True),
+    ("request_count", "long", True),
+    ("retry_count", "long", True),
+    ("attempt_count", "long", True),
+    ("dead_letter_count", "long", True),
 )
 
 
@@ -159,7 +166,7 @@ def test_field_ids_are_stable_unique_and_include_the_list_element():
     )
     all_ids = [*field_ids, failed_checks.element_id]
 
-    assert field_ids == [*range(1, 43), *range(44, 50)]
+    assert field_ids == [*range(1, 43), *range(44, 57)]
     assert failed_checks.iceberg_type is IcebergType.STRING_LIST
     assert failed_checks.element_id == 43
     assert None not in all_ids
@@ -352,7 +359,7 @@ def test_declaration_stays_well_under_the_module_size_ceiling():
 def test_the_three_columns_are_appended_after_the_contract_identity():
     appended = tuple(
         (column.field_id, column.name, column.iceberg_type, column.nullable)
-        for column in RUNS_TABLE_SCHEMA[-3:]
+        for column in RUNS_TABLE_SCHEMA[V2_COLUMN_COUNT:48]
     )
 
     assert appended == (
@@ -362,27 +369,27 @@ def test_the_three_columns_are_appended_after_the_contract_identity():
     )
 
 
-def test_the_declaration_has_48_columns_and_nothing_was_renumbered():
-    assert len(RUNS_TABLE_SCHEMA) == 48
+def test_the_declaration_has_55_columns_and_nothing_was_renumbered():
+    assert len(RUNS_TABLE_SCHEMA) == 55
     assert [column.field_id for column in RUNS_TABLE_SCHEMA] == [
         *range(1, 43),
-        *range(44, 50),
+        *range(44, 57),
     ]
-    assert tuple(
-        (column.name, column.iceberg_type, column.nullable)
-        for column in RUNS_TABLE_SCHEMA[:V2_COLUMN_COUNT]
-    ) == EXPECTED_SCHEMA[:V2_COLUMN_COUNT]
+    assert (
+        tuple(
+            (column.name, column.iceberg_type, column.nullable)
+            for column in RUNS_TABLE_SCHEMA[:V2_COLUMN_COUNT]
+        )
+        == EXPECTED_SCHEMA[:V2_COLUMN_COUNT]
+    )
 
 
 def test_new_run_records_use_schema_version_three():
     assert RUN_RECORD_SCHEMA_VERSION == 3
 
 
-class TestOrder23Red:
+class TestOrder23Schema:
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True, reason="runs-table field ids 50-56 are absent"
-    )
     def test_field_ids_and_nullable_types_are_stable_after_all_reserved_ids():
         appended = tuple(
             (column.field_id, column.name, column.iceberg_type, column.nullable)
@@ -403,15 +410,11 @@ class TestOrder23Red:
                 (column.name, column.iceberg_type, column.nullable)
                 for column in RUNS_TABLE_SCHEMA[:-7]
             )
-            == EXPECTED_SCHEMA
+            == EXPECTED_SCHEMA[:-7]
         )
         assert RUNS_TABLE_SCHEMA[32].element_id == 43
 
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True,
-        reason="seven-field schema/projection drift coverage is absent",
-    )
     def test_extended_schema_and_projection_cover_each_other_both_ways():
         from dataclasses import fields
 
