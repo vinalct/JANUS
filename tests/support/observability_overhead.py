@@ -19,6 +19,7 @@ from tests.support import observability_baseline as baseline
 REPEATS = 30
 MEASURED_CASES = ("api_success", "quality_failure", "empty_handoff")
 GUARDED_EMISSION = "--guarded-emission" in sys.argv[1:]
+METRICS = "--metrics" in sys.argv[1:]
 
 
 def _successful_sink(*args: object, **kwargs: object) -> IcebergAppendResult:
@@ -35,7 +36,7 @@ class TimedObserver(baseline.FixedObserver):
     calls: ClassVar[list[tuple[str, int]]] = []
 
     def __init__(self) -> None:
-        if GUARDED_EMISSION:
+        if GUARDED_EMISSION or METRICS:
             super().__init__(
                 emitter=build_run_event_emitter({}, {}, runs_table_sink=_successful_sink)
             )

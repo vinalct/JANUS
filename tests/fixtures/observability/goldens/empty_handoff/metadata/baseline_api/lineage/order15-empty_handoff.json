@@ -1,0 +1,114 @@
+{
+  "artifacts": [
+    {
+      "checksum": "a119f76d9693de24d0e06e349c640358213872ab9717f63b17d4612e21e45c05",
+      "format": "json",
+      "path": "/workspace/data/metadata/order-23-evidence/golden-project/empty_handoff/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-empty_handoff/pages/page-0001.json"
+    }
+  ],
+  "checkpoint_field": "updated_at",
+  "checkpoint_strategy": "max_value",
+  "checkpoint_value": "2026-07-02",
+  "config_version": "527ac1de5e1778cfa53af4463d1ea263fd2d606943dedcdca4408ec8d2b2ba4a",
+  "configured_outputs": [
+    {
+      "format": "json",
+      "path": "/workspace/data/metadata/order-23-evidence/golden-project/empty_handoff/data/raw/baseline_api",
+      "zone": "raw"
+    },
+    {
+      "format": "iceberg",
+      "path": "/workspace/data/metadata/order-23-evidence/golden-project/empty_handoff/data/bronze/baseline_api",
+      "zone": "bronze"
+    },
+    {
+      "format": "json",
+      "path": "/workspace/data/metadata/order-23-evidence/golden-project/empty_handoff/data/metadata/baseline_api",
+      "zone": "metadata"
+    }
+  ],
+  "contract_id": "example.keyed",
+  "contract_version": "1.0.0",
+  "emitted_at": "2026-07-04T12:00:05+00:00",
+  "environment": "local",
+  "extraction_metadata": {
+    "attempt_count": "1",
+    "auth_type": "none",
+    "checkpoint_loaded": "false",
+    "dead_letter_count": "0",
+    "dead_letter_skipped_count": "0",
+    "pagination_concurrency": "1",
+    "pagination_type": "page_number",
+    "raw_path_prefix": "runs/ingestion_date=2026-07-04/run_id=order15-empty_handoff",
+    "records_extracted": "2",
+    "request_count": "1",
+    "request_input_count": "1",
+    "request_input_type": "none",
+    "retry_count": "0"
+  },
+  "extraction_mode": "full_refresh",
+  "materialized_outputs": [
+    {
+      "format": "json",
+      "metadata": {
+        "checksum": "a119f76d9693de24d0e06e349c640358213872ab9717f63b17d4612e21e45c05"
+      },
+      "mode": "overwrite",
+      "partition_by": [
+        "ingestion_date"
+      ],
+      "path": "/workspace/data/metadata/order-23-evidence/golden-project/empty_handoff/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-empty_handoff/pages/page-0001.json",
+      "records_written": 1,
+      "zone": "raw"
+    }
+  ],
+  "metadata": {
+    "strategy.artifact_count": "1",
+    "strategy.attempt_count": "1",
+    "strategy.auth_type": "none",
+    "strategy.checkpoint_loaded": "false",
+    "strategy.checkpoint_value": "2026-07-02",
+    "strategy.dead_letter_count": "0",
+    "strategy.dead_letter_skipped_count": "0",
+    "strategy.handoff_artifact_count": "0",
+    "strategy.handoff_bytes": "0",
+    "strategy.handoff_compaction": "hook",
+    "strategy.handoff_source_page_count": "1",
+    "strategy.pagination_concurrency": "1",
+    "strategy.pagination_type": "page_number",
+    "strategy.raw_path_prefix": "runs/ingestion_date=2026-07-04/run_id=order15-empty_handoff",
+    "strategy.records_extracted": "2",
+    "strategy.request_count": "1",
+    "strategy.request_input_count": "1",
+    "strategy.request_input_type": "none",
+    "strategy.request_timeout_seconds": "60",
+    "strategy.retry_count": "0",
+    "strategy.strategy_family": "api",
+    "strategy.strategy_variant": "page_number_api",
+    "strategy.write_result_count": "1"
+  },
+  "plan_notes": [
+    "strategy_family:api",
+    "strategy_variant:page_number_api",
+    "dispatch:api.page_number_api"
+  ],
+  "records_extracted": 2,
+  "run_attributes": {
+    "contract_preflight_outcome": "catalog_unavailable",
+    "source_hook": "order15.empty",
+    "source_id": "baseline_api",
+    "source_type": "api",
+    "strategy": "api",
+    "strategy_variant": "page_number_api",
+    "trigger": "baseline"
+  },
+  "run_id": "order15-empty_handoff",
+  "schema_version": "7531305ae748d87770d496ce14be356423ae36bfae50532322dfc22d228226e0",
+  "source_config_path": "/workspace/data/metadata/order-23-evidence/golden-project/empty_handoff/conf/sources/sources.yaml",
+  "source_hook": "order15.empty",
+  "source_id": "baseline_api",
+  "source_name": "Baseline api source",
+  "status": "succeeded",
+  "strategy_family": "api",
+  "strategy_variant": "page_number_api"
+}

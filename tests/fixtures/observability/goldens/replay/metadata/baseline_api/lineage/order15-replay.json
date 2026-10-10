@@ -1,0 +1,105 @@
+{
+  "artifacts": [
+    {
+      "checksum": "a119f76d9693de24d0e06e349c640358213872ab9717f63b17d4612e21e45c05",
+      "format": "json",
+      "path": "/workspace/data/metadata/order-23-evidence/golden-project/replay/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-replay/pages/page-0001.json"
+    }
+  ],
+  "checkpoint_field": "updated_at",
+  "checkpoint_strategy": "max_value",
+  "config_version": "02a1563ea7ef81060fdbc6fee03ac15d644ab4575a81fe934a145e9ad95a982d",
+  "configured_outputs": [
+    {
+      "format": "json",
+      "path": "/workspace/data/metadata/order-23-evidence/golden-project/replay/data/raw/baseline_api",
+      "zone": "raw"
+    },
+    {
+      "format": "iceberg",
+      "path": "/workspace/data/metadata/order-23-evidence/golden-project/replay/data/bronze/baseline_api",
+      "zone": "bronze"
+    },
+    {
+      "format": "json",
+      "path": "/workspace/data/metadata/order-23-evidence/golden-project/replay/data/metadata/baseline_api",
+      "zone": "metadata"
+    }
+  ],
+  "contract_id": "example.keyed",
+  "contract_version": "1.0.0",
+  "emitted_at": "2026-07-04T12:00:05+00:00",
+  "environment": "local",
+  "extraction_metadata": {
+    "raw_artifact_root": "/workspace/data/metadata/order-23-evidence/golden-project/replay/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-replay",
+    "raw_to_bronze": "true",
+    "rediscovered_raw_artifact_count": "1"
+  },
+  "extraction_mode": "full_refresh",
+  "materialized_outputs": [
+    {
+      "format": "json",
+      "metadata": {
+        "checksum": "a119f76d9693de24d0e06e349c640358213872ab9717f63b17d4612e21e45c05"
+      },
+      "mode": "overwrite",
+      "partition_by": [
+        "ingestion_date"
+      ],
+      "path": "/workspace/data/metadata/order-23-evidence/golden-project/replay/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-replay/pages/page-0001.json",
+      "records_written": 1,
+      "zone": "raw"
+    },
+    {
+      "format": "iceberg",
+      "metadata": {
+        "writer": "order15-baseline-compute-double"
+      },
+      "mode": "overwrite",
+      "partition_by": [
+        "ingestion_date"
+      ],
+      "path": "bronze.baseline_replay",
+      "records_written": 2,
+      "zone": "bronze"
+    }
+  ],
+  "metadata": {
+    "strategy.artifact_count": "1",
+    "strategy.auth_type": "none",
+    "strategy.handoff_artifact_count": "1",
+    "strategy.handoff_bytes": "169",
+    "strategy.handoff_compaction": "pages",
+    "strategy.handoff_source_page_count": "1",
+    "strategy.pagination_type": "page_number",
+    "strategy.raw_artifact_root": "/workspace/data/metadata/order-23-evidence/golden-project/replay/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-replay",
+    "strategy.raw_to_bronze": "true",
+    "strategy.records_extracted": "0",
+    "strategy.rediscovered_raw_artifact_count": "1",
+    "strategy.request_timeout_seconds": "60",
+    "strategy.strategy_family": "api",
+    "strategy.strategy_variant": "page_number_api",
+    "strategy.write_result_count": "2"
+  },
+  "plan_notes": [
+    "strategy_family:api",
+    "strategy_variant:page_number_api",
+    "dispatch:api.page_number_api"
+  ],
+  "run_attributes": {
+    "contract_preflight_outcome": "catalog_unavailable",
+    "source_id": "baseline_api",
+    "source_type": "api",
+    "strategy": "api",
+    "strategy_variant": "page_number_api",
+    "trigger": "baseline"
+  },
+  "run_id": "order15-replay",
+  "schema_version": "7531305ae748d87770d496ce14be356423ae36bfae50532322dfc22d228226e0",
+  "source_config_path": "/workspace/data/metadata/order-23-evidence/golden-project/replay/conf/sources/sources.yaml",
+  "source_id": "baseline_api",
+  "source_name": "Baseline api source",
+  "status": "succeeded",
+  "strategy_family": "api",
+  "strategy_variant": "page_number_api"
+}
