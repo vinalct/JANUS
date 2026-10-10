@@ -39,6 +39,10 @@ NOT_CONFIGURED_REASON = "transport_not_configured"
 PROFILE_ERROR_REASON = "transport_profile_error"
 
 
+class PartialWriteError(OSError):
+    """A single append could not write an intact NDJSON line; never retry it."""
+
+
 class WarningLogger(Protocol):
     """The one method every degradation path needs. Shared so the seam has one spelling."""
 
@@ -159,7 +163,7 @@ class FileOpenLineageTransport:
             return self._failed(path, step="directory_create", exception=exc)
 
         try:
-            writes = _append_line(path, payload)
+            _append_line(path, payload)
         except Exception as exc:
             return self._failed(path, step="append", exception=exc)
 
@@ -167,7 +171,6 @@ class FileOpenLineageTransport:
             outcome=OpenLineageEmissionOutcome.EMITTED,
             transport=self.kind,
             target=str(path),
-            reason="partial_write" if writes > 1 else None,
         )
 
     def _failed(self, path: Path, *, step: str, exception: Exception) -> OpenLineageEmissionResult:
@@ -175,7 +178,9 @@ class FileOpenLineageTransport:
             outcome=OpenLineageEmissionOutcome.FAILED,
             transport=self.kind,
             target=str(path),
-            reason=f"{step}_failed",
+            reason=(
+                "partial_write" if isinstance(exception, PartialWriteError) else f"{step}_failed"
+            ),
             step=step,
             exception_type=type(exception).__name__,
         )
@@ -345,19 +350,15 @@ def _serialize(event: Mapping[str, Any]) -> bytes:
     return json.dumps(dict(event), sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _append_line(path: Path, payload: bytes) -> int:
-    """Append ``payload`` plus a newline, reporting how many ``write(2)`` calls it took."""
+def _append_line(path: Path, payload: bytes) -> None:
+    """Append one complete line with one POSIX write, shared by telemetry transports."""
     line = payload + b"\n"
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-    writes = 0
     try:
-        written = 0
-        while written < len(line):
-            written += os.write(descriptor, line[written:])
-            writes += 1
+        if os.write(descriptor, line) != len(line):
+            raise PartialWriteError("the telemetry append did not write a complete line")
     finally:
         os.close(descriptor)
-    return writes
 
 
 def _event_day(event: Mapping[str, Any]) -> str:

@@ -407,6 +407,32 @@ def test_an_unwritable_events_directory_is_reported_not_raised(tmp_path):
     assert result.step == "directory_create"
 
 
+@pytest.mark.parametrize("written", [0, 1])
+def test_a_short_events_append_fails_without_retry(tmp_path, monkeypatch, written):
+    transport = FileOpenLineageTransport(directory=tmp_path)
+    calls, closed = [], []
+    real_close = os.close
+
+    def short_write(descriptor, content):
+        calls.append((descriptor, content))
+        return written
+
+    def close_spy(descriptor):
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(os, "write", short_write)
+    monkeypatch.setattr(os, "close", close_spy)
+    result = transport.send({"eventTime": "2026-10-09T12:00:00+00:00"}, budget_seconds=1)
+
+    assert result.outcome is OpenLineageEmissionOutcome.FAILED
+    assert result.reason == "partial_write"
+    assert result.step == "append"
+    assert result.exception_type == "PartialWriteError"
+    assert len(calls) == 1
+    assert closed == [calls[0][0]]
+
+
 # ── the HTTP transport ───────────────────────────────────────────────────────
 
 

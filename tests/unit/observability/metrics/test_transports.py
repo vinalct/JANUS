@@ -4,7 +4,8 @@ import re
 import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 
@@ -13,9 +14,9 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from tests.support.metrics_order23 import NOW, WarningSpy, record, samples, sink
 
-FILE_RED = pytest.mark.xfail(
+SINK_RED = pytest.mark.xfail(
     strict=True,
-    reason="disabled and append-only NDJSON metrics transports are absent",
+    reason="metrics sink warning and degradation paths are absent",
 )
 TEXT_RED = pytest.mark.xfail(
     strict=True,
@@ -33,6 +34,35 @@ def _validator():
     schema = json.loads(data)
     Draft202012Validator.check_schema(schema)
     return Draft202012Validator(schema, format_checker=FormatChecker())
+
+
+def _file_samples(root, **overrides):
+    from janus.observability.metrics.catalogue import label_values, run_metrics
+    from janus.observability.metrics.transport import MetricSample
+
+    projected = record(root, **overrides)
+    labels = tuple(sorted(label_values(projected).items()))
+    declarations = {metric.name: metric for metric in run_metrics()}
+    return (
+        MetricSample(
+            declaration=declarations["janus_run_duration_seconds"],
+            labels=labels,
+            value=projected.duration_seconds,
+            emitted_at=projected.emitted_at,
+        ),
+        MetricSample(
+            declaration=declarations["janus_run_total"],
+            labels=labels,
+            value=1,
+            emitted_at=projected.emitted_at,
+        ),
+    )
+
+
+def _file_transport(root):
+    from janus.observability.metrics.transport import FileMetricsTransport
+
+    return FileMetricsTransport(root / "metrics")
 
 
 def test_ndjson_schema_detector_accepts_a_clean_batch_and_matches_catalogue_labels():
@@ -77,26 +107,28 @@ def test_ndjson_schema_detector_rejects_deliberate_violations(violation):
         _validator().validate(payload)
 
 
-@FILE_RED
 def test_disabled_transport_returns_skipped_without_touching_disk(tmp_path):
     from janus.observability.metrics.transport import (
         DisabledMetricsTransport,
         MetricsEmissionOutcome,
     )
 
-    result = DisabledMetricsTransport().send(samples(tmp_path), budget_seconds=1)
+    result = DisabledMetricsTransport().send(_file_samples(tmp_path), budget_seconds=1)
     assert result.outcome is MetricsEmissionOutcome.SKIPPED
+    assert result.sample_count == 0
     assert not list(tmp_path.rglob("*"))
 
 
-@FILE_RED
 def test_file_output_is_one_schema_valid_line_per_run(tmp_path):
     from janus.observability.metrics.transport import MetricsEmissionOutcome
 
-    destination = sink(tmp_path, "file", path="metrics")
+    destination = _file_transport(tmp_path)
     for duration in (5.0, 7.5):
-        result = destination.emit(record(tmp_path, duration_seconds=duration), budget_seconds=1)
+        result = destination.send(
+            _file_samples(tmp_path, duration_seconds=duration), budget_seconds=1
+        )
         assert result.outcome is MetricsEmissionOutcome.EMITTED
+        assert result.sample_count == 2
     paths = list((tmp_path / "metrics").glob("*.ndjson"))
     assert len(paths) == 1
     raw = paths[0].read_bytes()
@@ -112,9 +144,8 @@ def test_file_output_is_one_schema_valid_line_per_run(tmp_path):
         assert "trigger" not in payload["labels"], "absent labels must be omitted"
 
 
-@FILE_RED
 def test_file_append_uses_one_write_and_o_append(tmp_path, monkeypatch):
-    destination = sink(tmp_path, "file", path="metrics")
+    destination = _file_transport(tmp_path)
     opened, written = [], []
     real_open, real_write = os.open, os.write
 
@@ -128,22 +159,25 @@ def test_file_append_uses_one_write_and_o_append(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "open", open_spy)
     monkeypatch.setattr(os, "write", write_spy)
-    destination.emit(record(tmp_path), budget_seconds=1)
+    destination.send(_file_samples(tmp_path), budget_seconds=1)
     assert len(written) == 1
     assert opened and all(flags & os.O_APPEND for flags in opened)
     _validator().validate(json.loads(written[0]))
 
 
-@FILE_RED
 def test_concurrent_file_writers_produce_intact_distinct_batches(tmp_path):
     from janus.observability.metrics.transport import MetricsEmissionOutcome
 
-    destination = sink(tmp_path, "file", path="metrics")
+    destination = _file_transport(tmp_path)
+    barrier = threading.Barrier(10)
 
     def write(index):
-        return destination.emit(record(tmp_path, duration_seconds=float(index)), budget_seconds=1)
+        barrier.wait(timeout=5)
+        return destination.send(
+            _file_samples(tmp_path, duration_seconds=float(index)), budget_seconds=1
+        )
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=10) as pool:
         results = list(pool.map(write, range(40)))
     assert len(results) == 40
     assert all(result.outcome is MetricsEmissionOutcome.EMITTED for result in results)
@@ -163,6 +197,223 @@ def test_concurrent_file_writers_produce_intact_distinct_batches(tmp_path):
             )
         )
     assert durations == set(range(40))
+
+
+@pytest.mark.parametrize(
+    ("reason", "detail", "reportable"),
+    [
+        ("transport_not_configured", None, False),
+        ("transport_not_configured", "invalid profile", True),
+        ("transport_profile_error", None, True),
+    ],
+)
+def test_disabled_transport_reports_only_configuration_problems(reason, detail, reportable):
+    from janus.observability.metrics.transport import DisabledMetricsTransport
+
+    destination = DisabledMetricsTransport(reason=reason, detail=detail)
+    assert destination.reportable is reportable
+    result = destination.send((), budget_seconds=0)
+    assert result.to_summary() == {
+        "outcome": "skipped",
+        "transport": "disabled",
+        "sample_count": 0,
+        "reason": reason,
+        "step": "transport_selection",
+    }
+
+
+def test_disabled_transport_does_not_inspect_the_samples():
+    from janus.observability.metrics.transport import DisabledMetricsTransport
+
+    class UnreadableSamples:
+        def __len__(self):
+            raise AssertionError("disabled delivery must not inspect samples")
+
+        def __getitem__(self, index):
+            raise AssertionError("disabled delivery must not read samples")
+
+    assert DisabledMetricsTransport().send(UnreadableSamples(), budget_seconds=0).sample_count == 0
+
+
+def test_file_day_comes_from_each_records_emitted_at(tmp_path):
+    destination = _file_transport(tmp_path)
+    for emitted_at in (NOW - timedelta(days=1), NOW):
+        result = destination.send(_file_samples(tmp_path, emitted_at=emitted_at), budget_seconds=1)
+        assert result.emitted
+        assert Path(result.target).name == f"metrics-{emitted_at.date().isoformat()}.ndjson"
+        payload = json.loads(Path(result.target).read_bytes())
+        assert payload["emitted_at"] == emitted_at.isoformat()
+    assert len(list(destination.directory.glob("*.ndjson"))) == 2
+
+
+def test_file_day_and_batch_timestamp_are_normalized_to_utc(tmp_path):
+    emitted_at = datetime(2026, 10, 8, 23, 30, tzinfo=timezone(timedelta(hours=-3)))
+    result = _file_transport(tmp_path).send(
+        _file_samples(tmp_path, emitted_at=emitted_at), budget_seconds=1
+    )
+    assert Path(result.target).name == "metrics-2026-10-09.ndjson"
+    assert json.loads(Path(result.target).read_bytes())["emitted_at"] == (
+        emitted_at.astimezone(UTC).isoformat()
+    )
+
+
+def test_file_omits_empty_and_absent_labels_and_escapes_values(tmp_path):
+    original = _file_samples(tmp_path)
+    escaped = tuple(
+        (name, 'quoted "value"\nline' if name == "source_id" else value)
+        for name, value in original[0].labels
+    )
+    labels = (*escaped, ("trigger", "   "))
+    batch = tuple(replace(sample, labels=labels) for sample in original)
+    result = _file_transport(tmp_path).send(batch, budget_seconds=1)
+    lines = Path(result.target).read_bytes().splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    _validator().validate(payload)
+    assert payload["labels"]["source_id"] == 'quoted "value"\nline'
+    assert "trigger" not in payload["labels"]
+    assert all("emitted_at" not in sample for sample in payload["samples"])
+
+
+@pytest.mark.parametrize("written", [0, 1])
+def test_short_file_write_fails_once_and_closes_the_descriptor(tmp_path, monkeypatch, written):
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+
+    calls, closed = [], []
+    real_close = os.close
+
+    def short_write(descriptor, content):
+        calls.append((descriptor, content))
+        return written
+
+    def close_spy(descriptor):
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(os, "write", short_write)
+    monkeypatch.setattr(os, "close", close_spy)
+    result = _file_transport(tmp_path).send(_file_samples(tmp_path), budget_seconds=1)
+    assert result.outcome is MetricsEmissionOutcome.FAILED
+    assert result.reason == "partial_write"
+    assert result.step == "append"
+    assert result.exception_type == "PartialWriteError"
+    assert result.sample_count == 0
+    assert len(calls) == 1
+    assert closed == [calls[0][0]]
+
+
+def test_unwritable_file_open_fails_at_append(tmp_path, monkeypatch):
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+
+    def denied(*args, **kwargs):
+        raise PermissionError("private directory")
+
+    monkeypatch.setattr(os, "open", denied)
+    result = _file_transport(tmp_path).send(_file_samples(tmp_path), budget_seconds=1)
+    assert result.outcome is MetricsEmissionOutcome.FAILED
+    assert result.step == "append"
+    assert result.reason == "append_failed"
+    assert result.exception_type == "PermissionError"
+    assert "private directory" not in repr(result.to_summary())
+
+
+def test_failing_file_mkdir_is_a_directory_create_failure(tmp_path, monkeypatch):
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+
+    def denied(*args, **kwargs):
+        raise PermissionError("private directory")
+
+    monkeypatch.setattr(Path, "mkdir", denied)
+    result = _file_transport(tmp_path).send(_file_samples(tmp_path), budget_seconds=1)
+    assert result.outcome is MetricsEmissionOutcome.FAILED
+    assert result.step == "directory_create"
+    assert result.reason == "directory_create_failed"
+    assert result.exception_type == "PermissionError"
+    assert not list(tmp_path.rglob("*"))
+
+
+def test_a_file_blocking_the_metrics_directory_is_reported_not_raised(tmp_path):
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+
+    (tmp_path / "metrics").write_bytes(b"not a directory")
+    result = _file_transport(tmp_path).send(_file_samples(tmp_path), budget_seconds=1)
+    assert result.outcome is MetricsEmissionOutcome.FAILED
+    assert result.step == "directory_create"
+    assert result.exception_type == "FileExistsError"
+
+
+@pytest.mark.parametrize("value", [object(), True, float("nan"), float("inf"), -float("inf")])
+def test_undeserialisable_sample_is_a_serialization_failure(tmp_path, value):
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+
+    batch = (replace(_file_samples(tmp_path)[0], value=value),)
+    result = _file_transport(tmp_path).send(batch, budget_seconds=1)
+    assert result.outcome is MetricsEmissionOutcome.FAILED
+    assert result.step == "serialization"
+    assert result.reason == "serialization_failed"
+    assert result.sample_count == 0
+    assert not list(tmp_path.rglob("*"))
+
+
+@pytest.mark.parametrize("violation", ["time", "scope", "labels", "unknown-label", "duplicate"])
+def test_inconsistent_or_unbounded_batch_is_a_serialization_failure(tmp_path, violation):
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+
+    first, second = _file_samples(tmp_path)
+    if violation == "time":
+        second = replace(second, emitted_at=NOW + timedelta(seconds=1))
+    elif violation == "scope":
+        second = replace(second, declaration=replace(second.declaration, scope="pipeline"))
+    elif violation == "labels":
+        second = replace(second, labels=(("source_id", "different-source"),))
+    elif violation == "unknown-label":
+        second = replace(second, labels=(*second.labels, ("run_id", "unbounded-id")))
+    else:
+        second = replace(second, labels=(*second.labels, second.labels[0]))
+    result = _file_transport(tmp_path).send((first, second), budget_seconds=1)
+    assert result.outcome is MetricsEmissionOutcome.FAILED
+    assert result.step == "serialization"
+    assert not list(tmp_path.rglob("*"))
+
+
+@pytest.mark.parametrize("emitted_at", [None, datetime(2026, 10, 9)])
+def test_missing_or_naive_batch_time_is_a_serialization_failure(tmp_path, emitted_at):
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+
+    batch = tuple(replace(sample, emitted_at=emitted_at) for sample in _file_samples(tmp_path))
+    result = _file_transport(tmp_path).send(batch, budget_seconds=1)
+    assert result.outcome is MetricsEmissionOutcome.FAILED
+    assert result.step == "serialization"
+    assert not list(tmp_path.rglob("*"))
+
+
+def test_empty_file_batch_is_skipped_without_touching_disk(tmp_path):
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+
+    result = _file_transport(tmp_path).send((), budget_seconds=1)
+    assert result.outcome is MetricsEmissionOutcome.SKIPPED
+    assert result.reason == "no_samples"
+    assert result.sample_count == 0
+    assert not list(tmp_path.rglob("*"))
+
+
+def test_metrics_and_openlineage_share_the_only_o_append_implementation():
+    import inspect
+
+    import janus.observability as observability
+    from janus.observability.metrics import transport as metrics_transport
+    from janus.observability.openlineage import transport as lineage_transport
+
+    root = Path(inspect.getfile(observability)).parent
+    modules = sorted(root.rglob("*.py"))
+    assert modules
+    mentions = [
+        path.relative_to(root).as_posix()
+        for path in modules
+        for _ in re.finditer(r"\bos\.O_APPEND\b", path.read_text(encoding="utf-8"))
+    ]
+    assert mentions == ["openlineage/transport.py"]
+    assert metrics_transport._append_line is lineage_transport._append_line
 
 
 @TEXT_RED
@@ -373,8 +624,9 @@ def test_unreachable_statsd_send_fails_once_without_retry_or_secret_warning(tmp_
     )
 
 
-@FILE_RED
-@pytest.mark.parametrize("kind", ["file", "textfile"])
+@pytest.mark.parametrize(
+    "kind", [pytest.param("file", marks=SINK_RED), pytest.param("textfile", marks=TEXT_RED)]
+)
 def test_unwritable_directory_is_a_failed_result_and_one_warning(kind, tmp_path):
     from janus.observability.metrics.transport import MetricsEmissionOutcome
 
@@ -386,7 +638,7 @@ def test_unwritable_directory_is_a_failed_result_and_one_warning(kind, tmp_path)
     assert len(warnings.warnings) == 1
 
 
-@FILE_RED
+@SINK_RED
 def test_raising_file_write_is_reported_without_exception_or_secret(tmp_path, monkeypatch):
     from janus.observability.metrics.transport import MetricsEmissionOutcome
 
@@ -409,7 +661,7 @@ def test_raising_file_write_is_reported_without_exception_or_secret(tmp_path, mo
 @pytest.mark.parametrize(
     "kind",
     [
-        pytest.param("file", marks=FILE_RED),
+        "file",
         pytest.param("textfile", marks=TEXT_RED),
         pytest.param("statsd", marks=UDP_RED),
     ],
@@ -430,8 +682,21 @@ def test_transport_output_cannot_leak_failure_credentials(kind, tmp_path):
             receiver.bind(("127.0.0.1", 0))
             receiver.settimeout(1)
             options["port"] = receiver.getsockname()[1]
-        destination = sink(tmp_path, kind, **options)
-        result = destination.emit(failed, budget_seconds=1)
+        if kind == "file":
+            result = _file_transport(tmp_path).send(
+                _file_samples(
+                    tmp_path,
+                    status="failed",
+                    failure_reason=secret,
+                    failure_reason_truncated=False,
+                    failure_reason_length=len(secret),
+                    error_type="OSError",
+                ),
+                budget_seconds=1,
+            )
+        else:
+            destination = sink(tmp_path, kind, **options)
+            result = destination.emit(failed, budget_seconds=1)
         output = (
             receiver.recvfrom(65535)[0]
             if kind == "statsd"
