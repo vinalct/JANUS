@@ -35,7 +35,6 @@ def _validator():
     return Draft202012Validator(schema, format_checker=FormatChecker())
 
 
-@FILE_RED
 def test_ndjson_schema_detector_accepts_a_clean_batch_and_matches_catalogue_labels():
     from janus.observability.metrics.catalogue import ALLOWED_LABELS
 
@@ -53,7 +52,6 @@ def test_ndjson_schema_detector_accepts_a_clean_batch_and_matches_catalogue_labe
     )
 
 
-@FILE_RED
 @pytest.mark.parametrize("violation", ["run_id", "unknown-field", "invalid-type", "empty-label"])
 def test_ndjson_schema_detector_rejects_deliberate_violations(violation):
     from jsonschema import ValidationError
