@@ -57,6 +57,11 @@ ALLOWANCES = {
         "unlink",
     ): "Removes only its own temporary file after failed atomic summary persistence.",
     (
+        "observability/metrics/transport.py",
+        "_remove_temporary",
+        "unlink",
+    ): "Removes only its own UUID temporary after a failed atomic textfile write or replace.",
+    (
         "writers/raw.py",
         "RawArtifactWriter.write_stream",
         "unlink",
@@ -256,7 +261,7 @@ def test_allowances_have_reasons_and_are_not_stale():
     ):
         assert all(reason.strip() for reason in allowances.values())
     assert set(ALLOWANCES) <= observed, "stale deletion allowance"
-    assert len(ALLOWANCES) == 9
+    assert len(ALLOWANCES) == 10
 
 
 def test_allowlisted_deletion_scopes_do_not_gain_additional_calls():

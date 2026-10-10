@@ -12,19 +12,13 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 
-from tests.support.metrics_order23 import NOW, WarningSpy, record, samples, sink
+from tests.support.metrics_order23 import NOW, WarningSpy, record, sink
 
 SINK_RED = pytest.mark.xfail(
     strict=True,
     reason="metrics sink warning and degradation paths are absent",
 )
-TEXT_RED = pytest.mark.xfail(
-    strict=True,
-    reason="strict exposition parser and atomic textfile transport are absent",
-)
-UDP_RED = pytest.mark.xfail(
-    strict=True, reason="bounded StatsD UDP transport is absent"
-)
+UDP_RED = pytest.mark.xfail(strict=True, reason="bounded StatsD UDP transport is absent")
 SCHEMA = Path(__file__).resolve().parents[3] / "fixtures/observability/metrics_ndjson.schema.json"
 
 
@@ -63,6 +57,40 @@ def _file_transport(root):
     from janus.observability.metrics.transport import FileMetricsTransport
 
     return FileMetricsTransport(root / "metrics")
+
+
+def _textfile_samples(root, **overrides):
+    from janus.observability.metrics.catalogue import run_metrics
+    from janus.observability.metrics.transport import MetricSample
+
+    if overrides.get("status") == "failed":
+        overrides.setdefault("failure_reason", "fixture failure")
+        overrides.setdefault("failure_reason_truncated", False)
+        overrides.setdefault("failure_reason_length", len(overrides["failure_reason"]))
+    batch = _file_samples(root, **overrides)
+    projected = record(root, **overrides)
+    declarations = {metric.name: metric for metric in run_metrics()}
+    names = ["janus_last_run_timestamp_seconds"]
+    if projected.status == "succeeded":
+        names.append("janus_last_success_timestamp_seconds")
+    return (
+        *batch,
+        *(
+            MetricSample(
+                declarations[name],
+                batch[0].labels,
+                projected.ended_at.timestamp(),
+                projected.emitted_at,
+            )
+            for name in names
+        ),
+    )
+
+
+def _textfile_transport(root, *, directory="metrics", logger=None):
+    from janus.observability.metrics.transport import TextfileMetricsTransport
+
+    return TextfileMetricsTransport(root / directory, logger=logger)
 
 
 def test_ndjson_schema_detector_accepts_a_clean_batch_and_matches_catalogue_labels():
@@ -416,17 +444,13 @@ def test_metrics_and_openlineage_share_the_only_o_append_implementation():
     assert metrics_transport._append_line is lineage_transport._append_line
 
 
-@TEXT_RED
 def test_textfile_round_trips_name_type_help_labels_and_value(tmp_path):
     from janus.observability.metrics.exposition import parse_exposition, render_exposition
     from janus.observability.metrics.transport import MetricsEmissionOutcome
 
-    expected = samples(tmp_path)
-    destination = sink(tmp_path, "textfile", path="metrics/textfile")
-    assert (
-        destination.emit(record(tmp_path), budget_seconds=1).outcome
-        is MetricsEmissionOutcome.EMITTED
-    )
+    expected = _textfile_samples(tmp_path)
+    destination = _textfile_transport(tmp_path, directory="metrics/textfile")
+    assert destination.send(expected, budget_seconds=1).outcome is MetricsEmissionOutcome.EMITTED
     paths = list((tmp_path / "metrics/textfile").glob("*.prom"))
     assert len(paths) == 1
     text = paths[0].read_text()
@@ -443,7 +467,6 @@ def test_textfile_round_trips_name_type_help_labels_and_value(tmp_path):
     assert dict(duration.labels)["source_id"] == "fixture.api"
 
 
-@TEXT_RED
 @pytest.mark.parametrize(
     "text",
     [
@@ -474,7 +497,6 @@ def test_exposition_detector_rejects_deliberate_violations(text):
         parse_exposition(text)
 
 
-@TEXT_RED
 def test_exposition_detector_accepts_independently_written_clean_input():
     from janus.observability.metrics.exposition import parse_exposition
 
@@ -492,16 +514,16 @@ def test_exposition_detector_accepts_independently_written_clean_input():
     assert dict(parsed[0].labels) == {"source_id": "fixture.api", "status": "succeeded"}
 
 
-@TEXT_RED
 def test_atomic_textfile_rewrite_never_exposes_partial_bytes_to_a_reader(tmp_path):
-    destination = sink(tmp_path, "textfile", path="metrics")
-    original, changed = record(tmp_path), record(tmp_path, duration_seconds=9.0)
-    destination.emit(original, budget_seconds=1)
+    destination = _textfile_transport(tmp_path)
+    original = _textfile_samples(tmp_path)
+    changed = _textfile_samples(tmp_path, duration_seconds=9.0)
+    assert destination.send(original, budget_seconds=1).emitted
     paths = list((tmp_path / "metrics").glob("*.prom"))
     assert len(paths) == 1
     path = paths[0]
     before = path.read_bytes()
-    destination.emit(changed, budget_seconds=1)
+    assert destination.send(changed, budget_seconds=1).emitted
     after = path.read_bytes()
     assert before and after and before != after
     ready, stop = threading.Event(), threading.Event()
@@ -520,7 +542,7 @@ def test_atomic_textfile_rewrite_never_exposes_partial_bytes_to_a_reader(tmp_pat
     try:
         assert ready.wait(2), "the reader must actually observe the target"
         for index in range(100):
-            destination.emit(original if index % 2 else changed, budget_seconds=1)
+            assert destination.send(original if index % 2 else changed, budget_seconds=1).emitted
     finally:
         stop.set()
         reader.join(timeout=2)
@@ -530,14 +552,13 @@ def test_atomic_textfile_rewrite_never_exposes_partial_bytes_to_a_reader(tmp_pat
     assert len(reads) > 1
 
 
-@TEXT_RED
 def test_failed_run_preserves_the_last_success_timestamp(tmp_path):
     from janus.observability.metrics.exposition import parse_exposition
 
-    destination = sink(tmp_path, "textfile", path="metrics")
+    destination = _textfile_transport(tmp_path)
     succeeded = record(tmp_path)
-    destination.emit(succeeded, budget_seconds=1)
-    failed = record(
+    assert destination.send(_textfile_samples(tmp_path), budget_seconds=1).emitted
+    failed_samples = _textfile_samples(
         tmp_path,
         status="failed",
         started_at=NOW,
@@ -549,7 +570,8 @@ def test_failed_run_preserves_the_last_success_timestamp(tmp_path):
         failure_reason_length=15,
         error_type="RuntimeError",
     )
-    destination.emit(failed, budget_seconds=1)
+    result = destination.send(failed_samples, budget_seconds=1)
+    assert result.emitted and result.sample_count == 4
     paths = list((tmp_path / "metrics").glob("*.prom"))
     assert len(paths) == 1
     parsed = parse_exposition(paths[0].read_text())
@@ -559,8 +581,298 @@ def test_failed_run_preserves_the_last_success_timestamp(tmp_path):
     last_run = next(
         sample for sample in parsed if sample.name == "janus_last_run_timestamp_seconds"
     )
-    assert last_run.value == failed.ended_at.timestamp()
+    assert last_run.value == (NOW + timedelta(hours=1)).timestamp()
     assert last_run.value > success[0].value
+    assert dict(last_run.labels)["status"] == "failed"
+    assert dict(success[0].labels)["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("source_id", ["../escape", "../../outside/source", "a/b", "..\\escape"])
+def test_textfile_filename_sanitizes_hostile_source_ids_without_escaping(tmp_path, source_id):
+    from janus.utils.storage import sanitize_identifier_segment
+
+    destination = _textfile_transport(tmp_path)
+    result = destination.send(_textfile_samples(tmp_path, source_id=source_id), budget_seconds=1)
+    path = Path(result.target)
+    assert result.emitted
+    assert path.parent == destination.directory
+    assert path.name == f"{sanitize_identifier_segment(source_id)}.prom"
+    assert path.resolve().is_relative_to(destination.directory.resolve())
+
+
+def test_textfile_replaces_last_run_and_keeps_one_file_per_source(tmp_path):
+    from janus.observability.metrics.exposition import parse_exposition
+
+    destination = _textfile_transport(tmp_path)
+    first = destination.send(_textfile_samples(tmp_path), budget_seconds=1)
+    assert first.emitted
+    assert destination.send(
+        _textfile_samples(tmp_path, duration_seconds=9.0), budget_seconds=1
+    ).emitted
+    assert destination.send(
+        _textfile_samples(tmp_path, source_id="other.source"), budget_seconds=1
+    ).emitted
+    paths = sorted(destination.directory.glob("*.prom"))
+    assert [path.name for path in paths] == ["fixture_api.prom", "other_source.prom"]
+    parsed = parse_exposition(Path(first.target).read_text())
+    duration = [sample for sample in parsed if sample.name == "janus_run_duration_seconds"]
+    assert len(duration) == 1 and duration[0].value == 9.0
+
+
+def test_textfile_temp_is_in_target_directory_and_readable_before_replace(tmp_path, monkeypatch):
+    destination = _textfile_transport(tmp_path)
+    replacements = []
+    real_replace = os.replace
+
+    def replace_spy(temporary, target):
+        assert temporary.parent == target.parent == destination.directory
+        assert temporary.name.startswith(f".{target.name}.") and temporary.suffix == ".tmp"
+        assert temporary.stat().st_mode & 0o777 == 0o644
+        replacements.append((temporary, target))
+        real_replace(temporary, target)
+
+    monkeypatch.setattr(os, "replace", replace_spy)
+    previous_umask = os.umask(0o077)
+    try:
+        result = destination.send(_textfile_samples(tmp_path), budget_seconds=1)
+    finally:
+        os.umask(previous_umask)
+    assert result.emitted
+    assert len(replacements) == 1
+    assert Path(result.target).stat().st_mode & 0o777 == 0o644
+    assert not list(destination.directory.glob("*.tmp"))
+
+
+def test_textfile_failure_without_prior_success_has_no_success_placeholder(tmp_path):
+    from janus.observability.metrics.exposition import parse_exposition
+
+    result = _textfile_transport(tmp_path).send(
+        _textfile_samples(tmp_path, status="failed"), budget_seconds=1
+    )
+    assert result.emitted and result.sample_count == 3
+    parsed = parse_exposition(Path(result.target).read_text())
+    assert not any(sample.name == "janus_last_success_timestamp_seconds" for sample in parsed)
+
+
+def test_textfile_keeps_success_across_repeated_failures_then_refreshes_it(tmp_path):
+    from janus.observability.metrics.exposition import parse_exposition
+
+    destination = _textfile_transport(tmp_path)
+    result = destination.send(_textfile_samples(tmp_path), budget_seconds=1)
+    for hours in (1, 2, 3):
+        result = destination.send(
+            _textfile_samples(tmp_path, status="failed", ended_at=NOW + timedelta(hours=hours)),
+            budget_seconds=1,
+        )
+        assert result.emitted
+        parsed = parse_exposition(Path(result.target).read_text())
+        success = next(
+            item for item in parsed if item.name == "janus_last_success_timestamp_seconds"
+        )
+        assert success.value == NOW.timestamp()
+    result = destination.send(
+        _textfile_samples(tmp_path, ended_at=NOW + timedelta(hours=4)), budget_seconds=1
+    )
+    parsed = parse_exposition(Path(result.target).read_text())
+    success = [item for item in parsed if item.name == "janus_last_success_timestamp_seconds"]
+    assert len(success) == 1 and success[0].value == (NOW + timedelta(hours=4)).timestamp()
+
+
+@pytest.mark.parametrize("content", [b"corrupt token=secret-token\n", b"\xff\n"])
+def test_textfile_discards_corrupt_existing_content_with_one_safe_warning(tmp_path, content):
+    from janus.observability.metrics.exposition import parse_exposition
+
+    warnings = WarningSpy()
+    destination = _textfile_transport(tmp_path, logger=warnings)
+    destination.directory.mkdir()
+    path = destination.path_for({"source_id": "fixture.api"})
+    path.write_bytes(content)
+    result = destination.send(_textfile_samples(tmp_path, status="failed"), budget_seconds=1)
+    assert result.emitted
+    assert len(warnings.warnings) == 1
+    assert warnings.warnings[0][0] == "metrics_textfile_existing_discarded"
+    assert warnings.warnings[0][1]["step"] == "read_existing"
+    assert "secret-token" not in repr(warnings.warnings)
+    assert parse_exposition(path.read_text())
+
+
+def test_textfile_default_warning_is_safe_and_raising_logger_cannot_break_rewrite(tmp_path, caplog):
+    destination = _textfile_transport(tmp_path)
+    destination.directory.mkdir()
+    path = destination.path_for({"source_id": "fixture.api"})
+    path.write_text("malformed credential=secret-token\n")
+    assert destination.send(_textfile_samples(tmp_path, status="failed"), budget_seconds=1).emitted
+    assert len(caplog.records) == 1
+    assert "secret-token" not in repr(caplog.records[0].__dict__)
+
+    class BrokenLogger:
+        def warning(self, *args, **kwargs):
+            raise RuntimeError("logger unavailable")
+
+    destination = _textfile_transport(tmp_path, logger=BrokenLogger())
+    path.write_text("malformed\n")
+    assert destination.send(_textfile_samples(tmp_path, status="failed"), budget_seconds=1).emitted
+
+
+@pytest.mark.parametrize(
+    "step", ["render", "read_existing", "directory_create", "write_temp", "replace"]
+)
+def test_each_textfile_failure_step_returns_safe_failure_and_preserves_the_previous_file(
+    tmp_path, monkeypatch, step
+):
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+
+    destination = _textfile_transport(tmp_path)
+    original = destination.send(_textfile_samples(tmp_path), budget_seconds=1)
+    path = Path(original.target)
+    before = path.read_bytes()
+    batch = _textfile_samples(tmp_path, status="failed")
+    calls = []
+
+    def denied(*args, **kwargs):
+        calls.append(args)
+        raise PermissionError("https://user:credential@private.invalid?token=secret-token")
+
+    if step == "render":
+        monkeypatch.setattr("janus.observability.metrics.transport.render_exposition", denied)
+    elif step == "read_existing":
+        monkeypatch.setattr(Path, "read_text", denied)
+    elif step == "directory_create":
+        monkeypatch.setattr(Path, "mkdir", denied)
+    elif step == "write_temp":
+        monkeypatch.setattr(Path, "write_text", denied)
+    else:
+        monkeypatch.setattr(os, "replace", denied)
+    result = destination.send(batch, budget_seconds=1)
+    assert result.outcome is MetricsEmissionOutcome.FAILED
+    assert result.step == step and result.reason == f"{step}_failed"
+    assert result.exception_type == "PermissionError" and result.sample_count == 0
+    assert len(calls) == 1
+    assert path.read_bytes() == before
+    assert not list(destination.directory.glob("*.tmp"))
+    assert not any(
+        secret in repr(result.to_summary())
+        for secret in ("credential", "private.invalid", "secret-token")
+    )
+
+
+@pytest.mark.parametrize("failure", ["short-write", "partial-write", "chmod"])
+def test_textfile_temp_failure_cleans_up_and_does_not_replace(tmp_path, monkeypatch, failure):
+    destination = _textfile_transport(tmp_path)
+    original = destination.send(_textfile_samples(tmp_path), budget_seconds=1)
+    path = Path(original.target)
+    before = path.read_bytes()
+    real_write = Path.write_text
+
+    def broken_write(temporary, payload, **kwargs):
+        real_write(temporary, payload[:8], **kwargs)
+        if failure == "partial-write":
+            raise OSError("disk full")
+        return 8
+
+    def broken_chmod(*args, **kwargs):
+        raise PermissionError("chmod denied")
+
+    if failure == "chmod":
+        monkeypatch.setattr(Path, "chmod", broken_chmod)
+    else:
+        monkeypatch.setattr(Path, "write_text", broken_write)
+    result = destination.send(_textfile_samples(tmp_path), budget_seconds=1)
+    assert not result.emitted and result.step == "write_temp"
+    assert path.read_bytes() == before
+    assert not list(destination.directory.glob("*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "violation", ["different-source", "pipeline", "unknown-label", "false-success"]
+)
+def test_textfile_rejects_mixed_sources_pipeline_samples_and_invalid_labels(tmp_path, violation):
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+
+    batch = _textfile_samples(tmp_path)
+    first = batch[0]
+    if violation == "different-source":
+        first = replace(first, labels=(("source_id", "other"),))
+    elif violation == "pipeline":
+        first = replace(first, declaration=replace(first.declaration, scope="pipeline"))
+    elif violation == "unknown-label":
+        first = replace(first, labels=(*first.labels, ("run_id", "unbounded")))
+    else:
+        batch = tuple(
+            replace(
+                item,
+                labels=tuple(
+                    (key, "failed" if key == "status" else value) for key, value in item.labels
+                ),
+            )
+            for item in batch
+        )
+        first = batch[0]
+    result = _textfile_transport(tmp_path).send((first, *batch[1:]), budget_seconds=1)
+    assert result.outcome is MetricsEmissionOutcome.FAILED and result.step == "render"
+    assert not list(tmp_path.rglob("*"))
+
+
+def test_empty_or_absent_textfile_batch_is_skipped_without_touching_disk(tmp_path):
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+
+    destination = _textfile_transport(tmp_path)
+    for batch in ((), tuple(replace(item, value=None) for item in _textfile_samples(tmp_path))):
+        result = destination.send(batch, budget_seconds=1)
+        assert result.outcome is MetricsEmissionOutcome.SKIPPED and result.reason == "no_samples"
+    assert not list(tmp_path.rglob("*"))
+
+
+@pytest.mark.parametrize("source_id", ["", "  ", "..", "/../../"])
+def test_textfile_rejects_source_ids_without_a_safe_identifier(tmp_path, source_id):
+    batch = tuple(
+        replace(
+            sample,
+            labels=tuple(
+                (key, source_id if key == "source_id" else value) for key, value in sample.labels
+            ),
+        )
+        for sample in _textfile_samples(tmp_path)
+    )
+    result = _textfile_transport(tmp_path).send(batch, budget_seconds=1)
+    assert not result.emitted and result.step == "render"
+    assert not list(tmp_path.rglob("*"))
+
+
+def test_textfile_omits_absent_and_empty_labels_and_keeps_measured_zero(tmp_path):
+    from janus.observability.metrics.exposition import parse_exposition
+
+    batch = _textfile_samples(tmp_path, duration_seconds=0.0)
+    batch = tuple(replace(item, labels=(*item.labels, ("trigger", "  "))) for item in batch)
+    result = _textfile_transport(tmp_path).send(
+        (*batch, replace(batch[0], value=None)), budget_seconds=1
+    )
+    assert result.emitted and result.sample_count == len(batch)
+    parsed = parse_exposition(Path(result.target).read_text())
+    assert all("trigger" not in dict(item.labels) for item in parsed)
+    assert next(item for item in parsed if item.name == "janus_run_duration_seconds").value == 0
+
+
+@pytest.mark.parametrize("violation", ["source", "unbounded-label", "type", "multiple-successes"])
+def test_textfile_discards_invalid_retained_success_samples(tmp_path, violation):
+    warnings = WarningSpy()
+    destination = _textfile_transport(tmp_path, logger=warnings)
+    destination.directory.mkdir()
+    path = destination.path_for({"source_id": "fixture.api"})
+    name = "janus_last_success_timestamp_seconds"
+    metric_type = "counter" if violation == "type" else "gauge"
+    source = "different" if violation == "source" else "fixture.api"
+    labels = f'source_id="{source}"'
+    if violation == "unbounded-label":
+        labels += ',run_id="unbounded"'
+    text = f"# HELP {name} Last success.\n# TYPE {name} {metric_type}\n{name}{{{labels}}} 123.0\n"
+    if violation == "multiple-successes":
+        text += f'{name}{{source_id="fixture.api",status="succeeded"}} 456.0\n'
+    path.write_text(text)
+    result = destination.send(_textfile_samples(tmp_path, status="failed"), budget_seconds=1)
+    assert result.emitted and result.sample_count == 3
+    assert name not in path.read_text()
+    assert len(warnings.warnings) == 1
 
 
 @UDP_RED
@@ -625,7 +937,7 @@ def test_unreachable_statsd_send_fails_once_without_retry_or_secret_warning(tmp_
 
 
 @pytest.mark.parametrize(
-    "kind", [pytest.param("file", marks=SINK_RED), pytest.param("textfile", marks=TEXT_RED)]
+    "kind", [pytest.param("file", marks=SINK_RED), pytest.param("textfile", marks=SINK_RED)]
 )
 def test_unwritable_directory_is_a_failed_result_and_one_warning(kind, tmp_path):
     from janus.observability.metrics.transport import MetricsEmissionOutcome
@@ -662,7 +974,7 @@ def test_raising_file_write_is_reported_without_exception_or_secret(tmp_path, mo
     "kind",
     [
         "file",
-        pytest.param("textfile", marks=TEXT_RED),
+        "textfile",
         pytest.param("statsd", marks=UDP_RED),
     ],
 )
@@ -685,6 +997,18 @@ def test_transport_output_cannot_leak_failure_credentials(kind, tmp_path):
         if kind == "file":
             result = _file_transport(tmp_path).send(
                 _file_samples(
+                    tmp_path,
+                    status="failed",
+                    failure_reason=secret,
+                    failure_reason_truncated=False,
+                    failure_reason_length=len(secret),
+                    error_type="OSError",
+                ),
+                budget_seconds=1,
+            )
+        elif kind == "textfile":
+            result = _textfile_transport(tmp_path).send(
+                _textfile_samples(
                     tmp_path,
                     status="failed",
                     failure_reason=secret,
