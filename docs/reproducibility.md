@@ -659,6 +659,15 @@ snapshots and 30 days in the shipped profiles), unless a source declares its own
 
 ## CI timing and coverage
 
+Make's container `exec` commands explicitly run the image entrypoint before launching
+Python or a shell. Unlike `compose run`, `compose exec` bypasses that entrypoint and does
+not inherit exports from the container's initial process. Each new command therefore
+initializes its own account view when the host uid is absent from the image, giving the
+JVM an absolute home directory without changing `/etc/passwd`. Account files are private
+to each invocation so concurrent commands cannot overwrite one another's identity.
+`make test-spark-startup` checks account resolution, the JVM home, and a real Spark SQL
+query through this exec path. Both local and hosted CI run it before coverage.
+
 The hosted Spark job sets `JANUS_CONTAINER_ENGINE=docker` for every Make invocation,
 matching the engine into which buildx loads `janus:local`. Locally the default is `auto`:
 Make prefers Podman, then Docker, only after a read-only Compose `ps` succeeds against
