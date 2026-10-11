@@ -664,6 +664,9 @@ ALLOWED_SESSION_FREE_IMPORTS = {
     # `status --from-runs-table` scans history through the shared catalog without
     # acquiring a session; metadata-zone reads never import this dependency.
     "observability/freshness.py": frozenset({"pyiceberg"}),
+    # The CLI imports its catalog loader only after --from-runs-table is selected;
+    # its anchored lazy-site register permits exactly this engine and this module.
+    "cli/status.py": frozenset({"pyiceberg"}),
     # SQLAlchemy inspects SQL catalog metadata without bootstrapping it. Both
     # dependencies remain lazy and confined to this session-free adapter.
     "runtime/contract_preflight.py": frozenset({"pyiceberg", "sqlalchemy"}),

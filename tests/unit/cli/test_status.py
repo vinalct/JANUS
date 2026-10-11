@@ -205,9 +205,14 @@ def test_runs_table_reader_matches_zone_using_one_fake_catalog_scan(zone, monkey
 
 
 @pytest.mark.parametrize("from_table", [False, True])
-def test_status_paths_import_no_spark_in_a_fresh_process(from_table, zone):
+def test_status_paths_import_no_spark_in_a_fresh_process(from_table, zone, record_property):
     script = """
 import builtins, contextlib, io, json, sys, types
+engine_roots = ('pyspark', 'pyiceberg', 'pyarrow')
+def loaded_engines():
+    return sorted({name.split('.', 1)[0] for name in sys.modules
+                   if name.split('.', 1)[0] in engine_roots})
+assert loaded_engines() == [], loaded_engines()
 rows = json.loads(sys.argv[2])
 from datetime import datetime
 for row in rows:
@@ -217,7 +222,8 @@ class Table:
     def to_arrow(self): return self
     def to_pylist(self): return rows
 import janus.cli.status
-assert not [name for name in sys.modules if name.split('.', 1)[0] in ('pyspark', 'pyiceberg')]
+after_import = loaded_engines()
+assert after_import == [], after_import
 original_import = builtins.__import__
 def offline_import(name, *args, **kwargs):
     module = original_import(name, *args, **kwargs)
@@ -230,9 +236,13 @@ argv = json.loads(sys.argv[1])
 with contextlib.redirect_stdout(io.StringIO()):
     code = main(argv)
 assert code == 1, code
-assert not [name for name in sys.modules if name == 'pyspark' or name.startswith('pyspark.')]
-assert ('pyiceberg' in sys.modules) == ('--from-runs-table' in argv)
-print(json.dumps({'pyspark': False, 'pyiceberg': 'pyiceberg' in sys.modules}))
+after_status = loaded_engines()
+if '--from-runs-table' in argv:
+    assert 'pyiceberg' in after_status, after_status
+    assert 'pyspark' not in after_status, after_status
+else:
+    assert after_status == [], after_status
+print(json.dumps({'after_import': after_import, 'after_status': after_status, 'exit_code': code}))
 """
     rows = [
         {
@@ -257,7 +267,15 @@ print(json.dumps({'pyspark': False, 'pyiceberg': 'pyiceberg' in sys.modules}))
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {"pyspark": False, "pyiceberg": from_table}
+    transcript = json.loads(result.stdout)
+    record_property("engine_modules", transcript)
+    assert transcript["after_import"] == []
+    assert transcript["exit_code"] == 1
+    if from_table:
+        assert "pyiceberg" in transcript["after_status"]
+        assert "pyspark" not in transcript["after_status"]
+    else:
+        assert transcript["after_status"] == []
 
 
 def test_unreadable_only_history_reports_never_ran_with_a_count(zone, capsys):

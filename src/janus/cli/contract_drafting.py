@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from janus.models import ContractProperty, ExtractionResult, SourceConfig
+from janus.runtime.contract_drafting import DataProfile as _DataProfile
+from janus.runtime.contract_drafting import profile_dataframe
 from janus.schema_contracts import contract_properties_from_spark_schema
 
 _DRAFT_REQUEST_ATTRIBUTE = "janus.contract_draft"
@@ -23,31 +25,9 @@ class _DraftInput:
     fixture_paths: tuple[Path, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class _DataProfile:
-    schema: Any
-    row_count: int
-    null_counts: tuple[int, ...]
-
-
 def _profile_dataframe(dataframe: Any) -> _DataProfile:
-    """Infer all null counts in one aggregate action, then count the rows once."""
-    from pyspark.sql.functions import col, count, lit, when
-
-    schema = dataframe.schema
-    names = tuple(field.name for field in schema.fields)
-    if names:
-        null_expressions = tuple(
-            count(
-                when(col(f"`{name.replace('`', '``')}`").isNull(), lit(1))
-            ).alias(f"__janus_null_{index}")
-            for index, name in enumerate(names)
-        )
-        null_row = dataframe.select(*null_expressions).first()
-        null_counts = tuple(int(null_row[index] or 0) for index in range(len(names)))
-    else:
-        null_counts = ()
-    return _DataProfile(schema=schema, row_count=int(dataframe.count()), null_counts=null_counts)
+    """Keep the drafting helper's import surface while runtime owns the Spark calculation."""
+    return profile_dataframe(dataframe)
 
 
 def _draft_properties(
@@ -239,5 +219,4 @@ def _read_draft_input(attributes: Mapping[str, str]) -> _DraftInput:
         raw_run_id=raw_run_id if isinstance(raw_run_id, str) else None,
         fixture_paths=tuple(Path(value) for value in fixture_values),
     )
-
 

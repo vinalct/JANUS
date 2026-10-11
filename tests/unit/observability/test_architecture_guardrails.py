@@ -32,7 +32,14 @@ WORKFLOW_ROOT_CANDIDATES = (
 OBSERVABILITY_ANCHORS = {
     "__init__.py",
     "emission.py",
+    "freshness.py",
     "iceberg_sink.py",
+    "metrics/__init__.py",
+    "metrics/catalogue.py",
+    "metrics/exposition.py",
+    "metrics/settings.py",
+    "metrics/sink.py",
+    "metrics/transport.py",
     "openlineage/facets.py",
     "openlineage/sink.py",
     "openlineage/transport.py",
@@ -128,6 +135,22 @@ def _assert_surface(modules: Mapping[str, str], anchors: set[str], package: str)
     assert anchors <= set(modules), (
         f"the {package} sweep missed intended modules: {sorted(anchors - set(modules))}"
     )
+
+
+def test_order23_anchors_cover_every_metrics_module() -> None:
+    modules = _modules(OBSERVABILITY_ROOT)
+    _assert_surface(modules, OBSERVABILITY_ANCHORS, "janus.observability")
+    metrics = {name for name in modules if name.startswith("metrics/")}
+    assert metrics, "the observability sweep matched no metrics modules"
+    assert metrics <= OBSERVABILITY_ANCHORS, sorted(metrics - OBSERVABILITY_ANCHORS)
+
+
+@pytest.mark.parametrize("missing", sorted(OBSERVABILITY_ANCHORS))
+def test_observability_surface_detector_rejects_a_missing_anchor(missing: str) -> None:
+    modules = _modules(OBSERVABILITY_ROOT)
+    modules.pop(missing)
+    with pytest.raises(AssertionError, match=re.escape(missing)):
+        _assert_surface(modules, OBSERVABILITY_ANCHORS, "janus.observability")
 
 
 def _qualified_name(node: ast.AST) -> str | None:
@@ -510,6 +533,17 @@ def test_observability_never_writes_authoritative_json() -> None:
     assert all(reason.strip() for reason in JSON_WRITE_ALLOWANCES.values())
 
 
+def test_json_write_allowances_are_not_stale() -> None:
+    modules = _modules(OBSERVABILITY_ROOT)
+    _assert_surface(modules, OBSERVABILITY_ANCHORS, "janus.observability")
+    for module, reason in JSON_WRITE_ALLOWANCES.items():
+        assert module in modules, f"JSON write allowance names missing module {module}"
+        assert reason.strip(), f"JSON write allowance needs a reason: {module}"
+        assert any(name == "os.write" for _, name in _json_write_findings(modules[module])), (
+            f"JSON write allowance no longer describes a raw append: {module}"
+        )
+
+
 def test_json_write_detector_rejects_authoritative_json_and_accepts_serialization() -> None:
     violation = "def emit(path, payload):\n    write_json_atomic(path, payload)\n"
     clean = "def encode(payload):\n    return json.dumps(payload)\n"
@@ -701,17 +735,8 @@ def test_workflow_detector_accepts_hermetic_lineage_configuration() -> None:
 
 
 def _order23_session_free_modules():
-    anchors = {
-        "metrics/__init__.py",
-        "metrics/settings.py",
-        "metrics/catalogue.py",
-        "metrics/transport.py",
-        "metrics/exposition.py",
-        "metrics/sink.py",
-        "freshness.py",
-    }
     modules = _modules(OBSERVABILITY_ROOT)
-    _assert_surface(modules, anchors, "janus.observability")
+    _assert_surface(modules, OBSERVABILITY_ANCHORS, "janus.observability")
     selected = {
         name: source
         for name, source in modules.items()

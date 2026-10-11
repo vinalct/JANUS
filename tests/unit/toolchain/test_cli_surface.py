@@ -4,6 +4,9 @@ import ast
 import importlib
 import importlib.util
 import inspect
+import json
+import os
+import subprocess
 import sys
 import textwrap
 import time
@@ -63,16 +66,25 @@ EXPECTED_VERBS = frozenset(
 
 FORBIDDEN_MODULE_SCOPE_IMPORTS = ("pyspark", "pyiceberg", "pyarrow", "dagster")
 
+# `status --from-runs-table` opts into the session-free catalog reader after validating
+# the profile and selection. Every other CLI path must leave engine loading to its service.
+LAZY_ENGINE_IMPORT_SITES = {"status.py": "pyiceberg"}
+
 CLI_TIME_BUDGET_SECONDS = 2.0
 
 
 def _cli_modules() -> dict[str, Path]:
     """Every module of the package, nested ones included: a verb moved into a subpackage
     stays in scope."""
-    return {
+    modules = {
         path.relative_to(CLI_ROOT).with_suffix("").as_posix(): path
         for path in sorted(CLI_ROOT.rglob("*.py"))
     }
+    assert modules, "the CLI sweep matched no Python modules"
+    assert modules.keys() >= EXPECTED_CLI_MODULES, (
+        f"the CLI sweep missed intended modules: {sorted(EXPECTED_CLI_MODULES - modules.keys())}"
+    )
+    return modules
 
 
 def _swept_files() -> dict[str, Path]:
@@ -136,18 +148,68 @@ def _module_scope_statements(
 def _module_scope_engine_imports(source: str) -> list[str]:
     found: list[str] = []
     for node in _module_scope_statements(ast.parse(source).body):
-        if isinstance(node, ast.Import):
-            modules = [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            modules = [node.module]
-        else:
-            continue
-        found.extend(
-            module
-            for module in modules
-            if module.split(".")[0] in FORBIDDEN_MODULE_SCOPE_IMPORTS
-        )
+        found.extend(_engine_import_targets(node))
     return found
+
+
+def _engine_import_targets(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Import):
+        modules = [alias.name for alias in node.names]
+    elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+        modules = [node.module]
+    else:
+        return []
+    return [
+        module for module in modules
+        if module.split(".")[0] in FORBIDDEN_MODULE_SCOPE_IMPORTS
+    ]
+
+
+class _LazyEngineImportVisitor(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.function_depth = 0
+        self.imports: list[tuple[int, str]] = []
+
+    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        self.function_depth += 1
+        self.generic_visit(node)
+        self.function_depth -= 1
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_If(self, node: ast.If) -> None:
+        if _is_type_checking_guard(node):
+            for statement in node.orelse:
+                self.visit(statement)
+        else:
+            self.generic_visit(node)
+
+    def visit_Import(self, node: ast.Import | ast.ImportFrom) -> None:
+        if self.function_depth:
+            self.imports.extend((node.lineno, module) for module in _engine_import_targets(node))
+
+    visit_ImportFrom = visit_Import
+
+
+def _lazy_engine_import_findings(
+    sources: Mapping[str, str], sites: Mapping[str, str]
+) -> tuple[str, ...]:
+    findings = []
+    observed = set()
+    for module, source in sources.items():
+        visitor = _LazyEngineImportVisitor()
+        visitor.visit(ast.parse(source))
+        for line, target in visitor.imports:
+            root = target.split(".")[0]
+            observed.add((module, root))
+            if sites.get(module) != root:
+                findings.append(f"{module}:line {line}: unregistered lazy import {target}")
+    findings.extend(
+        f"{module}: stale lazy import registration for {root}"
+        for module, root in sites.items()
+        if (module, root) not in observed
+    )
+    return tuple(sorted(findings))
 
 
 def _is_main_guard(test: ast.expr) -> bool:
@@ -490,6 +552,98 @@ def test_no_cli_module_imports_an_engine_at_module_scope() -> None:
     assert violations == {}
 
 
+def test_cli_lazy_engine_imports_match_the_register_in_both_directions() -> None:
+    sources = {
+        f"{name}.py": path.read_text(encoding="utf-8")
+        for name, path in _cli_modules().items()
+    }
+    assert LAZY_ENGINE_IMPORT_SITES == {"status.py": "pyiceberg"}
+    assert _lazy_engine_import_findings(sources, LAZY_ENGINE_IMPORT_SITES) == ()
+
+
+@pytest.mark.parametrize("missing", sorted(EXPECTED_CLI_MODULES))
+def test_cli_sweep_rejects_a_missing_anchor(
+    missing: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for module in EXPECTED_CLI_MODULES - {missing}:
+        (tmp_path / f"{module}.py").touch()
+    monkeypatch.setattr(sys.modules[__name__], "CLI_ROOT", tmp_path)
+    with pytest.raises(AssertionError, match=missing):
+        _cli_modules()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import pyspark\n",
+        "from pyiceberg.catalog import load_catalog\n",
+        "import pyarrow.parquet as parquet\n",
+        "if enabled:\n    import pyspark\n",
+        "class Reader:\n    import pyiceberg\n",
+    ],
+)
+def test_module_scope_engine_detector_rejects_engine_imports(source: str) -> None:
+    assert _module_scope_engine_imports(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def read():\n    import pyspark\n",
+        "def read():\n    from pyiceberg.catalog import load_catalog\n",
+        "async def read():\n    import pyarrow\n",
+        '"""pyspark and pyiceberg are loaded lazily."""\n',
+        "# import pyspark\n",
+        'engine = "pyiceberg"\n',
+    ],
+)
+def test_module_scope_engine_detector_accepts_lazy_imports_and_text(source: str) -> None:
+    assert _module_scope_engine_imports(source) == []
+
+
+@pytest.mark.parametrize(
+    ("module", "source"),
+    [
+        ("unregistered.py", "def read():\n    import pyiceberg\n"),
+        ("nested/reader.py", "async def read():\n    from pyarrow import Table\n"),
+        ("status.py", "def read():\n    import pyspark\n"),
+        ("status.py", "class Reader:\n    def read(self):\n        import pyarrow\n"),
+    ],
+)
+def test_lazy_site_detector_rejects_unregistered_imports(module: str, source: str) -> None:
+    findings = _lazy_engine_import_findings({module: source}, LAZY_ENGINE_IMPORT_SITES)
+    assert any("unregistered lazy import" in finding for finding in findings)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def read():\n    import pyiceberg\n",
+        "def read():\n    from pyiceberg.catalog import load_catalog\n",
+        "async def read():\n    from pyiceberg.catalog import load_catalog\n",
+        "def read():\n    try:\n        import pyiceberg\n    except ImportError:\n        pass\n",
+    ],
+)
+def test_lazy_site_detector_accepts_the_registered_status_import(source: str) -> None:
+    assert _lazy_engine_import_findings({"status.py": source}, LAZY_ENGINE_IMPORT_SITES) == ()
+
+
+@pytest.mark.parametrize(
+    "sources",
+    [
+        {},
+        {"status.py": "def read():\n    return None\n"},
+        {"status.py": "import pyiceberg\n"},
+        {"status.py": '# import pyiceberg\nengine = "pyiceberg"\n'},
+        {"status.py": "if TYPE_CHECKING:\n    import pyiceberg\n"},
+    ],
+)
+def test_lazy_site_detector_rejects_stale_entries(sources: Mapping[str, str]) -> None:
+    assert _lazy_engine_import_findings(sources, LAZY_ENGINE_IMPORT_SITES) == (
+        "status.py: stale lazy import registration for pyiceberg",
+    )
+
+
 def test_the_engine_detector_flags_a_deliberate_violation() -> None:
     violating = (
         "import pyspark\n"
@@ -532,6 +686,30 @@ def test_the_engine_detector_does_not_flag_a_lazy_or_type_only_import() -> None:
     )
 
     assert _module_scope_engine_imports(clean) == []
+
+
+@pytest.mark.parametrize("module", ["janus.cli", "janus.cli.status", "janus.cli.dispatch"])
+def test_importing_the_cli_package_loads_no_engine(module: str, record_property) -> None:
+    program = (
+        "import importlib, json, sys\n"
+        f"roots = {FORBIDDEN_MODULE_SCOPE_IMPORTS!r}\n"
+        "assert not [name for name in sys.modules if name.split('.', 1)[0] in roots]\n"
+        f"importlib.import_module({module!r})\n"
+        "loaded = sorted(name for name in sys.modules if name.split('.', 1)[0] in roots)\n"
+        "print(json.dumps(loaded))\n"
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(PACKAGE_ROOT.parent), env.get("PYTHONPATH")) if part
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program], cwd=REPO_ROOT, env=env,
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    loaded = json.loads(result.stdout)
+    record_property("engine_modules", loaded)
+    assert loaded == []
 
 
 # ---------------------------------------------------------------------------------------

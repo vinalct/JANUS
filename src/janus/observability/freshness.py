@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -103,7 +103,11 @@ def read_latest_success(runs_dir: Path) -> LatestSuccess:
 
 
 def read_latest_success_from_runs_table(
-    config: Mapping[str, Any], source_ids: Collection[str], *, project_root: Path | None = None
+    config: Mapping[str, Any],
+    source_ids: Collection[str],
+    *,
+    project_root: Path | None = None,
+    catalog_loader: Callable[..., Any] | None = None,
 ) -> dict[str, LatestSuccess]:
     """One filtered PyIceberg scan, using the shared profile catalog derivation.
 
@@ -111,19 +115,23 @@ def read_latest_success_from_runs_table(
     the current project directory. Counts describe successful rows scanned, rather
     than files. The historical threshold is projected but config remains authoritative.
     Catalog/scan failures propagate: a reporting command must not hide missing evidence.
+    Callers may supply their lazily imported catalog loader; direct callers load it here.
     """
     latest = {source_id: LatestSuccess(None, 0, 0) for source_id in sorted(set(source_ids))}
     if not latest:
         return latest
 
-    from pyiceberg.catalog import load_catalog
+    if catalog_loader is None:
+        from pyiceberg.catalog import load_catalog
+
+        catalog_loader = load_catalog
     from pyiceberg.expressions import And, EqualTo, In, Reference
     from pyiceberg.expressions.literals import literal
 
     target = resolve_runs_table(config)
     paths = materialize_runtime_paths(dict(config), project_root or Path.cwd())
     properties = derive_pyiceberg_catalog_properties(dict(config), paths)
-    table = load_catalog(target.catalog_name, **properties).load_table(target.identifier)
+    table = catalog_loader(target.catalog_name, **properties).load_table(target.identifier)
     rows = (
         table.scan(
             row_filter=And(

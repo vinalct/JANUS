@@ -89,8 +89,10 @@ def run_status(args: argparse.Namespace) -> int:
     latest_successes = None
     if args.from_runs_table:
         try:
+            from pyiceberg.catalog import load_catalog
+
             latest_successes = read_latest_success_from_runs_table(
-                config, selected_ids, project_root=project_root
+                config, selected_ids, project_root=project_root, catalog_loader=load_catalog
             )
         except Exception as exc:
             print(f"Could not read runs table: {exc}", file=sys.stderr)
