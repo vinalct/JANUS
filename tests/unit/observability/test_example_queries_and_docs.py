@@ -5,8 +5,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-
 from janus.observability.runs_table import RUNS_TABLE_SCHEMA
 from janus.quality import ContractViolationError
 from janus.quality.malformed_rows import MalformedRowsError
@@ -26,6 +24,7 @@ PUBLISHED_QUERIES = frozenset(
         "quality-breaches-by-source.sql",
         "runs-by-source-over-time.sql",
         "schema-drift-by-source.sql",
+        "stale-sources.sql",
     }
 )
 AC2_QUERIES = frozenset({"failed-runs-in-window.sql", "quality-breaches-by-source.sql"})
@@ -74,6 +73,16 @@ def test_ac2_queries_pin_the_documented_half_open_window_and_partition_pruning()
     assert "quality_outcome = 'failed'" in quality
     assert "GROUP BY source_id" in quality
     assert "FLATTEN(COLLECT_LIST(quality_failed_checks))" in quality
+
+    freshness = queries["stale-sources.sql"]
+    assert "emitted_at >= CAST(:window_start_day AS TIMESTAMP)" in freshness
+    assert "emitted_at >= :window_start" in freshness
+    assert "emitted_at < :window_end" in freshness
+    assert "row_rank = 1" in freshness
+    assert "emitted_at_day" in freshness
+    # The day partition is hidden: only source-column predicates execute against Spark.
+    statement = re.sub(r"--[^\n]*", "", freshness)
+    assert "emitted_at_day" not in statement
 
 
 def test_the_query_set_gives_every_declared_column_an_operational_use():
@@ -194,19 +203,16 @@ def _order23_query_and_register():
     return queries, documented, guide
 
 
-class TestOrder23Red:
+class TestOrder23Queries:
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True,
-        reason="stale-sources query and operator documentation are absent",
-    )
     def test_order23_stale_sources_query_preserves_latest_run_logic_and_outcome_precedence():
         queries, _, guide = _order23_query_and_register()
         sql = queries["stale-sources.sql"]
         assert sql.strip() and sql.count(";") == 1 and sql.rstrip().endswith(";")
         assert "PARTITION BY run_id" in sql and "ORDER BY emitted_at DESC" in sql
         assert "row_rank = 1" in sql
-        assert "status = 'succeeded'" in sql and "MAX(" in sql and "ended_at" in sql
+        assert "MAX(CASE WHEN status = 'succeeded' THEN ended_at END)" in sql
+        assert "WHEN age_seconds > freshness_max_age_seconds THEN 'stale'" in sql
         assert all(
             f"'{outcome}'" in sql for outcome in ("undeclared", "never_ran", "stale", "fresh")
         )
@@ -217,12 +223,10 @@ class TestOrder23Red:
             < sql.index("'fresh'")
         )
         assert "stale-sources.sql" in guide and "janus status" in guide
+        assert "success older than the window" in sql
+        assert "last success predates the window" in guide
 
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True,
-        reason="seven-column query/register/schema coverage is absent",
-    )
     def test_order23_all_seven_columns_have_query_uses_and_documented_schema_parity():
         from tests.support.metrics_order23 import NEW_FIELDS
 
@@ -233,3 +237,8 @@ class TestOrder23Red:
         assert set(NEW_FIELDS) <= columns
         assert columns <= used
         assert columns == documented
+
+        volume = queries["runs-by-source-over-time.sql"]
+        for counter in ("request_count", "retry_count", "attempt_count", "dead_letter_count"):
+            assert f"SUM({counter}) AS {counter}" in volume
+            assert f"-- {counter} is NULL for the file family" in volume

@@ -295,9 +295,17 @@ def test_v1_table_evolves_additively_and_appends_an_row(
 
     query_directory = PROJECT_ROOT / "docs" / "queries" / "observability"
     queries = sorted(query_directory.glob("*.sql"))
-    assert len(queries) == 7
+    assert len(queries) == 8
     for query in queries:
-        spark.sql(query.read_text(encoding="utf-8")).collect()
+        spark.sql(
+            query.read_text(encoding="utf-8"),
+            args={
+                "window_start_day": datetime(2026, 9, 1).date(),
+                "window_start": datetime(2026, 9, 1, tzinfo=UTC),
+                "window_end": datetime(2026, 10, 1, tzinfo=UTC),
+                "evaluated_at": datetime(2026, 9, 18, 12, tzinfo=UTC),
+            },
+        ).collect()
 
 
 def test_v2_table_evolves_additively_and_appends_a_v3_row(

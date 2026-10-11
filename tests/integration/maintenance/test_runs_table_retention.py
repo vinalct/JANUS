@@ -69,7 +69,7 @@ def _seed_rows(token):
 
 def _query_results(session, qualified, token):
     queries = sorted((PROJECT_ROOT / "docs/queries/observability").glob("*.sql"))
-    assert len(queries) == 7  
+    assert len(queries) == 8
     results = {}
     for query in queries:
         sql = (
@@ -78,7 +78,15 @@ def _query_results(session, qualified, token):
             .replace("2026-", "2030-")
             .replace("replace-with-pipeline-run-id", token)
         )
-        results[query.name] = session.sql(sql).collect()
+        results[query.name] = session.sql(
+            sql,
+            args={
+                "window_start_day": CUTOFF.date(),
+                "window_start": CUTOFF,
+                "window_end": NOW + timedelta(days=1),
+                "evaluated_at": NOW,
+            },
+        ).collect()
     return results
 
 

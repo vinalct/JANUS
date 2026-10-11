@@ -119,13 +119,22 @@ check counts are counts of rows or checks, not bytes.
 | `contract_preflight_outcome` | string, nullable | What the session-free preflight found before extraction: `ok`, `will_evolve`, `refused`, `table_missing`, `catalog_unavailable`; `NULL` for runs before. |
 | `schema_evolution` | string, nullable | What the writer changed on the bronze table for this run: `none`, `added:<cols>`, `promoted:<col>(<from>-><to>)`, `added:…;promoted:…`, `breaking_replace`; `NULL` when no bronze output was written. |
 | `malformed_rows` | long, nullable | Rows Spark could not parse into the contract's types across the run's batches (JSON/CSV handoffs); `0` when counted and clean; `NULL` when not counted (Parquet, or no validation). |
+| `duration_budget_seconds` | int, nullable | Duration window declared in `operations.max_duration_seconds` at the time of this run; `NULL` when undeclared. |
+| `duration_budget_outcome` | string, nullable | `within`, `exceeded`, or `undeclared`; a breach records evidence and never changes the run's status. `NULL` in older rows. |
+| `freshness_max_age_seconds` | int, nullable | Window declared in `operations.freshness.max_age` at the time of this run, carried so SQL can evaluate staleness without the source registry; `NULL` when undeclared. |
+| `request_count` | long, nullable | HTTP requests sent during extraction, aggregated in the source-volume query; `NULL` for the file family, so `SUM` and `AVG` skip those rows rather than count them as zero. |
+| `retry_count` | long, nullable | HTTP retries during extraction, used to investigate transport instability; `NULL` for the file family, so `SUM` and `AVG` skip those rows rather than count them as zero. |
+| `attempt_count` | long, nullable | Extraction attempts reported by the HTTP strategy, used to compare retry pressure over time; `NULL` for the file family, so `SUM` and `AVG` skip those rows rather than count them as zero. |
+| `dead_letter_count` | long, nullable | Dead letters recorded during extraction, used to investigate skipped work; `NULL` for the file family, so `SUM` and `AVG` skip those rows rather than count them as zero. |
 
-Adding a nullable column is the only routine schema evolution and requires a
-`record_schema_version` bump. Version 2 appends `schema_version`, `contract_id`, and
+Adding a nullable column is the only routine schema evolution and follows the declared
+`record_schema_version` and stable field IDs. Version 2 appends `schema_version`, `contract_id`, and
 `contract_version` with stable field IDs 44–46. Existing v1 rows read `NULL` for those fields.
 Version 3 appends the contract enforcement columns `contract_preflight_outcome`,
 `schema_evolution`, and `malformed_rows` with stable field IDs 47–49; v1 and v2 rows read `NULL`
-for them, and a v1 table gains all six in one transaction. The
+for them, and a v1 table gains all six in one transaction. Was added the three operations
+fields with stable IDs 50–52 and the four HTTP counters with IDs 53–56, retaining row-contract
+version 3; older rows read `NULL` for all seven. The
 sink applies all missing declared nullable columns in one Iceberg schema transaction, reloads the
 table, and verifies the declared schema before appending. A type change, rename, dropped or extra
 field, required addition, or field-ID mismatch is still refused. Removing a column or changing its
@@ -138,12 +147,55 @@ all de-duplicate on `run_id` before answering the question:
 
 - [failed runs in a window](queries/observability/failed-runs-in-window.sql) — the first AC-2 query;
 - [quality breaches by source](queries/observability/quality-breaches-by-source.sql) — the second AC-2 query;
-- [runs by source over time with volume](queries/observability/runs-by-source-over-time.sql);
+- [runs by source over time with volume and HTTP counters](queries/observability/runs-by-source-over-time.sql);
 - [checkpoint decisions by source](queries/observability/checkpoint-decisions-by-source.sql);
 - [config and contract version drift](queries/observability/config-version-drift.sql);
 - [failed sources in one pipeline run](queries/observability/pipeline-failures.sql);
 - [schema drift by source](queries/observability/schema-drift-by-source.sql) — what each run's
-  contract decided: preflight outcome, schema evolution, malformed rows, and enforcement errors.
+  contract decided: preflight outcome, schema evolution, malformed rows, and enforcement errors;
+- [source freshness and duration-budget breaches](queries/observability/stale-sources.sql) — the
+  latest successful completion, declared windows, exceeded-run count, age, and freshness outcome.
+
+The source-volume query sums `request_count`, `retry_count`, `attempt_count`, and
+`dead_letter_count` after de-duplication. File-family runs carry `NULL` for these counters:
+`SUM` and `AVG` skip those rows, and a group containing only such runs remains `NULL`.
+
+The freshness query reports one row per `source_id` and `environment`. It takes the greatest
+`ended_at` among successful runs, so a later failed run cannot make a source fresh. Its outcome
+precedence matches `janus status`: no declared window is `undeclared`, then no success is
+`never_ran`, then an age **greater than** the window is `stale`, otherwise `fresh`. An age
+exactly equal to the window is fresh; fractional seconds and negative ages are preserved.
+Filter `outcome IN ('stale', 'never_ran')` when consuming the result as a breach list.
+
+Bind all four named parameters when executing the checked-in SQL through Spark:
+
+```python
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+sql = Path("docs/queries/observability/stale-sources.sql").read_text(encoding="utf-8")
+spark.sql(sql, args={
+    "window_start_day": date(2026, 9, 1),
+    "window_start": datetime(2026, 9, 1, tzinfo=UTC),
+    "window_end": datetime(2026, 10, 1, tzinfo=UTC),
+    "evaluated_at": datetime(2026, 9, 18, 12, tzinfo=UTC),
+}).show()
+```
+
+This query's half-open window applies to **`emitted_at`**, since it asks about available
+terminal evidence rather than runs started in a month. Set `window_start_day` to the UTC date
+of `window_start`. The timestamp predicates prune the hidden `emitted_at_day` partitions;
+that partition field is not a selectable runs-table column. Choose a window covering the
+history being compared: if a source's last success predates the window but a failed run is
+inside it, SQL reports `never_ran`, while `janus status` scanning the whole metadata directory
+finds the older success and evaluates its age. `status --from-runs-table` also reads without
+this query window.
+
+The query uses the greatest declared freshness and duration windows recorded in the selected
+history. Both status readers use the source config's current freshness declaration. To compare
+the three answers, use matching declarations, the same environment, and the same available
+history. SQL can report only sources with rows in the window; `janus status` also lists registry
+sources with empty history. Missing best-effort table rows cannot prove that a run never happened.
 
 The drift query emits the first observed run for each source and every later change in either
 `config_version` or `schema_version`. Compare `contract_id` and `contract_version` to tell a

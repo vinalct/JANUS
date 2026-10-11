@@ -18,23 +18,24 @@ def test_capture_copies_every_authoritative_byte_and_preserves_original_paths(tm
     for case, files in captured.items():
         metadata_root = project_root / case / "data" / "metadata"
         source_id = "baseline_catalog" if case == "catalog_success" else "baseline_api"
+        run_id = f"{case}"
         expected = {
-            f"metadata/{source_id}/runs/{case}.json",
-            f"metadata/{source_id}/lineage/{case}.json",
+            f"metadata/{source_id}/runs/{run_id}.json",
+            f"metadata/{source_id}/lineage/{run_id}.json",
         }
         if case != "extraction_failure":
-            expected.add(f"metadata/{source_id}/validations/{case}.json")
+            expected.add(f"metadata/{source_id}/validations/{run_id}.json")
         if case in {"api_success", "catalog_success", "empty_handoff"}:
             expected.update({
                 f"metadata/{source_id}/checkpoints/current.json",
-                f"metadata/{source_id}/checkpoints/history/{case}.json",
+                f"metadata/{source_id}/checkpoints/history/{run_id}.json",
             })
         assert set(files) == expected
         for relative in files:
             actual = destination / case / relative
             original = metadata_root / Path(relative).relative_to("metadata")
             assert actual.read_bytes() == original.read_bytes()
-        run_path = destination / case / f"metadata/{source_id}/runs/{case}.json"
+        run_path = destination / case / f"metadata/{source_id}/runs/{run_id}.json"
         run = json.loads(run_path.read_bytes())
         assert run["source_config_path"].startswith(str(project_root / case))
         assert not list(metadata_root.rglob("*.ndjson"))
