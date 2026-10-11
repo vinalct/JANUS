@@ -367,3 +367,72 @@ def test_documentation_states_no_overlap_requirement_and_cron_caveat():
     assert "Cron" in text and "serialise" in text
     assert 'lock: "none"' in text
     assert WARNING in text
+
+@pytest.mark.xfail(strict=True, reason="maintain still defaults to a null lock")
+def test_production_maintain_records_flock_without_warning(project):
+    result = _invoke(project, "--zone", "metadata", "--format", "json")
+    assert result.exit_code == 0, result.output
+    assert _record(project)["lock"] == "flock"
+    assert WARNING not in result.output
+    assert "LOCK_WARNING" not in result.output
+
+
+@pytest.mark.xfail(strict=True, reason="maintain does not refuse held source locks")
+def test_real_contention_skips_one_source_and_peers_proceed(project):
+    from janus.runtime.locking import SourceStateLock  # noqa: F401
+    from tests.support.parallel_execution import file_snapshot, held_lock
+
+    metadata = project / "data/metadata/source_b"
+    with held_lock(metadata / ".lock"):
+        before = file_snapshot(metadata)
+        result = _invoke(project, "--zone", "metadata", "--apply", "--format", "json")
+        assert result.exit_code == 0, result.output
+        assert file_snapshot(metadata) == before
+    items = _record(project)["items"]
+    assert any(
+        item["status"] == "skipped"
+        and item["detail"] == {"source_id": "source_b", "skipped_reason": "source_locked"}
+        for item in items
+    )
+    assert sum(item["status"] == "applied" for item in items) == 2
+
+
+@pytest.mark.xfail(strict=True, reason="maintain has no reentrant flock adapter")
+def test_shared_metadata_sources_are_both_acquired(project, monkeypatch):
+    from janus.runtime.locking import SourceStateLock  # noqa: F401
+    from tests.support.parallel_execution import probe_lock
+
+    directory = project / "conf/sources"
+    for source_id in ("source_a", "source_b"):
+        path = directory / f"{source_id}.yaml"
+        config = yaml.safe_load(path.read_text())
+        config["outputs"]["metadata"]["path"] = "data/metadata/shared"
+        path.write_text(yaml.safe_dump(config))
+    collect = maintain.collect_inventory
+    seen = []
+
+    def checking(*args, **kwargs):
+        assert kwargs["source_ids"] == frozenset(SOURCE_IDS)
+        assert probe_lock(project / "data/metadata/shared/.lock")["acquired"] is False
+        seen.append(True)
+        return collect(*args, **kwargs)
+
+    monkeypatch.setattr(maintain, "collect_inventory", checking)
+    result = _invoke(project, "--zone", "metadata", "--format", "json")
+    assert result.exit_code == 0, result.output
+    assert seen and _record(project)["lock"] == "flock"
+    assert not any(item["status"] == "skipped" for item in _record(project)["items"])
+    assert probe_lock(project / "data/metadata/shared/.lock")["acquired"] is True
+
+
+@pytest.mark.xfail(strict=True, reason="lock files are not protected retention paths")
+def test_lock_inode_is_protected_and_never_a_retention_candidate(project):
+    path = project / "data/metadata/source_a/.lock"
+    path.touch()
+    inode = path.stat().st_ino
+    result = _invoke(project, "--zone", "metadata", "--apply", "--format", "json")
+    assert result.exit_code == 0, result.output
+    record = _record(project)
+    assert any(item["target"] == str(path) for item in record["protected"])
+    assert not any(item["target"] == str(path) for item in record["items"])
+    assert path.stat().st_ino == inode
