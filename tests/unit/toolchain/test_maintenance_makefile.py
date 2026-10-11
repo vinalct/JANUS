@@ -107,6 +107,7 @@ def test_workflow_and_make_ci_run_the_same_maintenance_steps_in_order():
     if not MAKEFILE.is_file():
         pytest.skip("the workflow parity check needs the checkout's Makefile")
     workflow = yaml.safe_load((PROJECT_ROOT / ".github/workflows/ci.yml").read_text())
+    assert workflow["jobs"]["spark"]["env"]["JANUS_CONTAINER_ENGINE"] == "docker"
     steps = [step.get("run", "") for step in workflow["jobs"]["spark"]["steps"]]
     full_suite = next(index for index, step in enumerate(steps) if "--cov=janus" in step)
     maintenance = steps[full_suite + 1 : full_suite + 4]

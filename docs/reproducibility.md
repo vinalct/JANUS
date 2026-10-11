@@ -659,6 +659,13 @@ snapshots and 30 days in the shipped profiles), unless a source declares its own
 
 ## CI timing and coverage
 
+The hosted Spark job sets `JANUS_CONTAINER_ENGINE=docker` for every Make invocation,
+matching the engine into which buildx loads `janus:local`. Locally the default is `auto`:
+Make prefers Podman, then Docker, only after a read-only Compose `ps` succeeds against
+the configured stack. An installed Compose CLI without a reachable engine is skipped.
+Use `make test JANUS_CONTAINER_ENGINE=docker` or `make test JANUS_CONTAINER_ENGINE=podman`
+to select one engine explicitly; an unavailable selected engine fails instead of switching.
+
 `make test` reuses the development container. Make passes a checksum of its current
 Makefile into the Compose service configuration, so a changed Makefile recreates the
 container on the next setup and refreshes its single-file bind mount. This avoids reading

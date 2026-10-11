@@ -91,6 +91,7 @@ jobs:
     runs-on: ubuntu-latest          
     timeout-minutes: 30             
     env:
+      JANUS_CONTAINER_ENGINE: docker
       IVY_JAR: org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar
       IVY_JAR_SHA256: 2192a0881ed0f5773b5a83a8820d2b0b2069beec203028643a1c338551007f09
       # The SQLite JDBC driver the default (jdbc) catalog opens its catalog database with.
@@ -103,6 +104,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+      - name: Verify Make can reach the Docker engine
+        run: make check-compose
       - name: Build JANUS image (buildx GHA layer cache)   
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:

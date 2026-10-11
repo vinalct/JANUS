@@ -5,6 +5,7 @@ ENVIRONMENT ?= local
 RUN_ARGS ?=
 MAINTAIN_ARGS ?=
 PYTHON ?= python
+JANUS_CONTAINER_ENGINE ?= auto
 JANUS_UID := $(shell id -u)
 JANUS_GID := $(shell id -g)
 JANUS_PROJECT_ROOT := $(CURDIR)
@@ -168,11 +169,22 @@ ICEBERG_JDBC_SCHEMA_VERSION := V1
 # export the generated stack credentials so compose can substitute them. Default: no-op.
 COMPOSE_PRELUDE ?= :
 
-DETECT_COMPOSE = if podman compose version >/dev/null 2>&1; then echo 'podman compose'; elif command -v podman-compose >/dev/null 2>&1; then echo podman-compose; elif docker compose version >/dev/null 2>&1; then echo 'docker compose'; elif command -v docker-compose >/dev/null 2>&1; then echo docker-compose; else exit 1; fi
+# A version check only finds the CLI; `ps` also proves its engine is reachable.
+# CI selects Docker explicitly because buildx loads the image into that engine.
+DETECT_COMPOSE = case "$(JANUS_CONTAINER_ENGINE)" in auto|docker|podman) ;; \
+	*) echo "Invalid JANUS_CONTAINER_ENGINE: $(JANUS_CONTAINER_ENGINE). Use auto, docker, or podman." >&2; exit 1 ;; esac; \
+	if [ "$(JANUS_CONTAINER_ENGINE)" != docker ]; then \
+		if podman compose -f $(COMPOSE_FILE) -f $(PODMAN_COMPOSE_FILE) ps >/dev/null 2>&1; then echo 'podman compose'; exit 0; \
+		elif podman-compose -f $(COMPOSE_FILE) -f $(PODMAN_COMPOSE_FILE) ps >/dev/null 2>&1; then echo podman-compose; exit 0; fi; \
+	fi; \
+	if [ "$(JANUS_CONTAINER_ENGINE)" != podman ]; then \
+		if docker compose -f $(COMPOSE_FILE) ps >/dev/null 2>&1; then echo 'docker compose'; exit 0; \
+		elif docker-compose -f $(COMPOSE_FILE) ps >/dev/null 2>&1; then echo docker-compose; exit 0; fi; \
+	fi; exit 1
 
 define RUN_COMPOSE
 	@compose_cmd="$$( $(DETECT_COMPOSE) )" || { \
-		echo "No compose-capable container engine found. Install Docker Compose, docker-compose, podman compose, or podman-compose." >&2; \
+		echo "No reachable Compose provider found for JANUS_CONTAINER_ENGINE=$(JANUS_CONTAINER_ENGINE). Check that the engine is running and its Compose provider can reach it." >&2; \
 		exit 1; \
 	}; \
 	compose_files="$$(case "$$compose_cmd" in podman* ) printf '%s' '-f $(COMPOSE_FILE) -f $(PODMAN_COMPOSE_FILE)' ;; * ) printf '%s' '-f $(COMPOSE_FILE)' ;; esac)"; \
@@ -199,7 +211,7 @@ seed-ivy:
 
 check-compose:
 	@compose_cmd="$$( $(DETECT_COMPOSE) )" || { \
-		echo "No compose-capable container engine found. Install Docker Compose, docker-compose, podman compose, or podman-compose." >&2; \
+		echo "No reachable Compose provider found for JANUS_CONTAINER_ENGINE=$(JANUS_CONTAINER_ENGINE). Check that the engine is running and its Compose provider can reach it." >&2; \
 		exit 1; \
 	}; \
 	printf 'Using %s\n' "$$compose_cmd"; \
