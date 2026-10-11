@@ -123,6 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
             "earlier pipeline successful or suppress required upstream execution."
         ),
     )
+    parser.add_argument(
+        "--fail-on-budget-breach",
+        action="store_true",
+        help=(
+            "Treat a run that exceeded its operations.max_duration_seconds as a failed "
+            "attempt, skipping its dependents. Off by default: a slow run that produced "
+            "correct data is a scheduling signal, not a data failure."
+        ),
+    )
     _add_unsupported_legacy_options(parser)
     return parser
 
@@ -182,6 +191,7 @@ def _prepare_batch(args: argparse.Namespace, project_root: Path) -> _PreparedBat
         planned_at=args.started_at,
         selection=selection,
         attributes={"resume": "true"} if args.resume else None,
+        fail_on_budget_breach=args.fail_on_budget_breach,
     )
     registry = load_registry(project_root, write_defaults=read_spark_write_defaults(config))
     plan = BatchPlanner().plan(request, registry=registry)

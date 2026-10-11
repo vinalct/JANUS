@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ from janus.adapters.dagster import (  # noqa: E402
     build_dagster_adapter,
 )
 from janus.main import main  # noqa: E402
-from janus.orchestration import BatchSelection  # noqa: E402
+from janus.orchestration import BatchPlanner, BatchSelection  # noqa: E402
 from janus.runtime import (  # noqa: E402
     BatchExecutor,
     SourceExecutionService,
@@ -36,11 +37,14 @@ PLANNED_AT = "2026-09-15T12:00:00Z"
 
 
 class _FakeExecutedRun:
-    def __init__(self, planned_run: Any, *, succeeded: bool) -> None:
+    def __init__(
+        self, planned_run: Any, *, succeeded: bool, budget_outcome: str = "undeclared"
+    ) -> None:
         self.planned_run = planned_run
         self.status = "succeeded" if succeeded else "failed"
         self.failure_reason = None if succeeded else "fixture source failure"
         self.error_type = None if succeeded else "FixtureSourceFailure"
+        self.duration_budget_outcome = budget_outcome
 
     @property
     def is_successful(self) -> bool:
@@ -49,6 +53,7 @@ class _FakeExecutedRun:
     def to_summary(self) -> dict[str, Any]:
         return {
             "status": self.status,
+            "duration_budget_outcome": self.duration_budget_outcome,
             "failure_reason": self.failure_reason,
             "strategy_metadata": {
                 "source": self.planned_run.plan.source.source_id,
@@ -64,9 +69,11 @@ class _ScenarioExecution:
         *,
         fail_once: set[str] | None = None,
         fail_always: set[str] | None = None,
+        budget_exceeded: set[str] | None = None,
     ) -> None:
         self.fail_once = fail_once or set()
         self.fail_always = fail_always or set()
+        self.budget_exceeded = budget_exceeded or set()
         self.calls: list[tuple[str, int, str]] = []
 
     def execute(
@@ -79,16 +86,37 @@ class _ScenarioExecution:
         attempt = int(planned_run.plan.run_context.attributes_as_dict()["pipeline_attempt"])
         self.calls.append((source_id, attempt, planned_run.plan.run_context.run_id))
         failed = source_id in self.fail_always or (source_id in self.fail_once and attempt == 1)
-        return _FakeExecutedRun(planned_run, succeeded=not failed)
+        return _FakeExecutedRun(
+            planned_run,
+            succeeded=not failed,
+            budget_outcome="exceeded" if source_id in self.budget_exceeded else "undeclared",
+        )
 
 
+class _BudgetPolicyPlanner(BatchPlanner):
+    """Supply the opt-in request through the adapter's existing planning seam."""
+
+    def plan(self, request, **kwargs):
+        return super().plan(replace(request, fail_on_budget_breach=True), **kwargs)
+
+
+@pytest.mark.parametrize("budget_breach", [False, True], ids=["execution-failure", "budget-breach"])
 def test_cli_and_dagster_have_identical_graph_selection_and_terminal_contract(
     tmp_path,
     monkeypatch,
     capsys,
+    budget_breach,
 ):
     root = _project(tmp_path, "chain_and_peer")
-    cli_execution = _ScenarioExecution(fail_always={"A"})
+    if budget_breach:
+        source_path = root / "conf/sources/sources.yaml"
+        document = yaml.safe_load(source_path.read_text())
+        next(source for source in document["sources"] if source["source_id"] == "A")[
+            "operations"
+        ] = {"max_duration_seconds": 4}
+        source_path.write_text(yaml.safe_dump(document))
+    scenario = {"budget_exceeded": {"A"}} if budget_breach else {"fail_always": {"A"}}
+    cli_execution = _ScenarioExecution(**scenario)
     monkeypatch.setattr(
         run_all_module,
         "_build_batch_executor",
@@ -108,15 +136,17 @@ def test_cli_and_dagster_have_identical_graph_selection_and_terminal_contract(
             "task10-cli-parity",
             "--started-at",
             PLANNED_AT,
+            *(["--fail-on-budget-breach"] if budget_breach else []),
         ]
     )
     cli_summary = json.loads(capsys.readouterr().out)
 
-    dagster_execution = _ScenarioExecution(fail_always={"A"})
+    dagster_execution = _ScenarioExecution(**scenario)
     adapter = _adapter(
         root,
         dagster_execution,
         selection=BatchSelection.create(tags=("terminal", "independent")),
+        batch_planner=_BudgetPolicyPlanner() if budget_breach else BatchPlanner(),
     )
     native, dagster_outcome = adapter.execute_in_process(instance=DagsterInstance.ephemeral())
     dagster_summary = dagster_outcome.to_summary()
@@ -128,6 +158,15 @@ def test_cli_and_dagster_have_identical_graph_selection_and_terminal_contract(
     )
     assert [call[:2] for call in cli_execution.calls] == [("A", 1), ("C", 1)]
     assert [call[:2] for call in dagster_execution.calls] == [("A", 1), ("C", 1)]
+    if budget_breach:
+        for summary in (cli_summary, dagster_summary):
+            attempt = summary["sources"][0]["attempts"][0]
+            assert attempt["failure"] == {
+                "phase": "budget",
+                "error_type": "RunDurationBudgetExceeded",
+                "reason": "Run exceeded its declared duration budget of 4s",
+            }
+            assert attempt["evidence"]["status"] == "succeeded"
 
 
 def test_cli_and_dagster_normalize_strict_preflight_refusal_identically(
@@ -136,10 +175,9 @@ def test_cli_and_dagster_normalize_strict_preflight_refusal_identically(
     root = _project(tmp_path, "chain")
     contract_path = root / DECLARED_CONTRACT_PATH
     contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
-    next(
-        item for item in contract["customProperties"]
-        if item["property"] == "janus.enforcement"
-    )["value"] = "strict"
+    next(item for item in contract["customProperties"] if item["property"] == "janus.enforcement")[
+        "value"
+    ] = "strict"
     contract_path.write_text(yaml.safe_dump(contract, sort_keys=False), encoding="utf-8")
 
     def service_with_refused_live_table():
@@ -249,11 +287,14 @@ storage:
     return root
 
 
-def _adapter(root: Path, execution: Any, **kwargs: Any):
+def _adapter(
+    root: Path, execution: Any, *, batch_planner: BatchPlanner | None = None, **kwargs: Any
+):
     return build_dagster_adapter(
         root,
         environment_config=_environment_config(),
         services=DagsterAdapterServices(
+            batch_planner=batch_planner or BatchPlanner(),
             source_execution_factory=lambda _logger: execution,
         ),
         **kwargs,

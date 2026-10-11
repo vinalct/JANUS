@@ -176,6 +176,7 @@ class DagsterRunRuntime:
             self.environment_config,
             self.resolved_paths,
             source_execution=self.source_execution,
+            request=plan.request,
         )
 
 
