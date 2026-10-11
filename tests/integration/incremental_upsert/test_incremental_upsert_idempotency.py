@@ -509,7 +509,7 @@ def _source_config_payload() -> dict[str, Any]:
             "input_format": "json",
             # Today's incremental idiom, and the carrier of the bug under test.
             "write_mode": "append",
-            "repartition": 1,
+            "write": {"partitions": 1},
             # Deliberately unpartitioned. Real sources partition by `ingestion_date`,
             # which is derived from the run timestamp, so the two runs would land in
             # different partitions and a green result could be misread as

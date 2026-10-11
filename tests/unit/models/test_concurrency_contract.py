@@ -58,7 +58,7 @@ def _base_payload() -> dict[str, Any]:
         "spark": {
             "input_format": "json",
             "write_mode": "append",
-            "repartition": 1,
+            "write": {"partitions": 1},
             "partition_by": [],
         },
         "outputs": {

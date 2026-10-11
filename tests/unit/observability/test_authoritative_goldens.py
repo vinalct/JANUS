@@ -18,7 +18,7 @@ def test_capture_copies_every_authoritative_byte_and_preserves_original_paths(tm
     for case, files in captured.items():
         metadata_root = project_root / case / "data" / "metadata"
         source_id = "baseline_catalog" if case == "catalog_success" else "baseline_api"
-        run_id = f"{case}"
+        run_id = f"order15-{case}"
         expected = {
             f"metadata/{source_id}/runs/{run_id}.json",
             f"metadata/{source_id}/lineage/{run_id}.json",

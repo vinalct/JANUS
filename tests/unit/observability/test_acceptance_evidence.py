@@ -401,7 +401,7 @@ class TestReferenceContainerGoldens:
         run_json = next(goldens.rglob("runs/*.json"))
         expected_run = json.loads(run_json.read_bytes())
         root = Path(expected_run["source_config_path"]).parents[2]
-        assert root == PROJECT_ROOT / "data/metadata/evidence/golden-project" / case
+        assert root == PROJECT_ROOT / "data/metadata/order-23-evidence/golden-project" / case
         backup = root.with_name(f".{case}.saved-{uuid4().hex}")
         if root.exists():
             root.rename(backup)
