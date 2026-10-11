@@ -88,11 +88,11 @@ make run-local-config
 make validate
 ```
 
-`make run-local-config` validates the `local` **environment profile** and prepares its runtime
-paths. `make validate` validates the **source registry**: it loads every source, resolves the
-dependency graph, applies the semantic rules and plans every source, then checks the `local`
-profile as well (`janus validate --environment local`). It starts no Spark session and creates
-no directory. Run it first after editing a source or a contract.
+`make run-local-config` validates the **source registry** and the `local` profile without
+starting containers or Spark. It loads every source, resolves the dependency graph, applies
+the semantic rules and plans every source. `make validate` runs the same checks in the local
+container (`janus validate --environment local`). Neither validator creates runtime directories.
+Run one first after editing a source or a contract.
 
 ### 3. Validate Spark startup
 
@@ -107,6 +107,10 @@ This boots the pinned local Spark runtime and verifies the Iceberg configuration
 ```bash
 make test
 ```
+
+This runs the local unit and integration suites in separate Spark processes,
+including the 2 GiB write-sizing case. The optional Dagster suite runs separately
+with `make test-adapter` in an environment with `janus[dagster]` installed.
 
 ### 5. Plan one configured source deterministically
 

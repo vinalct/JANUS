@@ -14,7 +14,6 @@ from janus.registry import load_registry
 from janus.strategies.files.download import _read_checksum_sidecar
 from janus.utils.storage import StorageLayout, bronze_table_identifier
 from janus.writers import SIDECAR_SUFFIX, RawArtifactWriter, SparkDatasetWriter
-from janus.writers.spark import _rebalance_for_write
 from tests.support.spark_sessions import build_iceberg_session
 from tests.support.writer_contracts import contract_for_frame
 
@@ -348,72 +347,6 @@ def test_spark_dataset_writer_uses_configured_bronze_iceberg_namespace_and_table
     persisted = spark.table(result.path)
     assert persisted.count() == 2
     assert NORMALIZED_COLUMNS.issubset(set(persisted.columns))
-
-
-def test_rebalance_for_write_keeps_existing_parallelism_when_target_is_lower():
-    class FakeRDD:
-        def __init__(self, partitions: int) -> None:
-            self._partitions = partitions
-
-        def getNumPartitions(self) -> int:
-            return self._partitions
-
-    class FakeFrame:
-        def __init__(self, partitions: int) -> None:
-            self.rdd = FakeRDD(partitions)
-            self.calls: list[tuple[str, int]] = []
-
-        def coalesce(self, partitions: int):
-            self.calls.append(("coalesce", partitions))
-            return self
-
-        def repartition(self, partitions: int):
-            self.calls.append(("repartition", partitions))
-            return self
-
-    frame = FakeFrame(partitions=12)
-
-    result = _rebalance_for_write(
-        frame,
-        target_partitions=8,
-        apply_repartition=True,
-    )
-
-    assert result is frame
-    assert frame.calls == []
-
-
-def test_rebalance_for_write_uses_repartition_when_increasing_partitions():
-    class FakeRDD:
-        def __init__(self, partitions: int) -> None:
-            self._partitions = partitions
-
-        def getNumPartitions(self) -> int:
-            return self._partitions
-
-    class FakeFrame:
-        def __init__(self, partitions: int) -> None:
-            self.rdd = FakeRDD(partitions)
-            self.calls: list[tuple[str, int]] = []
-
-        def coalesce(self, partitions: int):
-            self.calls.append(("coalesce", partitions))
-            return self
-
-        def repartition(self, partitions: int):
-            self.calls.append(("repartition", partitions))
-            return self
-
-    frame = FakeFrame(partitions=2)
-
-    result = _rebalance_for_write(
-        frame,
-        target_partitions=8,
-        apply_repartition=True,
-    )
-
-    assert result is frame
-    assert frame.calls == [("repartition", 8)]
 
 
 def _build_plan(tmp_path: Path, *, run_id: str, started_at: datetime) -> ExecutionPlan:

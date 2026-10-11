@@ -244,6 +244,10 @@ def source_payload(case: str) -> dict[str, Any]:
         },
     }
 
+    if family == "api":
+        # Freeze this observer baseline's original read shape; compaction and its format
+        # seam have their own fixtures and must not change this compute double's schema.
+        payload["spark"]["handoff"] = "pages"
     if case == "quality_failure":
         payload["quality"]["required_fields"] = []
     if case == "empty_handoff":

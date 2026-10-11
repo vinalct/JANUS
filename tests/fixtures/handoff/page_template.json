@@ -1,0 +1,14 @@
+{
+  "id": 0,
+  "codigoOrgao": "26000",
+  "nomeOrgao": "Ministério da Educação",
+  "cpf": "***.000.000-**",
+  "nomeServidor": "Servidor sintético",
+  "ano": 2026,
+  "valor": 1234.56,
+  "ativo": true,
+  "dataReferencia": "2026-09-01",
+  "categoria": "Efetivo",
+  "orgao": {"codigo": "26000", "nome": "Educação", "uf": "DF"},
+  "observacaoTardia": null
+}

@@ -30,6 +30,11 @@ SOURCE_ID = "transparencia__poder_executivo_federal__servidores_por_orgao__full_
 
 @dataclass(slots=True)
 class FixtureTransport:
+    """Answer by `pagina`, not by arrival order: the source pages concurrently.
+
+    Past the last fixture the endpoint answers an empty 200, as the live API does.
+    """
+
     fixture_paths: list[Path]
     requests: list = field(default_factory=list)
     opened: bool = False
@@ -43,15 +48,18 @@ class FixtureTransport:
 
     def send(self, request):
         self.requests.append(request)
-        if not self.fixture_paths:
-            raise AssertionError("No fixture response remains for the Transparencia transport")
+        page = int(_query(request)["pagina"][0])
+        if page > len(self.fixture_paths):
+            return ApiResponse(request=request, status_code=200, body=b"[]")
+        body = self.fixture_paths[page - 1].read_bytes()
+        return ApiResponse(request=request, status_code=200, body=body)
 
-        fixture_path = self.fixture_paths.pop(0)
-        return ApiResponse(
-            request=request,
-            status_code=200,
-            body=fixture_path.read_bytes(),
-        )
+    def request_for_page(self, page: int):
+        return next(sent for sent in self.requests if _query(sent)["pagina"] == [str(page)])
+
+
+def _query(request) -> dict[str, list[str]]:
+    return parse_qs(urlsplit(request.full_url()).query)
 
 
 @pytest.fixture(scope="module")
@@ -138,10 +146,10 @@ def test_transparencia_source_extracts_raw_pages_and_materializes_bronze_and_met
     assert extraction_result.records_extracted == 3
     assert extraction_result.checkpoint_value is None
 
-    first_request = transport.requests[0]
-    second_request = transport.requests[1]
-    first_query = parse_qs(urlsplit(first_request.full_url()).query)
-    second_query = parse_qs(urlsplit(second_request.full_url()).query)
+    first_request = transport.request_for_page(1)
+    second_request = transport.request_for_page(2)
+    first_query = _query(first_request)
+    second_query = _query(second_request)
 
     assert first_request.headers_as_dict()["chave-api-dados"] == "super-secret-token"
     assert "super-secret-token" not in first_request.full_url()

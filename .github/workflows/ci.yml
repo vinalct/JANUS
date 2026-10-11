@@ -58,8 +58,8 @@ jobs:
         run: mypy
       - name: Fast tests without adapter or active Spark
         run: make test-fast PYTHON=python
-      - name: Validate the checked-in registry (no engines, no Spark)
-        run: python -m janus.main validate --project-root .
+      - name: Load and plan every checked-in source against the local profile (no engines)
+        run: make run-local-config PYTHON=python
 
   adapter:
     name: Dagster gate (Python ${{ matrix.python-version }})
@@ -138,23 +138,49 @@ jobs:
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \
             python -m mypy
-      - name: Full test suite + coverage incl. integration (inside container)
+      - name: Full test suite + coverage in isolated Spark processes
         run: |
           set -o pipefail
           JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
           docker compose -f docker/docker-compose.yml run --rm -T \
             -e COVERAGE_FILE=data/.coverage \
+            -e SPARK_DRIVER_MEMORY=2g \
             janus \
-            python -m pytest -ra -m 'not cluster' tests \
+            python -m pytest -ra -m 'not cluster' tests/unit \
+              --ignore=tests/unit/adapters/test_dagster_adapter.py \
+              --deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule \
               --cov=janus \
+              --cov-report= \
+              --junitxml=data/metadata/test-reports/ci-unit.xml \
+            | tee data/pytest-output.txt
+          JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
+          docker compose -f docker/docker-compose.yml run --rm -T \
+            -e COVERAGE_FILE=data/.coverage \
+            -e SPARK_DRIVER_MEMORY=2g \
+            janus \
+            python -m pytest -ra -m 'not cluster and not large_handoff' tests/integration \
+              --ignore=tests/integration/dagster \
+              --cov=janus \
+              --cov-append \
+              --cov-report= \
+              --junitxml=data/metadata/test-reports/ci.xml \
+            | tee -a data/pytest-output.txt
+          JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
+          docker compose -f docker/docker-compose.yml run --rm -T \
+            -e COVERAGE_FILE=data/.coverage \
+            -e SPARK_DRIVER_MEMORY=2g \
+            janus \
+            python -m pytest -ra -m 'not cluster and large_handoff' tests/integration/writers \
+              --cov=janus \
+              --cov-append \
               --cov-report=term-missing \
               --cov-report=xml:data/coverage.xml \
-              --junitxml=data/metadata/test-reports/ci.xml \
-            | tee data/pytest-output.txt
+              --junitxml=data/metadata/test-reports/ci-large.xml \
+            | tee -a data/pytest-output.txt
       - name: Assert the maintenance deletion boundary executed
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \
-            python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml \
+            python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml \
               --class-name tests.unit.toolchain.test_no_deletion_outside_maintenance --minimum-passed 63
       - name: Maintenance snapshot and runs-table suites with required-test gates
         run: make test-maintenance
@@ -208,9 +234,9 @@ jobs:
             grep -Fn "AC1_REAL_CATALOG_SUITE_UNAVAILABLE" data/pytest-output.txt || true
             exit 1
           fi
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_queryable_observability --test-name test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources --minimum-passed 1
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_runs_table_append_sink --minimum-passed 4
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.unit.observability.test_pyiceberg_declared_schema --minimum-passed 1
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.catalog_commits.test_queryable_observability --test-name test_real_terminal_runs_land_field_by_field_and_spark_reads_across_sources --minimum-passed 1
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.catalog_commits.test_runs_table_append_sink --minimum-passed 4
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.unit.observability.test_pyiceberg_declared_schema --minimum-passed 1
       - name: Assert the real-catalog contract preflight suite executed
         run: |
           if grep -Fq "PREFLIGHT_REAL_CATALOG_UNAVAILABLE" data/pytest-output.txt; then
@@ -218,15 +244,27 @@ jobs:
             grep -Fn "PREFLIGHT_REAL_CATALOG_UNAVAILABLE" data/pytest-output.txt || true
             exit 1
           fi
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_contract_preflight_real_catalog --minimum-passed 10
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.catalog_commits.test_contract_preflight_real_catalog --minimum-passed 10
       - name: Assert the contract enforcement suites executed
         run: |
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.contracts.test_pre_write_gate --minimum-passed 13
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.contracts.test_malformed_rows --minimum-passed 9
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.contracts.test_evolution_matrix --minimum-passed 59
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.contracts.test_pre_write_gate --minimum-passed 13
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.contracts.test_malformed_rows --minimum-passed 9
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.contracts.test_evolution_matrix --minimum-passed 59
       - name: Assert the contracts bronze differential executed
         run: |
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.contracts.test_bronze_unchanged_after_migration --minimum-passed 23
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.contracts.test_bronze_unchanged_after_migration --minimum-passed 23
+      - name: Assert the compaction live/replay bronze differential executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.handoff.test_bronze_unchanged_under_compaction --minimum-passed 8
+      - name: Assert the AC-4 read partition measurement executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.handoff.test_read_partition_reduction --minimum-passed 1
+      - name: Assert the AC-6 Iceberg table property suite executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.writers.test_table_properties --minimum-passed 38
+      - name: Assert the AC-7 write partitioning suite executed, including the 2 GiB case
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.writers.test_write_partitioning_execution --minimum-passed 21
       - name: Assert the AC-2 seeded-query suite executed
         run: |
           if grep -Fq "AC2_SEEDED_QUERY_SUITE_UNAVAILABLE" data/pytest-output.txt; then
@@ -234,7 +272,7 @@ jobs:
             grep -Fn "AC2_SEEDED_QUERY_SUITE_UNAVAILABLE" data/pytest-output.txt || true
             exit 1
           fi
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_queryable_observability --test-name test_published_ac2_queries_execute_verbatim_with_retry_and_window_boundaries --minimum-passed 1
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.catalog_commits.test_queryable_observability --test-name test_published_ac2_queries_execute_verbatim_with_retry_and_window_boundaries --minimum-passed 1
       - name: Assert the cross-engine read-back executed
         run: |
           if grep -Fq "CROSS_ENGINE_READBACK_UNAVAILABLE" data/pytest-output.txt; then
@@ -242,19 +280,19 @@ jobs:
             grep -Fn "CROSS_ENGINE_READBACK_UNAVAILABLE" data/pytest-output.txt || true
             exit 1
           fi
-          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --class-name tests.integration.catalog_commits.test_pyiceberg_round_trip --test-name test_spark_reads_the_row_pyiceberg_committed --minimum-passed 1
+          docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.catalog_commits.test_pyiceberg_round_trip --test-name test_spark_reads_the_row_pyiceberg_committed --minimum-passed 1
       - name: Assert required orchestration Spark scenarios executed
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \
             python -m tests.support.required_test_gate \
-              data/metadata/test-reports/ci.xml \
+              data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml \
               --class-name tests.integration.orchestration.test_dependency_execution \
               --minimum-passed 8
       - name: Assert the release-then-resume suite executed, bronze case included
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \
             python -m tests.support.required_test_gate \
-              data/metadata/test-reports/ci.xml \
+              data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml \
               --class-name tests.integration.cli.test_dead_letter_replay \
               --minimum-passed 7
       - name: Validate the registry against the local profile (no Spark session, no writes)

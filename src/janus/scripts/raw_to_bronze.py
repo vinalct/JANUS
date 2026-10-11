@@ -297,14 +297,16 @@ class RawToBronzeLoader:
                 )
                 write_results = write_results + materialized.bronze_results
 
-                strategy_metadata = dict(
-                    runtime_planned_run.strategy.emit_metadata(
+                strategy_metadata = {
+                    **runtime_planned_run.strategy.emit_metadata(
                         plan,
                         extraction_result,
                         write_results,
                         hook=runtime_planned_run.hook,
-                    )
-                )
+                    ),
+                    # Keep raw-run counts and add the same handoff evidence as live.
+                    **{key: value for key, value in handoff.metadata if key.startswith("handoff_")},
+                }
                 _log_info(
                     logger,
                     "strategy_metadata_emitted",

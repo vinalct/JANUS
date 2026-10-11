@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from janus.checkpoints import (
@@ -59,6 +59,7 @@ from .extraction import (
     load_scoped_request_inputs,
     run_api_extraction,
 )
+from .handoff import _hook_handoff_outcome, _hook_replaces_handoff, compact_api_handoff
 from .pagination import PaginationState
 from .pagination_loop import RequestInputExtraction
 from .requests import _RETRY_POLICY, ApiRequestExecutor, ProcessedApiRequest
@@ -270,9 +271,21 @@ class ApiStrategy(BaseStrategy):
         extraction_result: ExtractionResult,
         hook: SourceHook | None = None,
     ) -> ExtractionResult:
-        if hook is not None:
-            return hook.on_normalization_handoff(plan, extraction_result)
-        return extraction_result
+        """Derive bronze input from raw pages without acquiring a Spark session."""
+        if hook is not None and _hook_replaces_handoff(hook):
+            handoff = hook.on_normalization_handoff(plan, extraction_result)
+            outcome = _hook_handoff_outcome(extraction_result, handoff)
+        else:
+            outcome = compact_api_handoff(
+                plan,
+                extraction_result,
+                raw_writer=self._raw_writer(plan),
+                hook=hook if isinstance(hook, ApiHook) else None,
+            )
+            handoff = replace(extraction_result, artifacts=outcome.artifacts)
+        for key, value in outcome.metadata.items():
+            handoff = handoff.with_metadata(key, value)
+        return handoff
 
     def emit_metadata(
         self,
@@ -303,6 +316,9 @@ class ApiStrategy(BaseStrategy):
             sleeper=self.sleeper,
             env_reader=self.env_reader,
         )
+
+    def _raw_writer(self, plan: ExecutionPlan) -> RawArtifactWriter:
+        return self.raw_writer_factory(self.storage_layout_factory(plan))
 
     def _validate_source_config(self, source_config: SourceConfig) -> None:
         access_format = source_config.access.format

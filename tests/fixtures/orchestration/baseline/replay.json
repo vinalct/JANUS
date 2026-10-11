@@ -22,7 +22,7 @@
         }
       ],
       "checkpoint_strategy": "none",
-      "config_version": "5d88b9f180ae00a4e8c04be6cd0d2414ea9161b635278fcf74c56320e7ff2c28",
+      "config_version": "3026466f0618cf8be4d802f7de5e99581c2a5700c33e2567085d2e15173c9c54",
       "configured_outputs": [
         {
           "format": "json",
@@ -81,6 +81,10 @@
       "metadata": {
         "strategy.artifact_count": "1",
         "strategy.auth_type": "none",
+        "strategy.handoff_artifact_count": "1",
+        "strategy.handoff_bytes": "50",
+        "strategy.handoff_compaction": "pages",
+        "strategy.handoff_source_page_count": "1",
         "strategy.pagination_type": "page_number",
         "strategy.raw_artifact_root": "<PROJECT>/data/raw/C/runs/ingestion_date=2026-09-13/run_id=order14-replay",
         "strategy.raw_to_bronze": "true",
@@ -169,6 +173,10 @@
       "metadata": {
         "strategy.artifact_count": "1",
         "strategy.auth_type": "none",
+        "strategy.handoff_artifact_count": "1",
+        "strategy.handoff_bytes": "50",
+        "strategy.handoff_compaction": "pages",
+        "strategy.handoff_source_page_count": "1",
         "strategy.pagination_type": "page_number",
         "strategy.raw_artifact_root": "<PROJECT>/data/raw/C/runs/ingestion_date=2026-09-13/run_id=order14-replay",
         "strategy.raw_to_bronze": "true",
@@ -335,6 +343,10 @@
         "artifact_count": 1,
         "auth_type": "none",
         "checkpoint_value": "",
+        "handoff_artifact_count": "1",
+        "handoff_bytes": "50",
+        "handoff_compaction": "pages",
+        "handoff_source_page_count": "1",
         "pagination_type": "page_number",
         "raw_artifact_root": "<PROJECT>/data/raw/C/runs/ingestion_date=2026-09-13/run_id=order14-replay",
         "raw_to_bronze": "true",

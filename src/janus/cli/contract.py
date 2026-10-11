@@ -32,10 +32,14 @@ from janus.models import (
 )
 from janus.planner import PlannedRun, Planner, PlannerError, PlanningRequest
 from janus.readers import SparkDatasetReader
-from janus.registry import SourceNotFoundError
+from janus.registry import SourceNotFoundError, load_registry
 from janus.scripts.checksums import _artifact_format_for_path
 from janus.scripts.rehydrate import _build_extraction_result_from_raw
-from janus.utils.environment import load_environment_config, materialize_runtime_paths
+from janus.utils.environment import (
+    load_environment_config,
+    materialize_runtime_paths,
+    read_spark_write_defaults,
+)
 from janus.utils.storage import StorageLayout, normalize_relative_path
 
 if TYPE_CHECKING:
@@ -188,7 +192,10 @@ def _prepare_draft_command(args: argparse.Namespace):
                 project_root=project_root,
                 include_disabled=args.include_disabled,
                 attributes=attributes,
-            )
+            ),
+            registry=load_registry(
+                project_root, write_defaults=read_spark_write_defaults(environment_config)
+            ),
         )
     except (
         KeyError,

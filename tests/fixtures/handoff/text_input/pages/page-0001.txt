@@ -1,0 +1,1 @@
+Public source response without JSON records.

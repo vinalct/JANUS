@@ -29,7 +29,7 @@
     "data/metadata/C/lineage/order14-failed.json": {
       "artifacts": [],
       "checkpoint_strategy": "none",
-      "config_version": "5d88b9f180ae00a4e8c04be6cd0d2414ea9161b635278fcf74c56320e7ff2c28",
+      "config_version": "3026466f0618cf8be4d802f7de5e99581c2a5700c33e2567085d2e15173c9c54",
       "configured_outputs": [
         {
           "format": "json",

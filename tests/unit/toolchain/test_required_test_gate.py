@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.support.required_test_gate import assert_required_tests_ran
+from tests.support.required_test_gate import assert_required_tests_ran, main
 
 
-def _report(tmp_path: Path, cases: str) -> Path:
-    report = tmp_path / "pytest.xml"
+def _report(tmp_path: Path, cases: str, *, name: str = "pytest.xml") -> Path:
+    report = tmp_path / name
     report.write_text(
         f'<testsuites><testsuite tests="1">{cases}</testsuite></testsuites>',
         encoding="utf-8",
@@ -105,3 +105,58 @@ def test_missing_or_under_collected_cases_fail_the_gate(tmp_path: Path) -> None:
 
     with pytest.raises(AssertionError, match="expected at least 2"):
         assert_required_tests_ran(report, minimum_passed=2)
+
+
+def test_cli_combines_required_cases_from_separate_processes(tmp_path: Path) -> None:
+    report = _report(tmp_path, '<testcase classname="required.suite" name="small" />')
+    large = _report(
+        tmp_path, '<testcase classname="required.suite" name="large" />', name="large.xml"
+    )
+
+    assert main([
+        str(report), "--additional-report", str(large), "--class-name", "required.suite",
+        "--minimum-passed", "2",
+    ]) == 0
+
+
+def test_a_skip_in_an_additional_report_is_never_accepted(tmp_path: Path) -> None:
+    report = _report(tmp_path, '<testcase classname="required.suite" name="small" />')
+    large = _report(
+        tmp_path,
+        '<testcase classname="required.suite" name="large"><skipped /></testcase>',
+        name="large.xml",
+    )
+
+    with pytest.raises(AssertionError, match="did not execute successfully"):
+        assert_required_tests_ran(
+            report, additional_reports=(large,), minimum_passed=2, class_name="required.suite"
+        )
+
+
+def test_a_missing_additional_report_fails_closed(tmp_path: Path) -> None:
+    report = _report(tmp_path, '<testcase classname="required.suite" name="small" />')
+
+    with pytest.raises(FileNotFoundError):
+        assert_required_tests_ran(
+            report, additional_reports=(tmp_path / "missing.xml",), minimum_passed=1
+        )
+
+
+def test_duplicate_reports_cannot_inflate_the_required_count(tmp_path: Path) -> None:
+    report = _report(tmp_path, '<testcase classname="required.suite" name="same" />')
+
+    with pytest.raises(AssertionError, match="collected 1 matching cases; expected at least 2"):
+        assert_required_tests_ran(report, additional_reports=(report,), minimum_passed=2)
+
+
+def test_a_later_pass_cannot_hide_an_earlier_skip(tmp_path: Path) -> None:
+    skipped = _report(
+        tmp_path,
+        '<testcase classname="required.suite" name="same"><skipped /></testcase>',
+    )
+    passed = _report(
+        tmp_path, '<testcase classname="required.suite" name="same" />', name="passed.xml"
+    )
+
+    with pytest.raises(AssertionError, match="did not execute successfully"):
+        assert_required_tests_ran(skipped, additional_reports=(passed,), minimum_passed=1)

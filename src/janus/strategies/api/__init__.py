@@ -8,6 +8,7 @@ from janus.strategies.api.errors import (
     ApiResponseError,
     ApiStrategyError,
 )
+from janus.strategies.api.handoff import HANDOFF_DIRECTORY_NAME, compact_api_handoff
 from janus.strategies.api.pagination import (
     CursorPaginator,
     NoPaginationPaginator,
@@ -34,6 +35,7 @@ from janus.strategies.http import (
 )
 
 __all__ = [
+    "HANDOFF_DIRECTORY_NAME",
     "ApiClient",
     "ApiHook",
     "ApiPastEndConflictError",
@@ -54,6 +56,7 @@ __all__ = [
     "SpeculativePaginationPolicy",
     "UrllibApiTransport",
     "build_paginator",
+    "compact_api_handoff",
     "default_cursor_from_payload",
     "inject_auth",
     "resolve_speculative_policy",

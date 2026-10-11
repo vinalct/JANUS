@@ -22,10 +22,17 @@ class ValidationIssue:
 
 
 class SourceConfigValidationError(ValueError):
-    def __init__(self, config_path: Path, issues: list[ValidationIssue]) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        issues: list[ValidationIssue],
+        *,
+        deprecations: list[ValidationIssue] | None = None,
+    ) -> None:
         """Build a readable validation error for a single source config file."""
         self.config_path = config_path
         self.issues = tuple(issues)
+        self.deprecations = tuple(deprecations or ())
         message_lines = [f"Invalid source config: {config_path}"]
         message_lines.extend(f"- {issue.render()}" for issue in self.issues)
         super().__init__("\n".join(message_lines))

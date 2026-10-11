@@ -2,7 +2,7 @@
   "artifacts": [],
   "checkpoint_field": "updated_at",
   "checkpoint_strategy": "max_value",
-  "config_version": "b3bd4301a0f00011d63f5fb49144753b5cbf2dbcf1adb62ae5102d27da2fe2b8",
+  "config_version": "02a1563ea7ef81060fdbc6fee03ac15d644ab4575a81fe934a145e9ad95a982d",
   "configured_outputs": [
     {
       "format": "json",

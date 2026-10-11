@@ -531,6 +531,7 @@ def test_from_raw_draft_reads_the_requested_baseline_execute_run(spark, tmp_path
     run_id = "order15-api_success"
     planned = _production_planned_run_for_root(root, output, run_id)
     environment = {
+        "spark": {"warehouse_dir": "data/metadata/warehouse"},
         "storage": {
             "root_dir": "data",
             "raw_dir": "data/raw",
@@ -538,6 +539,12 @@ def test_from_raw_draft_reads_the_requested_baseline_execute_run(spark, tmp_path
             "metadata_dir": "data/metadata",
         }
     }
+    # The production handoff builder resolves its writer from this same profile.
+    environments = root / "conf/environments"
+    environments.mkdir(parents=True)
+    (environments / "local.yaml").write_text(
+        yaml.safe_dump({"name": "local", **environment}), encoding="utf-8"
+    )
 
     drafted = contract_cli.draft_contract(
         planned,

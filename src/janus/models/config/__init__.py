@@ -68,6 +68,8 @@ from janus.models.config.types import (
     RetryConfig,
     SchemaConfig,
     SparkConfig,
+    SparkWriteConfig,
+    SparkWriteDefaults,
 )
 
 __all__ = [
@@ -114,6 +116,8 @@ __all__ = [
     "SchemaConfig",
     "SourceConfigValidationError",
     "SparkConfig",
+    "SparkWriteConfig",
+    "SparkWriteDefaults",
     "StrategyRegistry",
     "ValidationIssue",
     "ValidationPolicy",

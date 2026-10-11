@@ -8,7 +8,7 @@
   ],
   "checkpoint_field": "updated_at",
   "checkpoint_strategy": "max_value",
-  "config_version": "b3bd4301a0f00011d63f5fb49144753b5cbf2dbcf1adb62ae5102d27da2fe2b8",
+  "config_version": "02a1563ea7ef81060fdbc6fee03ac15d644ab4575a81fe934a145e9ad95a982d",
   "configured_outputs": [
     {
       "format": "json",
@@ -67,6 +67,10 @@
   "metadata": {
     "strategy.artifact_count": "1",
     "strategy.auth_type": "none",
+    "strategy.handoff_artifact_count": "1",
+    "strategy.handoff_bytes": "169",
+    "strategy.handoff_compaction": "pages",
+    "strategy.handoff_source_page_count": "1",
     "strategy.pagination_type": "page_number",
     "strategy.raw_artifact_root": "<PROJECT>/data/raw/baseline_api/runs/ingestion_date=2026-07-04/run_id=order15-replay",
     "strategy.raw_to_bronze": "true",

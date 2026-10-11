@@ -11,6 +11,8 @@ x-janus-service: &janus-service
   stdin_open: true
   tty: true
   volumes:
+    - ${JANUS_PROJECT_ROOT:-..}/Makefile:/workspace/Makefile:ro,z
+    - ${JANUS_PROJECT_ROOT:-..}/deps:/workspace/deps:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/src:/workspace/src:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/tests:/workspace/tests:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/examples:/workspace/examples:ro,z

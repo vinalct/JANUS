@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from janus.cli.common import format_runtime_permission_error
-from janus.models.source_config import SourceConfig
+from janus.models.source_config import SourceConfig, SparkWriteDefaults
 from janus.observability.openlineage import (
     FileOpenLineageTransport,
     HttpOpenLineageTransport,
@@ -61,6 +61,7 @@ from janus.utils.environment import (
     load_environment_config,
     materialize_runtime_paths,
     prepare_runtime,
+    read_spark_write_defaults,
 )
 
 ISSUES_FOUND = 2
@@ -107,9 +108,10 @@ def validate_command(args: argparse.Namespace) -> int:
 
     refusals: list[str] = []
     environment: dict[str, Any] | None = None
+    write_defaults: SparkWriteDefaults | None = None
     if args.environment is not None:
         try:
-            environment = _validate_environment(
+            environment, write_defaults = _validate_environment(
                 args.environment, project_root, prepare=args.prepare
             )
         except PermissionError as exc:
@@ -120,7 +122,11 @@ def validate_command(args: argparse.Namespace) -> int:
             refusals.append(f"Environment config is incomplete: {exc}")
 
     try:
-        registry = load_registry(project_root)
+        registry = (
+            load_registry(project_root, write_defaults=write_defaults)
+            if write_defaults is not None
+            else load_registry(project_root)
+        )
         selected = _selected_sources(registry, args.source_id)
     except (FileNotFoundError, SourceNotFoundError, ValueError) as exc:
         return _refuse([*refusals, str(exc)])
@@ -143,7 +149,9 @@ def _refuse(messages: Sequence[str]) -> int:
     return ISSUES_FOUND
 
 
-def _validate_environment(name: str, project_root: Path, *, prepare: bool) -> dict[str, Any]:
+def _validate_environment(
+    name: str, project_root: Path, *, prepare: bool
+) -> tuple[dict[str, Any], SparkWriteDefaults]:
     """The profile half, step by step as a run reads it; the first refusal raises.
 
     D-19: the dry run resolves every location with `materialize_runtime_paths`, which
@@ -157,7 +165,7 @@ def _validate_environment(name: str, project_root: Path, *, prepare: bool) -> di
     iceberg = config.get("spark", {}).get("iceberg")
     catalog_type = resolve_catalog_type(iceberg) if isinstance(iceberg, dict) and iceberg else None
     config_path = environment_config_path(name, project_root)
-    return {
+    report = {
         "name": config.get("name", name),
         "config_path": _project_relative(config_path, project_root),
         "catalog_type": catalog_type,
@@ -167,6 +175,7 @@ def _validate_environment(name: str, project_root: Path, *, prepare: bool) -> di
         "paths": {key: _location(value, project_root) for key, value in paths.items()},
         "prepared": prepare,
     }
+    return report, read_spark_write_defaults(config)
 
 
 def _transport_target(transport: OpenLineageTransport, project_root: Path) -> str | None:

@@ -298,7 +298,12 @@ def test_the_bronze_write_result_still_reports_what_it_reported_before_order_13(
     assert bronze.mode == "overwrite"
     assert bronze.records_written == BASELINE_ROW_COUNT
     assert bronze.partition_by == BASELINE_PARTITION_BY
-    assert bronze.metadata == (("schema_evolution", "none"),)
+    assert bronze.metadata == (
+        ("schema_evolution", "none"),
+        ("table_properties_applied", "created"),
+        ("write_input_partitions", "1"),
+        ("write_partitioning", "none"),
+    )
 
 
 # ── the recorded baseline: both catalogs ≡ the pre state ────────────
@@ -356,6 +361,14 @@ def test_a_second_full_refresh_grows_the_snapshot_log_under_the_jdbc_catalog(
     assert second_full_refresh.bronze_result.metadata == (
         *BASELINE_SECOND_RUN_METADATA,
         ("schema_evolution", "none"),
+        ("table_properties_reconciled", "none"),
+        (
+            "table_properties_unmanaged",
+            "current-snapshot-id,format,format-version,janus.contract_id,"
+            "janus.contract_version,janus.schema_version,write.parquet.compression-codec",
+        ),
+        ("write_input_partitions", "1"),
+        ("write_partitioning", "none"),
     )
 
     assert "history_reset_reason" not in dict(second_full_refresh.bronze_result.metadata)

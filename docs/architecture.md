@@ -100,6 +100,35 @@ Shared runtime components handle this:
 
 The raw zone exists to preserve upstream payloads, not to hide parsing logic.
 
+"Raw is never modified" holds for every family. For an API source the pages are also the **resume
+record**: progress, rediscovery and `--ingest-raw-to-bronze` all find a run by its page files, under
+the run-scoped prefix `runs/ingestion_date=…/run_id=…/` that `RawArtifactWriter` writes them to.
+
+API runs add one **derived** artifact family beside those pages, the normalization handoff
+(`janus.strategies.api.handoff`):
+
+```
+<raw>/runs/ingestion_date=…/run_id=…/
+  pages/                    page-0001.json, page-0001.json.sha256, …   (raw, the resume record)
+  request-input-000001/     …                                           (raw, multi-input sources)
+  handoff/                  (derived, rebuilt on every live run and every replay)
+    pages/records-0001.jsonl, records-0001.jsonl.sha256
+    request-input-000001/records-0001.jsonl, …
+```
+
+- It is a **sibling** of `pages/` and `request-input-NNNNNN/`, never a child of either, and it lives
+  under the same run-scoped prefix, so a replay of a run only ever sees that run's handoff.
+- It is written through `RawArtifactWriter.write_stream`, so each file carries the same `.sha256`
+  sidecar as a raw page, and compaction streams page by page instead of holding a run in memory.
+- It is **deterministic**: the same pages give byte-identical JSONL and sidecars. That is a property
+  of the raw writer's canonical serialization (`sort_keys=True`), not of anything the compactor adds.
+- It is **excluded** from raw rediscovery (the API page globs are anchored to page directories) and
+  from replay rehydration (`scripts/rehydrate.py` drops any path with a `handoff` component), so it
+  is never read back as raw input. Replay derives it again from the pages instead.
+
+The handoff is written beside the pages, never over them. Deleting `handoff/` loses nothing: the next
+replay rebuilds it to the same bytes.
+
 ### 6. Spark-facing read and normalization path
 
 Once a strategy has produced raw artifacts, JANUS uses the shared Spark-side runtime to move toward bronze data:
@@ -109,6 +138,37 @@ Once a strategy has produced raw artifacts, JANUS uses the shared Spark-side run
 - `janus.writers.spark.SparkDatasetWriter` writes structured datasets to the bronze or metadata zone.
 
 This layer stays intentionally generic. It should not flatten one API's odd payload or embed one file source's business rules.
+
+**Why the API handoff is JSONL.** The reader's default options are `multiLine=true` for `json` and
+nothing for `jsonl`. A `json` page is one document that may span lines, so Spark parses each file
+whole, in one task, and cannot split it; on an object store every one of those files is also a GET. A
+JSONL file is one record per line, so Spark can split it at any newline and bin-pack it like any
+other text input. Compaction turns N whole-file parses into a few splittable reads; the records and
+the rows they become are the same, because a mapping page is one row and an array page contributes
+its elements, exactly as the page read produced them.
+
+`json` and `jsonl` are therefore one Spark reader family. `runtime/materialize.py::handoff_format_satisfies`
+lets a `jsonl` handoff satisfy `spark.input_format: json`, so the contract's Spark schema and the
+source's `read_options` still apply; any other mismatch (a CSV handoff for a JSON declaration, say)
+still drops them, as before. A source that explicitly declares `multiLine: "true"` keeps its option
+and gets a `handoff_compaction_read_option_conflict` warning pointing at `spark.handoff: pages`.
+
+Measured on the seeded 10,000-page fixture (69,837,566 bytes of pages, Spark 4.0.1, `local[4]`,
+128 MiB `maxPartitionBytes`, 4 MiB open cost, AQE on): the page read used **313** partitions and the
+compacted read **4** (1.28 %, against the 5 % bound of AC-4), from **10,000** input files to **1**.
+The median materialize time over three runs fell from **14.34 s** to **0.64 s**, with one bronze file
+and 10,000 rows in every run. This is a local-filesystem measurement, so it is a lower bound on the
+object-store win; no cluster time is claimed.
+`tests/integration/handoff/test_read_partition_reduction.py` repeats the measurement as a required
+CI suite: it asserts the partition bound and prints the times, never asserting on them.
+
+**Write sizing is decided before Spark sees it.** `writers/partitioning.py::plan_write_partitioning`
+is pure: from the frame's partition count, the batch's handoff byte size and the source's
+`spark.write` declaration it returns `none`, `coalesce(n)` or `repartition(n)`, and the writer only
+executes that. Likewise `writers/table_properties.py` decides which of the two managed Iceberg
+properties (`write.target-file-size-bytes`, `write.distribution-mode`) need setting, and the writer
+only runs the one `ALTER TABLE … SET TBLPROPERTIES` it renders. Neither the Iceberg write branch nor
+the merge branch compares a count, a size or a property value; an AST sweep enforces it.
 
 ### 7. Validation, checkpoints, and lineage
 
@@ -234,8 +294,8 @@ The main implementation areas are:
 - `src/janus/adapters/dagster/`: the optional Dagster adapter, one op per source over the shared graph.
 - `src/janus/cli/`: the `run-all` batch command and shared CLI helpers.
 - `src/janus/scripts/`: operational helpers that still run through the planner and shared runtime contracts.
-- `src/janus/strategies/`: API, file, and catalog family behavior; `strategies/http/` single-sources the shared HTTP transport, throttle, retry, payload decode, and URL/param/checkpoint binding.
-- `src/janus/readers/`, `src/janus/writers/`, `src/janus/normalizers/`: shared runtime I/O and normalization.
+- `src/janus/strategies/`: API, file, and catalog family behavior; `strategies/http/` single-sources the shared HTTP transport, throttle, retry, payload decode, and URL/param/checkpoint binding; `strategies/api/handoff.py` derives the API family's JSONL normalization handoff.
+- `src/janus/readers/`, `src/janus/writers/`, `src/janus/normalizers/`: shared runtime I/O and normalization; `writers/partitioning.py` and `writers/table_properties.py` hold the pure write-sizing and table-property decisions the Spark writer executes.
 - `src/janus/quality/`: reusable validation checks and persisted reports.
 - `src/janus/checkpoints/`: rerun-safe data checkpoints, dead-letter state, and per-page extraction progress.
 - `src/janus/lineage/`: run metadata and lineage artifacts.
@@ -306,5 +366,7 @@ Reject changes that do any of the following:
 - write raw, bronze, or metadata outputs outside the configured zone layout;
 - skip checkpoints, validation, or run metadata because a source is "simple";
 - use hooks to smuggle in family-level behavior that should be shared properly.
+- write a derived artifact inside a raw page directory, or read one back as raw input;
+- decide a partition count or a table-property change inside the Spark write path instead of a pure planner.
 
 If onboarding a new source starts feeling like script surgery, the architecture is telling you something is wrong.

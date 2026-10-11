@@ -15,6 +15,7 @@ import yaml
 from janus.cli.common import (
     default_project_root,
     format_runtime_permission_error,
+    log_source_config_deprecations,
     parse_started_at,
 )
 from janus.observability.openlineage import resolve_openlineage_settings
@@ -37,6 +38,7 @@ from janus.utils.environment import (
     RuntimeLocation,
     load_environment_config,
     prepare_runtime,
+    read_spark_write_defaults,
 )
 from janus.utils.logging import StructuredLogger, build_structured_logger
 
@@ -178,7 +180,7 @@ def _prepare_batch(args: argparse.Namespace, project_root: Path) -> _PreparedBat
         selection=selection,
         attributes={"resume": "true"} if args.resume else None,
     )
-    registry = load_registry(project_root)
+    registry = load_registry(project_root, write_defaults=read_spark_write_defaults(config))
     plan = BatchPlanner().plan(request, registry=registry)
     resolved_paths = prepare_runtime(config, project_root)
     resolve_openlineage_settings(config)
@@ -200,6 +202,7 @@ def _execute_batch(prepared: _PreparedBatch, *, resume: bool) -> int:
             project_root=str(project_root),
             pipeline_run_id=request.pipeline_run_id,
         )
+        log_source_config_deprecations(logger, prepared.registry.sources)
         logger.info(
             "cli_batch_execution_requested",
             root_ids=plan.root_ids,

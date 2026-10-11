@@ -30,7 +30,7 @@ from dagster import (
 
 from janus.orchestration import BatchPlanner, BatchSelection, PipelineOutcome, select_sources
 from janus.registry import SourceRegistry, load_registry
-from janus.utils.environment import load_environment_config
+from janus.utils.environment import load_environment_config, read_spark_write_defaults
 
 from .collector import SummaryStoreFactory, collect_dagster_run
 from .events import attempt_event, planning_failure_event
@@ -116,7 +116,14 @@ def build_dagster_adapter(
     a run or invokes a terminal status sensor.
     """
     resolved_root = project_root.resolve()
-    resolved_registry = registry or load_registry(resolved_root)
+    resolved_config = copy.deepcopy(
+        dict(environment_config)
+        if environment_config is not None
+        else load_environment_config(environment, resolved_root)
+    )
+    resolved_registry = registry or load_registry(
+        resolved_root, write_defaults=read_spark_write_defaults(resolved_config)
+    )
     if resolved_registry.project_root != resolved_root:
         raise ValueError(
             f"Registry was loaded from {resolved_registry.project_root}, not {resolved_root}"
@@ -125,11 +132,6 @@ def build_dagster_adapter(
         resolved_registry.graph,
         resolved_registry.sources,
         selection or BatchSelection(),
-    )
-    resolved_config = copy.deepcopy(
-        dict(environment_config)
-        if environment_config is not None
-        else load_environment_config(environment, resolved_root)
     )
     op_names = {
         source_id: source_op_name(source_id) for source_id in resolved_selection.source_ids

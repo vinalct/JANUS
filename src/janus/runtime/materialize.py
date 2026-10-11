@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from janus.models import (
@@ -38,6 +39,7 @@ from janus.quality.pre_write import pre_write_aggregates
 from janus.readers import SparkDatasetReader
 from janus.readers.spark import CORRUPT_RECORD_READ_FORMATS
 from janus.schema_contracts import spark_schema_from_contract
+from janus.utils.catalog_options import is_location_uri
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout
 from janus.writers import SparkDatasetWriter
@@ -48,6 +50,22 @@ if TYPE_CHECKING:
     from janus.runtime.spark_lifecycle import SparkSessionProvider
 
 _FILE_HANDOFF_ARTIFACTS_PER_BATCH = 5
+
+#: JSON and JSONL share Spark's json reader (readers.spark::_spark_read_format).
+#: Only the multiLine default differs: that is compaction's benefit, not incompatibility.
+_EQUIVALENT_READ_FORMATS: frozenset[frozenset[str]] = frozenset({frozenset({"json", "jsonl"})})
+
+
+def handoff_format_satisfies(declared_input_format: str, handoff_format: str) -> bool:
+    """Whether the handoff honours the declared parser's schema and read options.
+
+    This is not general format compatibility: CSV never satisfies a JSON declaration.
+    """
+    declared = declared_input_format.strip().lower()
+    actual = handoff_format.strip().lower()
+    if declared == actual:
+        return True
+    return any({declared, actual} <= family for family in _EQUIVALENT_READ_FORMATS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +229,7 @@ class BronzeMaterializer:
                     intent=batch_intent,
                     batch_index=batch_index,
                     count_records=_should_count_records_for_handoff(planned_run),
+                    estimated_input_bytes=_estimated_batch_bytes(batch_artifacts),
                 )
             finally:
                 if persisted:
@@ -240,14 +259,52 @@ class BronzeMaterializer:
         return tuple(bronze_results), normalized_dataframe, run_keys, tuple(evidence)
 
 
+def _estimated_batch_bytes(artifacts: Sequence[ExtractedArtifact]) -> int | None:
+    """Sum handoff sizes with one stat per artifact, or decline to estimate the batch.
+
+    A location URI or any unreadable file makes the whole estimate unknown: a partial
+    sum would undersize the write. No Spark action or object-store listing is needed.
+    """
+    total = 0
+    for artifact in artifacts:
+        if is_location_uri(artifact.path):
+            return None
+        try:
+            total += Path(artifact.path).stat().st_size
+        except OSError:
+            return None
+    return total
+
+
 def _tracks_corrupt_records(
     reader: SparkDatasetReader, handoff_format: str, plan: ExecutionPlan
 ) -> bool:
     """Only readers that can expose corrupt records opt into the pre-write count."""
     return (
         getattr(reader, "supports_corrupt_record_read", False)
-        and handoff_format in CORRUPT_RECORD_READ_FORMATS
-        and handoff_format == plan.source_config.spark.input_format
+        and handoff_format.strip().lower() in CORRUPT_RECORD_READ_FORMATS
+        and handoff_format_satisfies(plan.source_config.spark.input_format, handoff_format)
+    )
+
+
+def _log_handoff_read_option_conflict(
+    logger: StructuredLogger | None, handoff: ExtractionResult, plan: ExecutionPlan
+) -> None:
+    """Report an explicit multiLine override without changing the operator's options."""
+    if logger is None or handoff.metadata_as_dict().get("handoff_compaction") != "jsonl":
+        return
+    options = plan.source_config.spark.read_options or {}
+    if not any(
+        key.lower() == "multiline" and value.strip().lower() == "true"
+        for key, value in options.items()
+    ):
+        return
+    logger.warning(
+        "handoff_compaction_read_option_conflict",
+        source_id=plan.source.source_id,
+        option="multiLine",
+        value="true",
+        suggested_handoff="pages",
     )
 
 
@@ -260,7 +317,7 @@ def _read_batch(
     logger: StructuredLogger | None,
     batch_metadata: Mapping[str, Any],
 ) -> Any:
-    """Read one batch with the source's schema and options when its format matches."""
+    """Read one batch with the declaration when its format uses the same parser."""
     _log_info(
         logger,
         "spark_read_started",
@@ -270,17 +327,18 @@ def _read_batch(
         **batch_metadata,
     )
     handoff_format = handoff.single_artifact_format()
+    honours_declaration = handoff_format_satisfies(
+        plan.source_config.spark.input_format, handoff_format
+    )
+    if honours_declaration and batch_metadata.get("batch_index", 1) == 1:
+        _log_handoff_read_option_conflict(logger, handoff, plan)
     tracks_corrupt = _tracks_corrupt_records(reader, handoff_format, plan)
     spark_schema = (
         spark_schema_from_contract(contract, with_corrupt_record=tracks_corrupt)
-        if handoff_format == plan.source_config.spark.input_format
+        if honours_declaration
         else None
     )
-    read_options = (
-        plan.source_config.spark.read_options
-        if handoff_format == plan.source_config.spark.input_format
-        else None
-    )
+    read_options = plan.source_config.spark.read_options if honours_declaration else None
     read_kwargs: dict[str, Any] = {}
     if tracks_corrupt:
         read_kwargs["corrupt_record_column"] = CORRUPT_RECORD_COLUMN

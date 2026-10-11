@@ -49,7 +49,6 @@ schema:
 spark:
   input_format: csv
   write_mode: overwrite
-  repartition: 1
   partition_by:
     - ingestion_date
   read_options:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import InitVar, dataclass, field
 from pathlib import Path
@@ -15,6 +16,7 @@ from janus.models.source_config import (
     STRATEGY_REGISTRY,
     SourceConfig,
     SourceConfigValidationError,
+    SparkWriteDefaults,
     StrategyRegistry,
     ValidationIssue,
     ValidationPolicy,
@@ -119,6 +121,7 @@ class SourceRegistry:
         policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
         strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
         hook_ids: frozenset[str] | None = None,
+        write_defaults: SparkWriteDefaults | None = None,
     ) -> Self:
         """Load app settings, discover sources, and return one validated registry snapshot.
 
@@ -129,6 +132,8 @@ class SourceRegistry:
         other than the built-in one. None of them is stored on the returned registry: which
         policy validated a load is lineage, not registry state, and a field would change
         ``__eq__`` and ``repr`` for every consumer to record something nobody reads afterwards.
+        ``write_defaults`` similarly travels to every source parser, including grouped
+        entries, so each source resolves its own overrides against the same profile values.
 
         Graph validation, then the semantic pass, happen last, in ``__post_init__``: after
         every individual config is typed and after duplicate ids are rejected, because a graph
@@ -151,7 +156,19 @@ class SourceRegistry:
                 config_path,
                 policy=policy,
                 strategy_registry=strategy_registry,
+                write_defaults=write_defaults,
             )
+            deprecations = dict.fromkeys(
+                issue for source, _entry in loaded for issue in source.deprecations
+            )
+            if deprecations:
+                warnings.warn(
+                    "\n".join(
+                        f"{config_path}: {issue.path}: {issue.message}" for issue in deprecations
+                    ),
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
             for source, entry in loaded:
                 previous_path = seen_source_ids.get(source.source_id)
                 if previous_path is not None:
@@ -241,6 +258,7 @@ def load_registry(
     policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
     strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
     hook_ids: frozenset[str] | None = None,
+    write_defaults: SparkWriteDefaults | None = None,
 ) -> SourceRegistry:
     """Public convenience wrapper that loads the full source registry."""
     return SourceRegistry.load(
@@ -248,6 +266,7 @@ def load_registry(
         policy=policy,
         strategy_registry=strategy_registry,
         hook_ids=hook_ids,
+        write_defaults=write_defaults,
     )
 
 
@@ -376,6 +395,7 @@ def _load_source_configs(
     *,
     policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
     strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
+    write_defaults: SparkWriteDefaults | None = None,
 ) -> tuple[tuple[SourceConfig, str | None], ...]:
     """Read one YAML file and return its validated configs, each with its entry label."""
     raw = _load_yaml_document(config_path)
@@ -390,6 +410,7 @@ def _load_source_configs(
                     config_path,
                     policy=policy,
                     registry=strategy_registry,
+                    write_defaults=write_defaults,
                 ),
                 None,
             ),
@@ -399,6 +420,7 @@ def _load_source_configs(
         config_path,
         policy=policy,
         strategy_registry=strategy_registry,
+        write_defaults=write_defaults,
     )
 
 
@@ -408,9 +430,11 @@ def _load_grouped_source_configs(
     *,
     policy: ValidationPolicy = DEFAULT_VALIDATION_POLICY,
     strategy_registry: StrategyRegistry = STRATEGY_REGISTRY,
+    write_defaults: SparkWriteDefaults | None = None,
 ) -> tuple[tuple[SourceConfig, str], ...]:
     """Load a grouped source file whose top level is a `sources:` list."""
     issues: list[ValidationIssue] = []
+    deprecations: list[ValidationIssue] = []
 
     unsupported_keys = sorted(key for key in raw if key != "sources")
     for key in unsupported_keys:
@@ -443,18 +467,27 @@ def _load_grouped_source_configs(
                         config_path,
                         policy=policy,
                         registry=strategy_registry,
+                        write_defaults=write_defaults,
                     ),
                     entry_path,
                 )
             )
+            deprecations.extend(
+                ValidationIssue(f"{entry_path}.{issue.path}", issue.message)
+                for issue in sources[-1][0].deprecations
+            )
         except SourceConfigValidationError as exc:
+            deprecations.extend(
+                ValidationIssue(f"{entry_path}.{issue.path}", issue.message)
+                for issue in exc.deprecations
+            )
             issues.extend(
                 ValidationIssue(f"{entry_path}.{issue.path}", issue.message)
                 for issue in exc.issues
             )
 
     if issues:
-        raise SourceConfigValidationError(config_path, issues)
+        raise SourceConfigValidationError(config_path, issues, deprecations=deprecations)
     return tuple(sources)
 
 

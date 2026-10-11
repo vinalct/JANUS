@@ -369,6 +369,99 @@ That is enough to support sources that mostly follow the shared strategy but sti
 
 The strategy still controls the main execution loop. The hook only adjusts the edges that are genuinely source-specific.
 
+## Normalization handoff
+
+Extraction writes one raw file per page, because a page is the unit of resume and rediscovery. Spark
+should not have to read it that way. `ApiStrategy.build_normalization_handoff` — called by both the
+live executor and `--ingest-raw-to-bronze` replay — turns the pages into a small set of JSONL files
+before the materializer reads anything. The work lives in `strategies/api/handoff.py`; `core.py`
+only decides who owns the handoff and attaches the metadata.
+
+### Shape
+
+```
+build_normalization_handoff(plan, extraction_result, hook)
+  ├─ hook overrides on_normalization_handoff → hook.on_normalization_handoff(plan, extraction_result)
+  │                                            handoff_compaction = "hook"
+  └─ otherwise → compact_api_handoff(plan, extraction_result, raw_writer=…, hook=…)
+                   → CompactionOutcome(artifacts, compaction, source_page_count, handoff_bytes)
+     either way the four handoff_* keys are attached to the returned ExtractionResult
+```
+
+`compact_api_handoff` groups the pages by the directory they were written to (`pages/` or
+`request-input-NNNNNN/`, the request-input *index*), orders each group numerically by page index,
+and streams the rows through `RawArtifactWriter.write_stream` into
+`<run prefix>/handoff/<group>/records-NNNN.jsonl`, rolling to a new file after the record that
+crosses `spark.handoff.max_artifact_mb` (default 256). A JSON page that is a mapping becomes one row
+and a JSON array contributes its elements; a JSONL page contributes its lines the same way. That is
+exactly what Spark's page read produced, envelope fields included, so no bronze row changes. The
+serialization is the raw writer's own (`iter_json_lines`, `sort_keys=True`), which is what makes the
+output byte-identical for identical pages.
+
+The extraction result's record count and checkpoint are carried through untouched; only its artifact
+list is replaced. If the rows written disagree with `records_extracted` (an API whose count unwraps an
+envelope the page read keeps), the strategy logs `handoff_record_count_mismatch` and changes nothing.
+The handoff builder never acquires a Spark session.
+
+### The five refusals
+
+Compaction is a read optimisation, so every case it cannot handle safely falls back to today's
+behaviour — the original page artifacts, unchanged — and says why. They are checked in this order,
+and the reason constants live in `handoff.py`:
+
+| Order | Condition | `handoff_compaction` | Constant |
+|---|---|---|---|
+| 1 | Extraction produced no artifacts | `empty` | `COMPACTION_EMPTY` |
+| 2 | The source declares `spark.handoff: pages` | `pages` | `COMPACTION_PAGES` |
+| 3 | The raw format is `text` or `binary` — no record structure to concatenate | `none` | `COMPACTION_NONE` |
+| 4 | The hook overrides `extract_records` | `hook_records` | `COMPACTION_HOOK_RECORDS` |
+| 5 | A page has an unexpected format, name or directory, or lies outside this run's prefix | `none` | `COMPACTION_NONE` |
+
+A successful compaction records `jsonl` (`COMPACTION_JSONL`). An empty handoff stays empty, so the
+run still skips its Spark session and logs `spark_session_skipped`.
+
+### Hook precedence
+
+Two hook capabilities change the outcome. Both are capability checks on the hook **class** — is the
+method overridden? — and never a `source_id` comparison.
+
+- **A hook that overrides `on_normalization_handoff` owns the handoff**, and is handed the
+  **original, uncompacted** extraction result. Compaction does not run first. This takes precedence
+  over `spark.handoff` and over an `extract_records` override, and records `hook`.
+- **A hook that overrides `extract_records` disables compaction** (`hook_records`). That method takes
+  the live `ApiRequest` and `ApiResponse`; at handoff time neither exists, and re-deriving its records
+  from a saved page would be a guess.
+
+The IBGE SIDRA hook is the worked example of the first rule. Its `on_normalization_handoff` reads
+each page with `_load_json_artifact`, which raises `ValueError` on any artifact whose format is not
+`json`, and projects the SIDRA table into its own `sidra_records.jsonl`. Had the strategy compacted
+first, IBGE would have been handed one `jsonl` artifact and failed on its first run. Instead it
+receives its pages, writes its projection, and both IBGE sources record `handoff_compaction=hook` in
+every live and replay cell of the golden matrix. A hook that wants compaction as well can call
+`compact_api_handoff` itself.
+
+### Metadata
+
+Every API run records four keys on the handoff, and in the run metadata as `strategy.handoff_*`:
+
+| Key | Value |
+|---|---|
+| `handoff_compaction` | `jsonl`, `pages`, `none`, `hook`, `hook_records` or `empty` |
+| `handoff_source_page_count` | Raw page artifacts the handoff was derived from (also on every bypass) |
+| `handoff_artifact_count` | Artifacts the materializer will read |
+| `handoff_bytes` | Their total size, excluding sidecars |
+
+Both entry points call `emit_metadata` with the original extraction result, then add the handoff's
+`handoff_` entries, so raw artifact counts keep their meaning. On the 10,000-page fixture a run
+records `jsonl`, `10000`, `1` and the handoff's byte size.
+
+### Replay
+
+Replay rediscovers the **pages** — `scripts/rehydrate.py` excludes any path with a `handoff`
+component (`HANDOFF_DIRECTORY_NAME`) — and calls the same `build_normalization_handoff`, which
+writes the handoff again. An existing handoff is never read as input, so a stale or tampered one
+cannot reach bronze, and `--verify-checksums` verifies the pages it was rebuilt from.
+
 ## What the strategy returns
 
 At the end of extraction, the strategy returns one JANUS `ExtractionResult`.

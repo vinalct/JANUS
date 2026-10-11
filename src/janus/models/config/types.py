@@ -12,12 +12,15 @@ from datetime import date
 from typing import Final
 
 from janus.models.config.constants import (
+    DEFAULT_HANDOFF_MAX_ARTIFACT_MB,
+    DEFAULT_HANDOFF_MODE,
     DEFAULT_MAX_ARCHIVE_RATIO,
     DEFAULT_MAX_ARCHIVE_TOTAL_BYTES,
     DEFAULT_MAX_PAYLOAD_BYTES,
     DEFAULT_MAX_REDIRECTS,
     DEFAULT_PAST_END_STATUS_CODES,
     DEFAULT_RETRYABLE_STATUS_CODES,
+    DEFAULT_TARGET_FILE_SIZE_MB,
     MAX_REDIRECTS_CEILING,
 )
 
@@ -239,12 +242,55 @@ class SchemaConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SparkHandoffConfig:
+    """How the API strategy hands its raw artifacts to Spark."""
+
+    mode: str = DEFAULT_HANDOFF_MODE
+    max_artifact_mb: int = DEFAULT_HANDOFF_MAX_ARTIFACT_MB
+
+    @property
+    def is_compacting(self) -> bool:
+        return self.mode == "compact"
+
+    @property
+    def max_artifact_bytes(self) -> int:
+        return self.max_artifact_mb * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class SparkWriteDefaults:
+    """Optional profile values, injected when source configurations are parsed."""
+
+    target_file_size_mb: int | None = None
+    distribution_mode: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SparkWriteConfig:
+    """Bronze file sizing, table distribution, and an optional exact task count.
+
+    Size and distribution describe Iceberg table properties. Only ``partitions``
+    controls the DataFrame immediately before a write, including coalescing it.
+    """
+
+    target_file_size_mb: int = DEFAULT_TARGET_FILE_SIZE_MB
+    distribution_mode: str = "hash"
+    partitions: int | None = None
+
+    @property
+    def target_file_size_bytes(self) -> int:
+        return self.target_file_size_mb * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
 class SparkConfig:
     input_format: str
     write_mode: str
     repartition: int | None = None
     partition_by: tuple[str, ...] = ()
     read_options: dict[str, str] | None = None
+    handoff: SparkHandoffConfig = field(default_factory=SparkHandoffConfig)
+    write: SparkWriteConfig = field(default_factory=SparkWriteConfig)
 
 
 @dataclass(frozen=True, slots=True)

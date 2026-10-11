@@ -13,6 +13,11 @@ from janus.writers.overwrite import (
     build_replace_table_as_select_sql,
     plan_full_refresh_overwrite,
 )
+from janus.writers.partitioning import (
+    WritePartitioningPlan,
+    apply_write_partitioning,
+    plan_write_partitioning,
+)
 from janus.writers.raw import (
     PARTIAL_SUFFIX_MARKER,
     SIDECAR_SUFFIX,
@@ -32,8 +37,18 @@ from janus.writers.spark import (
     SparkDatasetWriter,
     build_merge_sql,
 )
+from janus.writers.table_properties import (
+    MANAGED_TABLE_PROPERTIES,
+    TablePropertyReconciliation,
+    build_set_tblproperties_sql,
+    desired_table_properties,
+    plan_table_property_reconciliation,
+    read_table_properties,
+    render_tblproperties_clause,
+)
 
 __all__ = [
+    "MANAGED_TABLE_PROPERTIES",
     "PARTIAL_SUFFIX_MARKER",
     "PLAN_METADATA_KEY",
     "SIDECAR_SUFFIX",
@@ -52,14 +67,23 @@ __all__ = [
     "SchemaEvolutionRefusedError",
     "SparkDatasetWriter",
     "StagedWrite",
+    "TablePropertyReconciliation",
+    "WritePartitioningPlan",
+    "apply_write_partitioning",
     "build_add_columns_sql",
     "build_create_table_as_select_sql",
     "build_insert_into_sql",
     "build_insert_overwrite_sql",
     "build_merge_sql",
     "build_replace_table_as_select_sql",
+    "build_set_tblproperties_sql",
+    "desired_table_properties",
     "partition_clause",
     "plan_full_refresh_overwrite",
     "plan_schema_evolution",
+    "plan_table_property_reconciliation",
+    "plan_write_partitioning",
     "quote_identifier",
+    "read_table_properties",
+    "render_tblproperties_clause",
 ]
