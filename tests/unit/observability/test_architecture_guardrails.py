@@ -31,8 +31,18 @@ WORKFLOW_ROOT_CANDIDATES = (
 
 OBSERVABILITY_ANCHORS = {
     "__init__.py",
+    "bounded.py",
     "emission.py",
+    "freshness.py",
     "iceberg_sink.py",
+    "metrics/__init__.py",
+    "metrics/catalogue.py",
+    "metrics/exposition.py",
+    "metrics/pipeline.py",
+    "metrics/settings.py",
+    "metrics/serialization.py",
+    "metrics/sink.py",
+    "metrics/transport.py",
     "openlineage/facets.py",
     "openlineage/sink.py",
     "openlineage/transport.py",
@@ -128,6 +138,22 @@ def _assert_surface(modules: Mapping[str, str], anchors: set[str], package: str)
     assert anchors <= set(modules), (
         f"the {package} sweep missed intended modules: {sorted(anchors - set(modules))}"
     )
+
+
+def test_order23_anchors_cover_every_metrics_module() -> None:
+    modules = _modules(OBSERVABILITY_ROOT)
+    _assert_surface(modules, OBSERVABILITY_ANCHORS, "janus.observability")
+    metrics = {name for name in modules if name.startswith("metrics/")}
+    assert metrics, "the observability sweep matched no metrics modules"
+    assert metrics <= OBSERVABILITY_ANCHORS, sorted(metrics - OBSERVABILITY_ANCHORS)
+
+
+@pytest.mark.parametrize("missing", sorted(OBSERVABILITY_ANCHORS))
+def test_observability_surface_detector_rejects_a_missing_anchor(missing: str) -> None:
+    modules = _modules(OBSERVABILITY_ROOT)
+    modules.pop(missing)
+    with pytest.raises(AssertionError, match=re.escape(missing)):
+        _assert_surface(modules, OBSERVABILITY_ANCHORS, "janus.observability")
 
 
 def _qualified_name(node: ast.AST) -> str | None:
@@ -510,6 +536,17 @@ def test_observability_never_writes_authoritative_json() -> None:
     assert all(reason.strip() for reason in JSON_WRITE_ALLOWANCES.values())
 
 
+def test_json_write_allowances_are_not_stale() -> None:
+    modules = _modules(OBSERVABILITY_ROOT)
+    _assert_surface(modules, OBSERVABILITY_ANCHORS, "janus.observability")
+    for module, reason in JSON_WRITE_ALLOWANCES.items():
+        assert module in modules, f"JSON write allowance names missing module {module}"
+        assert reason.strip(), f"JSON write allowance needs a reason: {module}"
+        assert any(name == "os.write" for _, name in _json_write_findings(modules[module])), (
+            f"JSON write allowance no longer describes a raw append: {module}"
+        )
+
+
 def test_json_write_detector_rejects_authoritative_json_and_accepts_serialization() -> None:
     violation = "def emit(path, payload):\n    write_json_atomic(path, payload)\n"
     clean = "def encode(payload):\n    return json.dumps(payload)\n"
@@ -572,13 +609,12 @@ def test_catalog_detector_rejects_a_second_derivation_and_accepts_shared_helpers
     assert _catalog_boundary_findings(clean) == ()
 
 
-def test_required_ci_jobs_do_not_configure_http_openlineage() -> None:
+def _required_ci_surface():
     workflow_root = _workflow_root()
     workflows = sorted(workflow_root.glob("*.yml")) + sorted(workflow_root.glob("*.yaml"))
     assert workflows, "the workflow sweep matched no YAML files"
     ci_path = workflow_root / "ci.yml"
     assert ci_path in workflows, "the workflow sweep did not find .github/workflows/ci.yml"
-
     document = yaml.safe_load(ci_path.read_text(encoding="utf-8"))
     assert isinstance(document, Mapping)
     jobs = document.get("jobs")
@@ -586,13 +622,95 @@ def test_required_ci_jobs_do_not_configure_http_openlineage() -> None:
     assert set(jobs) >= REQUIRED_CI_JOBS, (
         f"the workflow sweep missed required jobs: {sorted(REQUIRED_CI_JOBS - set(jobs))}"
     )
-    required_surface = {
+    return {
         "global_env": document.get("env", {}),
         "jobs": {name: jobs[name] for name in REQUIRED_CI_JOBS},
     }
-    assert not _workflow_lineage_findings(required_surface), (
-        "a required CI job configures an HTTP OpenLineage destination: "
-        f"{_workflow_lineage_findings(required_surface)}"
+
+
+def test_required_ci_jobs_do_not_configure_http_openlineage() -> None:
+    findings = _workflow_lineage_findings(_required_ci_surface())
+    assert not findings, f"a required CI job configures an HTTP OpenLineage destination: {findings}"
+
+
+def _metrics_assignment_findings(key, value, path):
+    if key == "JANUS_METRICS_TRANSPORT":
+        if str(value).strip().lower() not in {"disabled", "file", "textfile"}:
+            return (f"{path}: external or unresolved metrics transport",)
+    elif key == "JANUS_METRICS_DIR":
+        directory = str(value).strip()
+        for workspace in ("${{ github.workspace }}/", "$GITHUB_WORKSPACE/", "${GITHUB_WORKSPACE}/"):
+            if directory.startswith(workspace):
+                directory = directory.removeprefix(workspace)
+                break
+        if (
+            Path(directory).is_absolute()
+            or ".." in Path(directory).parts
+            or "://" in directory
+            or "$" in directory
+        ):
+            return (f"{path}: metrics path escapes or cannot be resolved inside the workspace",)
+    return ()
+
+
+def _workflow_metrics_findings(value, path="workflow"):
+    findings = []
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            current = f"{path}.{key}"
+            findings.extend(_metrics_assignment_findings(str(key).upper(), nested, current))
+            findings.extend(_workflow_metrics_findings(nested, current))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            findings.extend(_workflow_metrics_findings(nested, f"{path}[{index}]"))
+    elif isinstance(value, str):
+        assignments = re.finditer(
+            r"\b(JANUS_METRICS_TRANSPORT|JANUS_METRICS_DIR)\s*=\s*"
+            r"(?:\"([^\"]*)\"|'([^']*)'|([^\s;]+))",
+            value,
+        )
+        for assignment in assignments:
+            declared = next(group for group in assignment.groups()[1:] if group is not None)
+            findings.extend(_metrics_assignment_findings(assignment[1], declared, path))
+    return tuple(findings)
+
+
+def test_required_ci_jobs_do_not_configure_external_metrics() -> None:
+    findings = _workflow_metrics_findings(_required_ci_surface())
+    assert not findings, f"a required CI job configures external metrics: {findings}"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "env:\n  JANUS_METRICS_TRANSPORT: statsd\n",
+        "jobs:\n  fast:\n    env:\n      JANUS_METRICS_TRANSPORT: STATSD\n",
+        "jobs:\n  spark:\n    steps:\n      - run: JANUS_METRICS_TRANSPORT=statsd pytest\n",
+        "jobs:\n  adapter:\n    steps:\n"
+        "      - run: export JANUS_METRICS_TRANSPORT='statsd'; pytest\n",
+        "env:\n  JANUS_METRICS_TRANSPORT: textfile\n  JANUS_METRICS_DIR: /tmp/metrics\n",
+        "env:\n  JANUS_METRICS_DIR: ../metrics\n",
+        "env:\n  JANUS_METRICS_DIR: ${{ github.workspace }}/../metrics\n",
+        "env:\n  JANUS_METRICS_TRANSPORT: ${{ secrets.TRANSPORT }}\n",
+        "steps:\n  - run: JANUS_METRICS_DIR=/var/lib/node-exporter pytest\n",
+        "steps:\n  - run: export JANUS_METRICS_DIR=../../metrics; pytest\n",
+    ],
+)
+def test_workflow_metrics_detector_rejects_external_configuration(source):
+    assert _workflow_metrics_findings(yaml.safe_load(source))
+
+
+@pytest.mark.parametrize("transport", ["disabled", "file", "textfile"])
+@pytest.mark.parametrize(
+    "directory",
+    ["metrics", "data/metadata/metrics", "${{ github.workspace }}/data/metadata/metrics"],
+)
+def test_workflow_metrics_detector_accepts_hermetic_configuration(transport, directory):
+    assert not _workflow_metrics_findings(
+        {"env": {"JANUS_METRICS_TRANSPORT": transport, "JANUS_METRICS_DIR": directory}}
+    )
+    assert not _workflow_metrics_findings(
+        {"run": f"JANUS_METRICS_TRANSPORT='{transport}' JANUS_METRICS_DIR='{directory}' pytest"}
     )
 
 
@@ -617,3 +735,48 @@ def test_workflow_detector_accepts_hermetic_lineage_configuration() -> None:
         "      JANUS_OPENLINEAGE_EVENTS_DIR: data/lineage\n"
     )
     assert _workflow_lineage_findings(yaml.safe_load(source)) == ()
+
+
+def _order23_session_free_modules():
+    modules = _modules(OBSERVABILITY_ROOT)
+    _assert_surface(modules, OBSERVABILITY_ANCHORS, "janus.observability")
+    selected = {
+        name: source
+        for name, source in modules.items()
+        if name.startswith("metrics/") or name == "freshness.py"
+    }
+    status = PACKAGE_ROOT / "cli/status.py"
+    operations = PACKAGE_ROOT / "models/config/operations.py"
+    assert status.is_file() and operations.is_file()
+    selected["cli/status.py"] = status.read_text(encoding="utf-8")
+    selected["models/config/operations.py"] = operations.read_text(encoding="utf-8")
+    assert selected
+    return selected
+
+
+class TestOrder23Red:
+    @staticmethod
+    def test_order23_metrics_budget_and_status_sweep_is_anchored_and_session_free():
+        modules = _order23_session_free_modules()
+        assert modules
+        violations = {
+            name: findings
+            for name, source in modules.items()
+            if (findings := _spark_references(source))
+        }
+        assert violations == {}
+
+    @staticmethod
+    def test_order23_new_path_detector_rejects_a_deliberate_spark_import():
+        modules = _order23_session_free_modules()
+        assert modules
+        for name, source in modules.items():
+            assert _spark_references(source + "\nfrom pyspark.sql import SparkSession\n"), name
+
+    @staticmethod
+    def test_order23_new_path_detector_accepts_clean_profile_and_record_access():
+        modules = _order23_session_free_modules()
+        assert modules
+        clean = "def labels(record, config):\n    return record.source_id, config.get('spark')\n"
+        assert _spark_references(clean) == ()
+        assert all(not _spark_references(source) for source in modules.values())

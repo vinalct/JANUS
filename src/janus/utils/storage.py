@@ -8,7 +8,7 @@ from typing import Any, Self
 
 from janus.models import ExecutionPlan
 from janus.models.source_config import OutputTarget
-from janus.utils.environment import resolve_project_path
+from janus.utils.environment import RuntimeLocation, resolve_project_path
 
 SUPPORTED_STORAGE_ZONES = frozenset({"bronze", "metadata", "raw"})
 ICEBERG_BRONZE_NAMESPACE = "bronze"
@@ -39,6 +39,32 @@ class ResolvedOutputTarget:
 
     def child(self, relative_path: str | Path) -> Path:
         return self.resolved_path / normalize_relative_path(relative_path)
+
+
+def resolve_metadata_directory(
+    directory: str,
+    resolved_paths: Mapping[str, RuntimeLocation],
+    *,
+    format: str,
+) -> Path:
+    """Resolve an output directory using the metadata zone's own containment rule."""
+    metadata_root = resolved_paths.get("metadata_dir")
+    if metadata_root is None:
+        raise ValueError(
+            "The file transport needs a resolved metadata zone; this profile resolved none"
+        )
+    root = Path(str(metadata_root))
+    if not root.is_absolute():
+        raise ValueError(
+            "The resolved metadata zone must be absolute before files can be written under it"
+        )
+    zone = ResolvedOutputTarget(
+        zone="metadata",
+        configured_path=directory,
+        resolved_path=root,
+        format=format,
+    )
+    return zone.child(directory)
 
 
 @dataclass(frozen=True, slots=True)

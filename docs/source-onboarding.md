@@ -533,6 +533,39 @@ Concurrent runs emit extra extraction metadata that sequential runs do not: `spe
 
 Practical rule: if `extraction.mode` is `incremental`, define a real `checkpoint_field` and use a checkpoint strategy other than `none`.
 
+### `operations`
+
+Declare operational expectations only when you know the source's schedule and normal duration:
+
+```yaml
+operations:
+  max_duration_seconds: 3600
+  freshness:
+    max_age: 24h
+```
+
+Both keys are optional; omitting the block leaves both undeclared. `max_duration_seconds`
+is an integer at least `1`. Freshness uses `<n>h|<n>d`, where `n` is a positive integer:
+`24h` and `1d` both mean 86,400 seconds. Fractions, bare numbers, zero, negative values and
+other units are invalid. If `freshness` is present, its `max_age` must be valid. Validation
+is structural and is never relaxed by the phase-scope policy.
+
+The duration budget records `within`, `exceeded`, or `undeclared` in run metadata, lineage,
+the runs table and metrics before emission. Equality is within budget. Exceeding it logs
+`run_duration_budget_exceeded`; a successful run stays successful. The runtime never kills,
+times out, reschedules, or rolls back a run because of this declaration. Only the opt-in
+[`run-all --fail-on-budget-breach`](orchestration.md#duration-budget-policy) changes the
+already-finished run's batch outcome.
+
+Freshness is evaluated by [`janus status`](queryable-observability.md#source-freshness-with-janus-status)
+and the [published query](queries/observability/stale-sources.sql), never by the runtime.
+It measures age since a successful run completed, not raw-zone or upstream publication age.
+In the example, a 3,601-second successful run exceeds its budget but keeps its data and run
+status; a last successful completion older than 24 hours is stale when the operator checks it.
+
+No checked-in source declares either expectation yet. A budget and a freshness window are
+operational knowledge; inventing values during onboarding would invent that knowledge.
+
 ### `schema`
 
 Declare the bronze table's versioned ODCS contract by path:

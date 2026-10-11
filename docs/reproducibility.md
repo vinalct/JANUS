@@ -450,9 +450,12 @@ extraction: copied between machines, restored from a backup, or edited by hand.
 
 Be explicit about the current project state.
 
-`janus` is one command with eight verbs. `src/janus/main.py` only delegates to the verb table in
+`janus` is one command with nine verbs. `src/janus/main.py` only delegates to the verb table in
 `src/janus/cli/dispatch.py`, and a command line that starts with an option is the `run` verb, so
 every form in this guide works as it did before the other verbs existed.
+
+The ninth verb, [`janus status`](queryable-observability.md#source-freshness-with-janus-status),
+checks declared source freshness without starting Spark.
 
 `janus run` is a reproducible runtime entry point for:
 
@@ -487,7 +490,7 @@ python -m janus.main \
   --bronze-table bronze_inep.censo_escolar_microdados
 ```
 
-The other seven verbs:
+The other eight verbs:
 
 | Verb | What it is for | Runs a source? |
 |---|---|---|
@@ -498,6 +501,7 @@ The other seven verbs:
 | `janus dead-letters` | inspecting, releasing or replaying the items a run gave up on | only `replay --execute` |
 | `janus checkpoint` | showing, setting or clearing where a source's next run starts | no |
 | `janus maintain` | planning, and with `--apply` applying, the profile's declared retention ([retention and maintenance](maintenance.md)) | no |
+| `janus status` | checking the latest successful run against each source's declared freshness window ([freshness status](queryable-observability.md#source-freshness-with-janus-status)) | no |
 
 Cross-source scheduling is `janus run-all`: it runs one batch in dependency order and
 exits. Inspecting and correcting what a run leaves behind is the operator verbs below.
@@ -652,6 +656,44 @@ way back, and the upstream may have changed since.
 work for the newest `retain_last` snapshots and anything younger than `older_than_days` (three
 snapshots and 30 days in the shipped profiles), unless a source declares its own
 `outputs.bronze.retention`. Roll back before running maintenance, not after.
+
+## CI timing and coverage
+
+Make's container `exec` commands explicitly run the image entrypoint before launching
+Python or a shell. Unlike `compose run`, `compose exec` bypasses that entrypoint and does
+not inherit exports from the container's initial process. Each new command therefore
+initializes its own account view when the host uid is absent from the image, giving the
+JVM an absolute home directory without changing `/etc/passwd`. Account files are private
+to each invocation so concurrent commands cannot overwrite one another's identity.
+`make test-spark-startup` checks account resolution, the JVM home, and a real Spark SQL
+query through this exec path. Both local and hosted CI run it before coverage.
+
+The hosted Spark job sets `JANUS_CONTAINER_ENGINE=docker` for every Make invocation,
+matching the engine into which buildx loads `janus:local`. Locally the default is `auto`:
+Make prefers Podman, then Docker, only after a read-only Compose `ps` succeeds against
+the configured stack. An installed Compose CLI without a reachable engine is skipped.
+Use `make test JANUS_CONTAINER_ENGINE=docker` or `make test JANUS_CONTAINER_ENGINE=podman`
+to select one engine explicitly; an unavailable selected engine fails instead of switching.
+
+`make test` reuses the development container. Make passes a checksum of its current
+Makefile into the Compose service configuration, so a changed Makefile recreates the
+container on the next setup and refreshes its single-file bind mount. This avoids reading
+an older Makefile after an editor saves by replacing the file. `make up` also forces a
+fresh container when a manual refresh is needed.
+
+`make ci` and the hosted Spark gate run the five two-second operator CLI checks in a
+separate process with coverage disabled. `make test-cli-timing` runs just those checks;
+their JUnit gate requires all five to pass. The remaining unit suite, integration suite,
+and isolated 2 GiB handoff retain coverage and their required-test gates. Each suite prints
+its twenty slowest cases, and hosted CI uploads the test reports and logs with coverage.
+
+Configuration and contract reads use PyYAML's C-backed safe loader when available, falling
+back to the Python safe loader without LibYAML. Documents are read afresh on each load;
+edits to configuration and contract bytes remain visible. Docker installs pinned runtime
+dependencies before copying application code, so source changes can reuse that build layer.
+
+The fast job omits data engines. Catalog-backed status unit tests skip there when PyIceberg
+is absent; the Spark gate requires all six exact catalog status cases to execute successfully.
 
 ## Known limits at this stage
 

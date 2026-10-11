@@ -165,6 +165,19 @@ class SourceAttempt:
             failure=FailureDetails.from_exception(error, phase=phase),
         )
 
+    def as_budget_breach(self, budget_seconds: int) -> Self:
+        """Fail the batch's view of a succeeded run for its duration budget.
+
+        Bronze, quality and checkpoint evidence stay intact. The run succeeded;
+        only the batch attempt fails, at the operator's explicit request.
+        """
+        failure = FailureDetails(
+            phase="budget",
+            error_type="RunDurationBudgetExceeded",
+            reason=f"Run exceeded its declared duration budget of {budget_seconds}s",
+        )
+        return replace(self, status="failed", failure=failure)
+
     def to_summary(self) -> dict[str, Any]:
         summary: dict[str, Any] = {
             "source_id": self.source_id,

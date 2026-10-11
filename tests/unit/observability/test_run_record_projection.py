@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,6 +17,7 @@ import janus.observability.records
 from janus.checkpoints import CheckpointWriteResult
 from janus.lineage import LineageRecord, RunMetadata, compute_config_version
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult, RunContext, WriteResult
+from janus.models.source_config import FreshnessConfig, OperationsConfig
 from janus.observability import RunEvidencePaths, RunRecord, vocabulary
 from janus.observability.vocabulary import MAX_FAILURE_REASON_LENGTH, RUN_RECORD_SCHEMA_VERSION
 from janus.quality import ValidationCheck, ValidationReport
@@ -150,17 +153,33 @@ def _records(
     extraction_result: ExtractionResult | None,
     write_results: tuple[WriteResult, ...],
     error: Exception | None = None,
+    duration_budget_seconds: int | None = None,
+    duration_budget_outcome: str | None = None,
+    freshness_max_age_seconds: int | None = None,
 ) -> tuple[RunMetadata, LineageRecord]:
-    """Build the pair exactly as ``RunObserver.record_success``/``record_failure`` does."""
+    """Build the authoritative pair with fixed UTC timestamps and shared run facts."""
     if status == "succeeded":
         assert extraction_result is not None
         run_metadata = RunMetadata.succeeded(
-            plan, extraction_result, write_results, finished_at=FINISHED_AT
+            plan,
+            extraction_result,
+            write_results,
+            finished_at=FINISHED_AT,
+            duration_budget_seconds=duration_budget_seconds,
+            duration_budget_outcome=duration_budget_outcome,
+            freshness_max_age_seconds=freshness_max_age_seconds,
         )
     else:
         assert error is not None
         run_metadata = RunMetadata.failed(
-            plan, error, extraction_result, write_results, finished_at=FINISHED_AT
+            plan,
+            error,
+            extraction_result,
+            write_results,
+            finished_at=FINISHED_AT,
+            duration_budget_seconds=duration_budget_seconds,
+            duration_budget_outcome=duration_budget_outcome,
+            freshness_max_age_seconds=freshness_max_age_seconds,
         )
     lineage_record = LineageRecord.from_runtime(
         plan,
@@ -170,6 +189,9 @@ def _records(
         failure_reason=run_metadata.failure_reason,
         error_type=run_metadata.error_type,
         emitted_at=FINISHED_AT,
+        duration_budget_seconds=run_metadata.duration_budget_seconds,
+        duration_budget_outcome=run_metadata.duration_budget_outcome,
+        freshness_max_age_seconds=run_metadata.freshness_max_age_seconds,
     )
     return run_metadata, lineage_record
 
@@ -194,6 +216,9 @@ def _expected(plan: ExecutionPlan, tmp_path: Path, **overrides: object) -> dict[
         "ended_at": FINISHED_AT,
         "emitted_at": EMITTED_AT,
         "duration_seconds": 5.0,
+        "duration_budget_seconds": None,
+        "duration_budget_outcome": None,
+        "freshness_max_age_seconds": None,
         "config_version": compute_config_version(plan.source_config.config_path),
         "schema_version": None,
         "contract_id": None,
@@ -202,6 +227,10 @@ def _expected(plan: ExecutionPlan, tmp_path: Path, **overrides: object) -> dict[
         "records_extracted": 2,
         "artifact_count": 1,
         "records_written": 2,
+        "request_count": None,
+        "retry_count": None,
+        "attempt_count": None,
+        "dead_letter_count": None,
         "bronze_table_identifier": BRONZE_TABLE,
         "bronze_write_mode": "overwrite",
         "checkpoint_field": "updated_at",
@@ -971,3 +1000,460 @@ def test_an_operator_reset_moves_the_next_comparison_but_never_becomes_its_decis
     assert record.checkpoint_decision == "advanced", "2026-07-02 is behind 07-03, ahead of 07-01"
     assert record.checkpoint_history_path == str(persisted.checkpoint_result.history_path)
     assert Path(record.checkpoint_history_path).name == "after-reset.json"
+
+class TestOrder23Red:
+    @staticmethod
+    def test_adds_all_seven_typed_projection_fields():
+        from dataclasses import fields
+
+        from tests.support.metrics_order23 import NEW_FIELDS
+
+        declared = {field.name for field in fields(RunRecord)}
+        assert declared and NEW_FIELDS
+        assert set(NEW_FIELDS) <= declared
+
+    @staticmethod
+    @pytest.mark.parametrize(
+        ("budget", "expected"), [(4, "exceeded"), (5, "within"), (6, "within")]
+    )
+    def test_lifts_recorded_budget_and_freshness_without_changing_success(
+        budget, expected, tmp_path
+    ):
+        plan = _plan(tmp_path, run_id="budget")
+        plan = replace(
+            plan,
+            source_config=replace(
+                plan.source_config,
+                operations=OperationsConfig(
+                    max_duration_seconds=budget, freshness=FreshnessConfig(86400)
+                ),
+            ),
+        )
+        metadata, lineage = _records(
+            plan,
+            status="succeeded",
+            extraction_result=_extraction_result(plan),
+            write_results=_write_results(plan),
+            duration_budget_seconds=budget,
+            duration_budget_outcome=plan.source_config.operations.evaluate_duration(
+                (FINISHED_AT - STARTED_AT).total_seconds()
+            ),
+            freshness_max_age_seconds=plan.source_config.operations.freshness.max_age_seconds,
+        )
+        projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+        assert metadata.duration_budget_seconds == lineage.duration_budget_seconds == budget
+        assert metadata.duration_budget_outcome == lineage.duration_budget_outcome == expected
+        assert projected.duration_budget_seconds == budget
+        assert projected.duration_budget_outcome == expected
+        assert projected.freshness_max_age_seconds == 86400
+        assert projected.status == metadata.status == lineage.status == "succeeded"
+        assert metadata.duration_seconds == 5.0
+        for record in (metadata, lineage, projected):
+            payload = record.to_dict()
+            assert payload["duration_budget_seconds"] == budget
+            assert payload["duration_budget_outcome"] == expected
+            assert payload["freshness_max_age_seconds"] == 86400
+        assert metadata.metadata == lineage.metadata == (), (
+            "these are run facts, not strategy fields"
+        )
+
+    @staticmethod
+    def test_absent_budget_is_null_and_undeclared(tmp_path):
+        plan = _plan(tmp_path, run_id="undeclared-budget")
+        operations = OperationsConfig()
+        metadata, lineage = _records(
+            plan,
+            status="succeeded",
+            extraction_result=_extraction_result(plan),
+            write_results=(),
+            duration_budget_outcome=operations.evaluate_duration(
+                (FINISHED_AT - STARTED_AT).total_seconds()
+            ),
+        )
+        projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+        assert projected.duration_budget_seconds is None
+        assert projected.duration_budget_outcome == "undeclared"
+        assert projected.freshness_max_age_seconds is None
+
+    @staticmethod
+    def test_lifts_all_four_counter_strings_as_integers(tmp_path):
+        from tests.support.metrics_order23 import plan, project
+
+        counts = {
+            "request_count": "10",
+            "retry_count": "2",
+            "attempt_count": "12",
+            "dead_letter_count": "0",
+        }
+        projected = project(plan(tmp_path), metadata=counts)
+        assert {name: getattr(projected, name) for name in counts} == {
+            "request_count": 10,
+            "retry_count": 2,
+            "attempt_count": 12,
+            "dead_letter_count": 0,
+        }
+        assert all(type(getattr(projected, name)) is int for name in counts)
+        assert {name: projected.to_dict()[name] for name in counts} == {
+            "request_count": 10,
+            "retry_count": 2,
+            "attempt_count": 12,
+            "dead_letter_count": 0,
+        }
+
+    @staticmethod
+    def test_file_family_missing_http_counters_are_null_and_dead_letters_are_real(tmp_path):
+        projected, lineage = _family_counter_projection(tmp_path, "file")
+        assert projected.strategy_family == "file"
+        assert projected.request_count is None
+        assert projected.retry_count is None
+        assert projected.attempt_count is None
+        assert projected.dead_letter_count == 0
+        assert type(projected.dead_letter_count) is int
+        payload = projected.to_dict()
+        assert payload["request_count"] is None
+        assert payload["retry_count"] is None
+        assert payload["attempt_count"] is None
+        assert payload["dead_letter_count"] == 0
+        extraction = lineage.extraction_metadata_as_dict()
+        assert "request_count" not in extraction
+        assert "retry_count" not in extraction
+        assert "attempt_count" not in extraction
+        assert extraction["dead_letter_count"] == "0"
+
+
+def _family_counter_projection(tmp_path: Path, family: str) -> tuple[RunRecord, LineageRecord]:
+    """Extract through the family's own builder, with one retry and no live endpoint."""
+    from janus.strategies.api import ApiResponse, ApiStrategy
+    from janus.strategies.catalog import CatalogStrategy
+    from janus.strategies.files import FileStrategy
+    from janus.utils.storage import StorageLayout
+    from tests.support.observability_baseline import RECORDS, source_payload, write_project
+
+    document = source_payload("catalog_success" if family == "catalog" else "api_success")
+    if family == "file":
+        document.update(source_type="file", strategy="file", strategy_variant="static_file")
+        document["access"] = {
+            "url": "https://fixtures.invalid/records.json",
+            "method": "GET",
+            "format": "json",
+            "auth": {"type": "none"},
+            "pagination": {"type": "none"},
+            "rate_limit": {"concurrency": 1},
+        }
+        document["extraction"].update(mode="snapshot", checkpoint_strategy="none")
+        document["extraction"].pop("checkpoint_field")
+        document["spark"].pop("handoff")
+    document["extraction"]["retry"]["max_attempts"] = 2
+    write_project(tmp_path, document)
+    source_config = load_registry(tmp_path).get_source(document["source_id"])
+    plan = ExecutionPlan.from_source_config(
+        source_config,
+        RunContext.create(
+            run_id="family-counters",
+            environment="local",
+            project_root=tmp_path,
+            started_at=STARTED_AT,
+            attributes={"pipeline_attempt": "7"},
+        ),
+    )
+
+    class CounterTransport:
+        def __init__(self):
+            self.statuses = [503, 200]
+
+        def open(self):
+            pass
+
+        def close(self):
+            pass
+
+        def send(self, request):
+            return ApiResponse(
+                request=request,
+                status_code=self.statuses.pop(0),
+                body=json.dumps(list(RECORDS)).encode(),
+            )
+
+    transport = CounterTransport()
+    strategy = {"api": ApiStrategy, "catalog": CatalogStrategy, "file": FileStrategy}[family](
+        transport_factory=lambda: transport,
+        sleeper=lambda _: None,
+        storage_layout_factory=lambda _: StorageLayout.from_environment_config(
+            {
+                "storage": {
+                    "root_dir": "data",
+                    **{f"{zone}_dir": f"data/{zone}" for zone in ("raw", "bronze", "metadata")},
+                }
+            },
+            tmp_path,
+        ),
+    )
+    extraction_result = strategy.extract(plan)
+    assert not transport.statuses, "the fixture must exercise a retry and a successful request"
+    metadata, lineage = _records(
+        plan, status="succeeded", extraction_result=extraction_result, write_results=()
+    )
+    return RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT), lineage
+
+
+@pytest.mark.parametrize("family", ["api", "catalog"])
+def test_http_family_counters_match_the_real_extraction_builder(tmp_path, family):
+    projected, lineage = _family_counter_projection(tmp_path, family)
+    extraction = lineage.extraction_metadata_as_dict()
+    assert projected.strategy_family == family
+    assert projected.request_count == 1
+    assert projected.retry_count == 1
+    assert projected.attempt_count == 2
+    assert projected.dead_letter_count == 0
+    for name in ("request_count", "retry_count", "attempt_count", "dead_letter_count"):
+        value = getattr(projected, name)
+        assert type(value) is int
+        assert value == int(extraction[name])
+        assert projected.to_dict()[name] == value
+    assert projected.pipeline_attempt == 7
+    assert projected.attempt_count != projected.pipeline_attempt
+
+
+def test_a_reported_zero_request_count_projects_to_zero(tmp_path):
+    from tests.support.metrics_order23 import plan, project
+
+    projected = project(plan(tmp_path), metadata={"request_count": "0"})
+    assert projected.strategy_family == "api"
+    assert projected.request_count == 0
+    assert type(projected.request_count) is int
+    assert projected.to_dict()["request_count"] == 0
+
+
+def test_an_absent_request_count_projects_to_null(tmp_path):
+    from tests.support.metrics_order23 import plan, project
+
+    projected = project(plan(tmp_path), metadata={"dead_letter_count": "3"})
+    assert projected.request_count is None
+    assert projected.to_dict()["request_count"] is None
+    assert projected.dead_letter_count == 3
+
+
+@pytest.mark.parametrize("extracted", [False, True])
+def test_absent_extraction_metadata_projects_all_four_counters_to_null(tmp_path, extracted):
+    plan = _plan(tmp_path, run_id="absent-counters")
+    metadata, lineage = _records(
+        plan,
+        status="succeeded" if extracted else "failed",
+        extraction_result=ExtractionResult.from_plan(plan, ()) if extracted else None,
+        write_results=(),
+        error=None if extracted else RuntimeError("extraction did not finish"),
+    )
+    assert lineage.extraction_metadata == ()
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+    assert projected.request_count is None
+    assert projected.retry_count is None
+    assert projected.attempt_count is None
+    assert projected.dead_letter_count is None
+    payload = projected.to_dict()
+    assert payload["request_count"] is None
+    assert payload["retry_count"] is None
+    assert payload["attempt_count"] is None
+    assert payload["dead_letter_count"] is None
+
+
+@pytest.mark.parametrize(
+    "counter", ["request_count", "retry_count", "attempt_count", "dead_letter_count"]
+)
+@pytest.mark.parametrize("raw", ["unknown", "1.5"])
+def test_an_unparseable_counter_is_null_without_losing_other_counters(tmp_path, counter, raw):
+    from tests.support.metrics_order23 import plan, project
+
+    counts = {
+        name: "3" for name in ("request_count", "retry_count", "attempt_count", "dead_letter_count")
+    }
+    counts[counter] = raw
+    projected = project(plan(tmp_path), metadata=counts)
+    assert getattr(projected, counter) is None
+    assert projected.to_dict()[counter] is None
+    for name in counts.keys() - {counter}:
+        assert getattr(projected, name) == 3
+        assert projected.to_dict()[name] == 3
+
+
+@pytest.mark.parametrize(
+    "counter", ["request_count", "retry_count", "attempt_count", "dead_letter_count"]
+)
+def test_each_extraction_counter_is_independently_optional(tmp_path, counter):
+    from tests.support.metrics_order23 import plan, project
+
+    projected = project(plan(tmp_path), metadata={counter: "3"})
+    assert getattr(projected, counter) == 3
+    for name in {"request_count", "retry_count", "attempt_count", "dead_letter_count"} - {counter}:
+        assert getattr(projected, name) is None
+
+
+def test_a_missing_duration_is_undeclared_even_with_a_declared_budget(tmp_path):
+    """The fixed clock never finished this run; absence must not turn into a zero duration."""
+    plan = _plan(tmp_path, run_id="interrupted-budget")
+    operations = OperationsConfig(max_duration_seconds=5, freshness=FreshnessConfig(86400))
+    outcome = operations.evaluate_duration(None)
+    metadata, lineage = _records(
+        plan,
+        status="failed",
+        extraction_result=None,
+        write_results=(),
+        error=RuntimeError("interrupted"),
+        duration_budget_outcome=outcome,
+        freshness_max_age_seconds=operations.freshness.max_age_seconds,
+    )
+    metadata = replace(metadata, ended_at=None, duration_seconds=None)
+
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+
+    assert projected.duration_seconds is projected.ended_at is None
+    for record in (metadata, lineage, projected):
+        assert record.duration_budget_seconds is None
+        assert record.duration_budget_outcome == "undeclared"
+        assert record.freshness_max_age_seconds == 86400
+
+
+@pytest.mark.parametrize("budget", [None, 5])
+def test_a_start_record_carries_the_declaration_without_an_outcome(budget, tmp_path):
+    plan = _plan(tmp_path, run_id="start-budget")
+
+    metadata = RunMetadata.started(
+        plan, duration_budget_seconds=budget, freshness_max_age_seconds=86400
+    )
+
+    assert metadata.status == "running"
+    assert metadata.started_at == STARTED_AT
+    assert metadata.ended_at is metadata.duration_seconds is None
+    assert metadata.to_dict()["duration_budget_seconds"] == budget
+    assert metadata.to_dict()["duration_budget_outcome"] is None
+    assert metadata.to_dict()["freshness_max_age_seconds"] == 86400
+
+
+@pytest.mark.parametrize("has_extraction", [False, True])
+def test_a_failed_run_carries_the_same_budget_fields(has_extraction, tmp_path):
+    plan = _plan(tmp_path, run_id="failed-budget")
+    operations = OperationsConfig(max_duration_seconds=4)
+    metadata, lineage = _records(
+        plan,
+        status="failed",
+        extraction_result=_extraction_result(plan) if has_extraction else None,
+        write_results=_write_results(plan) if has_extraction else (),
+        error=RuntimeError("failed slowly"),
+        duration_budget_seconds=operations.max_duration_seconds,
+        duration_budget_outcome=operations.evaluate_duration(
+            (FINISHED_AT - STARTED_AT).total_seconds()
+        ),
+        freshness_max_age_seconds=86400,
+    )
+
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+
+    for record in (metadata, lineage, projected):
+        assert record.status == "failed"
+        assert record.to_dict()["duration_budget_seconds"] == 4
+        assert record.to_dict()["duration_budget_outcome"] == "exceeded"
+        assert record.to_dict()["freshness_max_age_seconds"] == 86400
+
+
+def test_freshness_can_be_carried_without_a_duration_budget(tmp_path):
+    plan = _plan(tmp_path, run_id="freshness-only")
+    operations = OperationsConfig(freshness=FreshnessConfig(86400))
+    metadata, lineage = _records(
+        plan,
+        status="succeeded",
+        extraction_result=_extraction_result(plan),
+        write_results=(),
+        duration_budget_outcome=operations.evaluate_duration(
+            (FINISHED_AT - STARTED_AT).total_seconds()
+        ),
+        freshness_max_age_seconds=operations.freshness.max_age_seconds,
+    )
+
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+
+    for record in (metadata, lineage, projected):
+        assert record.duration_budget_seconds is None
+        assert record.duration_budget_outcome == "undeclared"
+        assert record.freshness_max_age_seconds == 86400
+
+
+def test_the_projection_lifts_the_recorded_outcome_without_evaluating_it(tmp_path, monkeypatch):
+    plan = _plan(tmp_path, run_id="carried-budget")
+    metadata, lineage = _records(
+        plan,
+        status="succeeded",
+        extraction_result=_extraction_result(plan),
+        write_results=(),
+        duration_budget_seconds=100,
+        duration_budget_outcome="exceeded",
+        freshness_max_age_seconds=86400,
+    )
+
+    def unexpected_evaluation(*args, **kwargs):
+        raise AssertionError("the projection must never re-evaluate a recorded outcome")
+
+    monkeypatch.setattr(OperationsConfig, "evaluate_duration", unexpected_evaluation)
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+
+    assert projected.duration_seconds == 5.0
+    assert projected.duration_budget_seconds == 100
+    assert projected.duration_budget_outcome == "exceeded", "carry the evidence byte for byte"
+    assert projected.freshness_max_age_seconds == 86400
+
+
+@pytest.mark.parametrize("kind", ["metadata", "lineage", "projection"])
+@pytest.mark.parametrize(
+    ("seconds", "outcome", "message"),
+    [
+        (None, "invented", "duration_budget_outcome must be one of: exceeded, undeclared, within"),
+        (None, "exceeded", "duration_budget_seconds is present exactly when"),
+        (None, "within", "duration_budget_seconds is present exactly when"),
+        (5, "undeclared", "duration_budget_seconds is present exactly when"),
+        (5, None, "duration_budget_seconds is present exactly when"),
+    ],
+)
+def test_budget_field_contradictions_are_rejected(kind, seconds, outcome, message, tmp_path):
+    plan = _plan(tmp_path, run_id="invalid-budget")
+    metadata, lineage = _records(
+        plan,
+        status="succeeded",
+        extraction_result=_extraction_result(plan),
+        write_results=(),
+    )
+    projected = RunRecord.from_run(metadata, lineage, emitted_at=EMITTED_AT)
+    record = {"metadata": metadata, "lineage": lineage, "projection": projected}[kind]
+
+    with pytest.raises(ValueError, match=message):
+        replace(record, duration_budget_seconds=seconds, duration_budget_outcome=outcome)
+
+
+def test_all_record_constructors_default_the_new_keys_to_null(tmp_path):
+    plan = _plan(tmp_path, run_id="legacy-budget")
+    succeeded, success_lineage = _records(
+        plan,
+        status="succeeded",
+        extraction_result=_extraction_result(plan),
+        write_results=(),
+    )
+    failed, failure_lineage = _records(
+        plan,
+        status="failed",
+        extraction_result=None,
+        write_results=(),
+        error=RuntimeError("legacy failure"),
+    )
+    records = (
+        RunMetadata.started(plan),
+        succeeded,
+        failed,
+        success_lineage,
+        failure_lineage,
+        RunRecord.from_run(succeeded, success_lineage, emitted_at=EMITTED_AT),
+        RunRecord.from_run(failed, failure_lineage, emitted_at=EMITTED_AT),
+    )
+    for record in records:
+        payload = record.to_dict()
+        for field in (
+            "duration_budget_seconds", "duration_budget_outcome", "freshness_max_age_seconds"
+        ):
+            assert field in payload
+            assert payload[field] is None

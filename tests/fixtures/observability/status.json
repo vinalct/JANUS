@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "environment": "local",
+  "evaluated_at": "2026-10-09T12:00:00+00:00",
+  "source": "metadata_zone",
+  "totals": {
+    "fresh": 2,
+    "stale": 1,
+    "never_ran": 2,
+    "undeclared": 1,
+    "breaching": 3
+  },
+  "sources": [
+    {
+      "source_id": "fixture.empty",
+      "enabled": true,
+      "outcome": "never_ran",
+      "last_success_at": null,
+      "age_seconds": null,
+      "max_age_seconds": 86400,
+      "runs_scanned": 0,
+      "unreadable_run_files": 0,
+      "metadata_path": "<PROJECT_ROOT>/data/metadata/fixture/empty"
+    },
+    {
+      "source_id": "fixture.fresh",
+      "enabled": true,
+      "outcome": "fresh",
+      "last_success_at": "2026-10-09T10:00:00+00:00",
+      "age_seconds": 7200.0,
+      "max_age_seconds": 86400,
+      "runs_scanned": 3,
+      "unreadable_run_files": 0,
+      "metadata_path": "<PROJECT_ROOT>/data/metadata/fixture/fresh"
+    },
+    {
+      "source_id": "fixture.never",
+      "enabled": true,
+      "outcome": "never_ran",
+      "last_success_at": null,
+      "age_seconds": null,
+      "max_age_seconds": 21600,
+      "runs_scanned": 2,
+      "unreadable_run_files": 0,
+      "metadata_path": "<PROJECT_ROOT>/data/metadata/fixture/never"
+    },
+    {
+      "source_id": "fixture.stale",
+      "enabled": true,
+      "outcome": "stale",
+      "last_success_at": "2026-10-07T10:00:00+00:00",
+      "age_seconds": 180000.0,
+      "max_age_seconds": 86400,
+      "runs_scanned": 2,
+      "unreadable_run_files": 0,
+      "metadata_path": "<PROJECT_ROOT>/data/metadata/fixture/stale"
+    },
+    {
+      "source_id": "fixture.undeclared",
+      "enabled": true,
+      "outcome": "undeclared",
+      "last_success_at": "2026-10-01T04:00:00+00:00",
+      "age_seconds": 720000.0,
+      "max_age_seconds": null,
+      "runs_scanned": 1,
+      "unreadable_run_files": 0,
+      "metadata_path": "<PROJECT_ROOT>/data/metadata/fixture/undeclared"
+    },
+    {
+      "source_id": "fixture.unreadable",
+      "enabled": true,
+      "outcome": "fresh",
+      "last_success_at": "2026-10-09T09:00:00+00:00",
+      "age_seconds": 10800.0,
+      "max_age_seconds": 86400,
+      "runs_scanned": 2,
+      "unreadable_run_files": 1,
+      "metadata_path": "<PROJECT_ROOT>/data/metadata/fixture/unreadable"
+    }
+  ]
+}

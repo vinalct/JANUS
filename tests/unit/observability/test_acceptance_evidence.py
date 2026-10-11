@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
@@ -233,3 +236,187 @@ def test_every_captured_terminal_shape_carries_the_ac1_fields(tmp_path, monkeypa
         assert record.ended_at == baseline.FINISHED_AT
         assert record.config_version == compute_config_version(Path(record.source_config_path))
         assert record.record_schema_version == 3
+
+
+@pytest.mark.parametrize("case", baseline.BASELINE_CASES)
+@pytest.mark.parametrize(
+    ("budget", "outcome"), [(None, "undeclared"), (5, "within"), (4, "exceeded")]
+)
+def test_budget_outcome_reaches_terminal_summary_and_source_attempt(
+    case, budget, outcome, tmp_path, monkeypatch
+):
+    from janus.models.config.types import OperationsConfig
+    from janus.orchestration import ExecutionTiming, SourceAttempt
+
+    source_payload = baseline.source_payload
+    evaluate = OperationsConfig.evaluate_duration
+    calls, executed = [], []
+
+    def budget_source(case):
+        payload = source_payload(case)
+        if budget is not None:
+            payload["operations"] = {"max_duration_seconds": budget}
+        return payload
+
+    def count_evaluation(self, duration_seconds):
+        calls.append(duration_seconds)
+        return evaluate(self, duration_seconds)
+
+    owner = baseline.RawToBronzeLoader if case == "replay" else baseline.SourceExecutor
+    method = "ingest" if case == "replay" else "execute"
+    original = getattr(owner, method)
+
+    def capture_result(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        executed.append(result)
+        return result
+
+    monkeypatch.setattr(baseline, "source_payload", budget_source)
+    monkeypatch.setattr(OperationsConfig, "evaluate_duration", count_evaluation)
+    monkeypatch.setattr(owner, method, capture_result)
+    manifest = baseline.capture_case(tmp_path, case)
+    assert calls == [5.0]
+    assert len(executed) == 1
+    result = executed[0]
+    assert result.duration_budget_outcome == outcome
+    assert manifest["summary"]["executed_run"]["duration_budget_outcome"] == outcome
+    assert result.status == ("failed" if case.endswith("failure") else "succeeded")
+    attempt = SourceAttempt.from_executed_run(
+        result,
+        timing=ExecutionTiming(baseline.STARTED_AT, baseline.FINISHED_AT, 5.0),
+    )
+    assert attempt.evidence["duration_budget_outcome"] == outcome
+    assert attempt.to_summary()["evidence"]["duration_budget_outcome"] == outcome
+    assert calls == [5.0], "summaries and pipeline evidence must not evaluate again"
+
+
+METRICS_PROFILE = {
+    "transport": "${JANUS_METRICS_TRANSPORT:-disabled}",
+    "path": "${JANUS_METRICS_DIR:-metrics}",
+}
+
+
+def _capture_metrics_case(root, case, enabled, monkeypatch, capsys):
+    from janus.main import main
+    from janus.observability.metrics.transport import MetricsEmissionOutcome
+    from janus.utils.environment import load_environment_config
+    from tests.support.metrics_order23 import exit_code, write_profile
+
+    write_profile(root, METRICS_PROFILE if enabled else None)
+    monkeypatch.setenv("JANUS_METRICS_TRANSPORT", "file")
+    monkeypatch.setenv("JANUS_METRICS_DIR", "acceptance-metrics")
+    config = load_environment_config("local", root)
+    emitter = build_run_event_emitter(
+        config,
+        {"metadata_dir": root / "data/metadata"},
+        runs_table_sink=lambda *args, **kwargs: IcebergAppendResult(
+            IcebergAppendOutcome.EMITTED, "metadata.runs"
+        ),
+    )
+    fixed = baseline.FixedObserver
+
+    class MetricsObserver(fixed):
+        def __init__(self):
+            super().__init__(emitter=emitter)
+
+    captured = []
+    owner = baseline.RawToBronzeLoader if case == "replay" else baseline.SourceExecutor
+    method = "ingest" if case == "replay" else "execute"
+    original = getattr(owner, method)
+
+    def capture_result(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        captured.append(result)
+        return result
+
+    monkeypatch.setattr(owner, method, capture_result)
+    monkeypatch.setattr(baseline, "FixedObserver", MetricsObserver)
+    manifest = baseline.capture_case(root, case)
+    assert len(captured) == 1
+    result = emitter.last_result
+    assert result is not None
+    metrics_files = list((root / "data/metadata").rglob("*.ndjson"))
+    if enabled:
+        assert result.metrics is not None
+        assert result.metrics.outcome is MetricsEmissionOutcome.EMITTED
+        assert result.metrics.sample_count > 0
+        assert metrics_files and all(path.stat().st_size > 0 for path in metrics_files)
+        batches = [
+            json.loads(line) for path in metrics_files for line in path.read_bytes().splitlines()
+        ]
+        assert len(batches) == 1
+        assert batches[0]["samples"]
+    else:
+        assert result.metrics is None
+        assert not metrics_files
+
+    files = _authoritative_files(root / "data/metadata")
+    assert files, "the differential must compare authoritative bytes"
+    monkeypatch.setattr(owner, method, lambda *args, **kwargs: captured[0])
+    monkeypatch.setattr(
+        "janus.cli.run.load_registry", lambda *args, **kwargs: SimpleNamespace(sources=())
+    )
+    monkeypatch.setattr(
+        "janus.cli.run.Planner.plan", lambda *args, **kwargs: captured[0].planned_run
+    )
+    invocation = ["run", "--project-root", str(root), "--source-id", manifest["source_id"]]
+    invocation += (
+        ["--ingest-raw-to-bronze", "--bronze-table", "bronze.baseline_replay"]
+        if case == "replay"
+        else ["--execute"]
+    )
+    code = exit_code(lambda: main(invocation))
+    assert code == (0 if manifest["status"] == "succeeded" else 1)
+    assert _authoritative_files(root / "data/metadata") == files
+    capsys.readouterr()
+    return files, captured[0].status, code
+
+
+@pytest.mark.parametrize("case", baseline.BASELINE_CASES)
+def test_metrics_off_and_on_preserve_exact_bytes_status_and_cli_exit(
+    case, tmp_path, monkeypatch, capsys
+):
+    root = tmp_path / "project"
+    with monkeypatch.context() as off_patch:
+        disabled = _capture_metrics_case(root, case, False, off_patch, capsys)
+    shutil.rmtree(root)
+    with monkeypatch.context() as on_patch:
+        enabled = _capture_metrics_case(root, case, True, on_patch, capsys)
+    assert enabled == disabled
+
+
+@pytest.mark.skipif(
+    Path("/workspace") != PROJECT_ROOT,
+    reason="frozen absolute-path goldens require the /workspace reference container",
+)
+class TestReferenceContainerGoldens:
+    @staticmethod
+    @pytest.mark.parametrize("case", baseline.BASELINE_CASES)
+    def test_metrics_preserve_frozen_task07_golden_bytes_status_and_cli_exit(
+        case, monkeypatch, capsys
+    ):
+        goldens = PROJECT_ROOT / "tests/fixtures/observability/goldens" / case / "metadata"
+        expected = _authoritative_files(goldens)
+        assert expected, "exact-byte acceptance cannot compare two empty trees"
+        run_json = next(goldens.rglob("runs/*.json"))
+        expected_run = json.loads(run_json.read_bytes())
+        root = Path(expected_run["source_config_path"]).parents[2]
+        assert root == PROJECT_ROOT / "data/metadata/order-23-evidence/golden-project" / case
+        backup = root.with_name(f".{case}.saved-{uuid4().hex}")
+        if root.exists():
+            root.rename(backup)
+        try:
+            captures = []
+            for enabled in (False, True):
+                with monkeypatch.context() as patch:
+                    captured = _capture_metrics_case(root, case, enabled, patch, capsys)
+                assert captured[0] == expected
+                assert captured[1] == expected_run["status"]
+                captures.append(captured)
+                shutil.rmtree(root)
+            assert captures[0] == captures[1]
+        finally:
+            if root.exists():
+                shutil.rmtree(root)
+            if backup.exists():
+                backup.rename(root)

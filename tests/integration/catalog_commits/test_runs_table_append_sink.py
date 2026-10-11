@@ -14,7 +14,7 @@ import pytest
 
 import janus.observability.iceberg_sink as iceberg_sink
 from janus.observability import IcebergAppendOutcome, RunRecord, append_run_record
-from janus.observability.runs_table import IcebergType, RunsTableColumn
+from janus.observability.runs_table import RUNS_TABLE_SCHEMA, IcebergType, RunsTableColumn
 from janus.utils.catalog_properties import (
     derive_pyiceberg_catalog_name,
     derive_pyiceberg_catalog_properties,
@@ -80,6 +80,15 @@ RUNS_TABLE_SCHEMA_V2 = (
 )
 V2_COLUMNS = ("schema_version", "contract_id", "contract_version")
 V3_COLUMNS = ("contract_preflight_outcome", "schema_evolution", "malformed_rows")
+VALUES = {
+    "duration_budget_seconds": 4,
+    "duration_budget_outcome": "exceeded",
+    "freshness_max_age_seconds": 86400,
+    "request_count": 2**31 + 10,
+    "retry_count": 2,
+    "attempt_count": 2**31 + 12,
+    "dead_letter_count": 0,
+}
 
 RUNS_TABLE_SKIP_REASON = (
     "AC1_REAL_CATALOG_SUITE_UNAVAILABLE: catalog engines or seeded jars are missing"
@@ -208,7 +217,7 @@ def _older_row(record: RunRecord, version: int, columns) -> dict[str, Any]:
     return {column.name: payload[column.name] for column in columns}
 
 
-def test_v1_table_evolves_additively_and_appends_a_v3_row(
+def test_v1_table_evolves_additively_and_appends_an_row(
     catalog_target: CatalogTarget,
     shared_catalog_session,
 ):
@@ -236,16 +245,26 @@ def test_v1_table_evolves_additively_and_appends_a_v3_row(
     table.append(pa.Table.from_pylist([old_row], schema=table.schema().as_arrow()))
 
     result = append_run_record(
-        _v3_record("v3-after-evolution"), config, catalog_target.resolved_paths
+        replace(_v3_record("v3-after-evolution"), duration_seconds=5.0, **VALUES),
+        config,
+        catalog_target.resolved_paths,
     )
 
     assert result.outcome is IcebergAppendOutcome.EMITTED
     table = catalog.load_table(identifier)
     fields = table.schema().fields
-    assert len(fields) == 48
-    assert [field.field_id for field in fields[-6:]] == [*range(44, 50)]
-    assert [field.name for field in fields[-6:]] == [*V2_COLUMNS, *V3_COLUMNS]
-    assert len(table.metadata.schemas) == 2, "all six columns land in one schema change"
+    assert len(fields) == 55
+    assert [field.field_id for field in fields] == [*range(1, 43), *range(44, 57)]
+    assert [field.name for field in fields[len(RUNS_TABLE_SCHEMA_V1) :]] == [
+        *V2_COLUMNS,
+        *V3_COLUMNS,
+        *VALUES,
+    ]
+    assert [(field.field_id, field.name) for field in fields[:42]] == [
+        (column.field_id, column.name) for column in RUNS_TABLE_SCHEMA_V1
+    ]
+    assert fields[32].field_type.element_id == 43
+    assert len(table.metadata.schemas) == 2, "all thirteen columns land in one schema change"
 
     spark_identifier = f"janus.{identifier}"
     spark = shared_catalog_session.newSession()
@@ -258,6 +277,15 @@ def test_v1_table_evolves_additively_and_appends_a_v3_row(
     assert {name: old_row[name] for name in (*V2_COLUMNS, *V3_COLUMNS)} == dict.fromkeys(
         (*V2_COLUMNS, *V3_COLUMNS)
     )
+    assert {name: old_row[name] for name in VALUES} == dict.fromkeys(VALUES)
+    assert {name: new_row[name] for name in VALUES} == VALUES
+    arrow_rows = {row["run_id"]: row for row in table.scan().to_arrow().to_pylist()}
+    assert {
+        name: arrow_rows["v1-before-evolution"][name] for name in VALUES
+    } == dict.fromkeys(VALUES)
+    assert {
+        name: arrow_rows["v3-after-evolution"][name] for name in VALUES
+    } == VALUES
     assert old_row["record_schema_version"] == 1
     assert new_row["contract_version"] == "1.1.0"
     assert new_row["contract_preflight_outcome"] == "will_evolve"
@@ -267,9 +295,17 @@ def test_v1_table_evolves_additively_and_appends_a_v3_row(
 
     query_directory = PROJECT_ROOT / "docs" / "queries" / "observability"
     queries = sorted(query_directory.glob("*.sql"))
-    assert len(queries) == 7
+    assert len(queries) == 8
     for query in queries:
-        spark.sql(query.read_text(encoding="utf-8")).collect()
+        spark.sql(
+            query.read_text(encoding="utf-8"),
+            args={
+                "window_start_day": datetime(2026, 9, 1).date(),
+                "window_start": datetime(2026, 9, 1, tzinfo=UTC),
+                "window_end": datetime(2026, 10, 1, tzinfo=UTC),
+                "evaluated_at": datetime(2026, 9, 18, 12, tzinfo=UTC),
+            },
+        ).collect()
 
 
 def test_v2_table_evolves_additively_and_appends_a_v3_row(
@@ -323,14 +359,23 @@ def test_v2_table_evolves_additively_and_appends_a_v3_row(
     assert result.outcome is IcebergAppendOutcome.EMITTED
     table = catalog.load_table(identifier)
     fields = table.schema().fields
-    assert len(fields) == 48
-    assert [(field.field_id, field.name) for field in fields[-3:]] == [
-        (47, "contract_preflight_outcome"),
-        (48, "schema_evolution"),
-        (49, "malformed_rows"),
+    assert len(fields) == 55
+    assert [(field.field_id, field.name) for field in fields[len(RUNS_TABLE_SCHEMA_V2) :]] == [
+        (column.field_id, column.name) for column in RUNS_TABLE_SCHEMA[len(RUNS_TABLE_SCHEMA_V2) :]
     ]
-    assert [str(field.field_type) for field in fields[-3:]] == ["string", "string", "long"]
-    assert not any(field.required for field in fields[-3:])
+    assert [str(field.field_type) for field in fields[-10:]] == [
+        "string",
+        "string",
+        "long",
+        "int",
+        "string",
+        "int",
+        "long",
+        "long",
+        "long",
+        "long",
+    ]
+    assert not any(field.required for field in fields[-10:])
     assert len(table.metadata.schemas) == schemas_before + 1
 
     rows = shared_catalog_session.newSession().table(identifier).orderBy("run_id").collect()
@@ -361,3 +406,71 @@ def test_bootstrap_and_append_are_idempotent_across_processes(
     rows = sorted(row["run_id"] for row in table.scan().to_arrow().to_pylist())
     assert rows == ["process-001", "process-002"]
     assert len(table.metadata.snapshots) == 2
+
+
+class TestOrder23Evolution:
+    @staticmethod
+    @pytest.mark.spark
+    def test_order23_existing_v3_table_adds_seven_columns_and_preserves_old_rows(
+        catalog_target: CatalogTarget,
+    ):
+        from tests.support.metrics_order23 import NEW_FIELDS
+
+        assert NEW_FIELDS
+        assert set(NEW_FIELDS) <= {column.name for column in RUNS_TABLE_SCHEMA}
+        import pyarrow as pa
+
+        config, identifier = _isolated_config(catalog_target)
+        dependencies = iceberg_sink._load_engine_dependencies()
+        catalog = dependencies.load_catalog(
+            derive_pyiceberg_catalog_name(config),
+            **derive_pyiceberg_catalog_properties(config, catalog_target.resolved_paths),
+        )
+        old_columns = tuple(column for column in RUNS_TABLE_SCHEMA if column.field_id < 50)
+        assert old_columns and len(old_columns) == 48
+        catalog.create_namespace_if_not_exists("metadata")
+        creation = iceberg_sink._creation_columns(old_columns)
+        table = catalog.create_table(
+            identifier,
+            schema=iceberg_sink._declared_schema(dependencies, creation),
+            partition_spec=iceberg_sink._declared_partition_spec(dependencies),
+        )
+        with table.update_schema() as update:
+            for column in old_columns[len(creation) :]:
+                update.add_column(
+                    column.name,
+                    iceberg_sink._iceberg_column_type(column, dependencies),
+                    required=column.required,
+                )
+        table = catalog.load_table(identifier)
+        schemas_before = len(table.metadata.schemas)
+        original_spec = table.spec()
+        original_uuid = table.metadata.table_uuid
+        original_ids = {field.name: field.field_id for field in table.schema().fields}
+        old = _older_row(_v3_record("before"), 3, old_columns)
+        table.append(pa.Table.from_pylist([old], schema=table.schema().as_arrow()))
+        values = VALUES
+        result = append_run_record(
+            replace(_v3_record("after"), duration_seconds=5.0, **values),
+            config,
+            catalog_target.resolved_paths,
+        )
+        assert result.outcome is IcebergAppendOutcome.EMITTED
+        evolved = catalog.load_table(identifier)
+        added = {
+            field.name: field.field_id for field in evolved.schema().fields if field.field_id >= 50
+        }
+        assert added == NEW_FIELDS
+        assert {
+            field.name: field.field_id for field in evolved.schema().fields if field.field_id < 50
+        } == original_ids
+        assert len(evolved.metadata.schemas) == schemas_before + 1
+        assert evolved.metadata.table_uuid == original_uuid
+        assert evolved.spec() == original_spec
+        assert len(evolved.metadata.snapshots) == 2
+        rows = {row["run_id"]: row for row in evolved.scan().to_arrow().to_pylist()}
+        assert set(rows) == {"before", "after"}
+        assert {name: rows["before"][name] for name in NEW_FIELDS} == dict.fromkeys(
+            NEW_FIELDS
+        )
+        assert {name: rows["after"][name] for name in NEW_FIELDS} == values

@@ -5,11 +5,18 @@ from __future__ import annotations
 import json
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
+from threading import Event
+from time import monotonic
 from typing import Any
 
 import pytest
 
+import janus.observability.metrics.pipeline as pipeline_metrics_module
+from janus.observability.bounded import bounded_emission
+from janus.observability.metrics.sink import MetricsRunSink
+from janus.observability.metrics.transport import MetricsEmissionOutcome, MetricsEmissionResult
 from janus.orchestration import (
     BatchPlanner,
     BatchPlanRequest,
@@ -26,9 +33,17 @@ from janus.orchestration import (
     SummaryPersistence,
     source_attempt_run_id,
 )
+from janus.runtime import BatchExecutor
 from janus.utils.logging import REDACTED_VALUE
 from janus.utils.storage import StorageLayout
+from tests.support.metrics_order23 import WarningSpy
 from tests.support.orchestration import build_graph_project
+from tests.unit.runtime.test_batch_executor import (
+    ExecutorSpy,
+    ProviderFactorySpy,
+    SourceExecutionService,
+    _batch,
+)
 
 PLANNED_AT = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
 STARTED_AT = datetime(2026, 9, 14, 3, 0, tzinfo=UTC)
@@ -473,3 +488,228 @@ def test_failed_atomic_replace_keeps_previous_summary_and_returns_diagnostic_out
         "summary_persistence"
     )
     assert not list(path.parent.glob(".*.tmp"))
+
+
+def _metrics_runner(*, behavior=None, logger=None):
+    service = SourceExecutionService(
+        executor=ExecutorSpy(behavior), provider_factory=ProviderFactorySpy()
+    )
+    return BatchExecutor(
+        source_execution=service,
+        clock=PipelineClock(wall_clock=lambda: STARTED_AT, monotonic_clock=lambda: 0.0),
+        logger=logger,
+    )
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_pipeline_metrics_emit_once_after_summary_persistence_even_for_failure(
+    tmp_path, monkeypatch, failed, record_property
+):
+    plan, registry, config, paths = _batch(tmp_path)
+    events = []
+    persisted_outcomes = []
+    captured = []
+
+    class OrderedStore(PipelineSummaryStore):
+        def persist(self, outcome, **kwargs):
+            result = super().persist(outcome, **kwargs)
+            events.append("persist")
+            persisted_outcomes.append(result)
+            return result
+
+    class CaptureTransport:
+        kind = "file"
+
+        def send(self, samples, *, budget_seconds):
+            assert 0 < budget_seconds <= 5
+            persisted = persisted_outcomes[0]
+            assert (
+                json.loads(persisted.summary_persistence.path.read_text()) == persisted.to_summary()
+            )
+            events.append("emit")
+            captured.extend(samples)
+            return MetricsEmissionResult(MetricsEmissionOutcome.EMITTED, self.kind, sample_count=4)
+
+    monkeypatch.setattr(
+        pipeline_metrics_module,
+        "build_metrics_sink",
+        lambda *_args, **_kwargs: MetricsRunSink(CaptureTransport()),
+    )
+    runner = _metrics_runner(behavior={"A": "failed"} if failed else {})
+    outcome = runner.execute(
+        plan,
+        registry,
+        config,
+        paths,
+        summary_store=OrderedStore(
+            StorageLayout.from_environment_config(config, plan.request.project_root)
+        ),
+    )
+    assert outcome is persisted_outcomes[0]
+    assert events == ["persist", "emit"]
+    assert len(captured) == 4
+    assert [sample.value for sample in captured[1:]] == ([1, 1, 2] if failed else [4, 0, 0])
+    assert outcome.status == ("failed" if failed else "succeeded")
+    assert all(
+        sample.scope == "pipeline" and "source_id" not in dict(sample.labels) for sample in captured
+    )
+    record_property("ordered_spy", json.dumps(events))
+    record_property(
+        "pipeline_samples",
+        json.dumps(
+            [
+                {"name": sample.name, "labels": dict(sample.labels), "value": sample.value}
+                for sample in captured
+            ]
+        ),
+    )
+
+
+@pytest.mark.parametrize("failure", ["builder", "raising", "returned", "logger"])
+def test_metrics_failure_leaves_outcome_and_authoritative_summary_bytes_unchanged(
+    tmp_path, monkeypatch, failure, record_property
+):
+    plan, registry, config, paths = _batch(tmp_path)
+    baseline = _metrics_runner().execute(plan, registry, config, paths)
+    path = baseline.summary_persistence.path
+    before = path.read_bytes()
+    path.unlink()
+    logger = WarningSpy()
+    calls = []
+
+    class FailingTransport:
+        kind = "file"
+
+        def send(self, _samples, *, budget_seconds):
+            assert budget_seconds > 0
+            calls.append("send")
+            if failure == "returned":
+                return MetricsEmissionResult(
+                    MetricsEmissionOutcome.FAILED,
+                    self.kind,
+                    reason="send_failed",
+                    exception_type="OSError",
+                )
+            raise OSError("secret=do-not-log-this-exception")
+
+    def build(*_args, **_kwargs):
+        if failure == "builder":
+            calls.append("build")
+            raise OSError("secret=do-not-log-this-exception")
+        return MetricsRunSink(FailingTransport())
+
+    if failure == "logger":
+
+        def broken_warning(event, **fields):
+            logger.warnings.append((event, fields))
+            raise OSError("log sink failed")
+
+        monkeypatch.setattr(logger, "warning", broken_warning)
+    monkeypatch.setattr(pipeline_metrics_module, "build_metrics_sink", build)
+    outcome = _metrics_runner(logger=logger).execute(plan, registry, config, paths)
+    assert outcome == baseline
+    assert json.dumps(outcome.to_summary(), sort_keys=True) == json.dumps(
+        baseline.to_summary(), sort_keys=True
+    )
+    assert path.read_bytes() == before
+    assert outcome.is_successful
+    assert calls == (["build"] if failure == "builder" else ["send"])
+    assert len(logger.warnings) == 1
+    assert logger.warnings[0][0] == "metrics_emission_degraded"
+    assert logger.warnings[0][1]["exception_type"] == "OSError"
+    assert "do-not-log" not in str(logger.warnings)
+    record_property(
+        "failure_evidence",
+        json.dumps(
+            {
+                "mode": failure,
+                "unchanged_outcome": outcome == baseline,
+                "summary_sha256_before": sha256(before).hexdigest(),
+                "summary_sha256_after": sha256(path.read_bytes()).hexdigest(),
+                "warnings": logger.warnings,
+            }
+        ),
+    )
+
+
+@pytest.mark.parametrize("stage", ["builder", "send"])
+def test_hanging_pipeline_metrics_are_bounded_and_leave_the_summary_unchanged(
+    tmp_path, monkeypatch, stage, record_property
+):
+    plan, registry, config, paths = _batch(tmp_path)
+    baseline = _metrics_runner().execute(plan, registry, config, paths)
+    path = baseline.summary_persistence.path
+    before = path.read_bytes()
+    path.unlink()
+    release, finished = Event(), Event()
+    logger = WarningSpy()
+
+    class HangingTransport:
+        kind = "file"
+
+        def send(self, samples, *, budget_seconds):
+            assert samples and budget_seconds > 0
+            try:
+                release.wait(1)
+                return MetricsEmissionResult(MetricsEmissionOutcome.EMITTED, self.kind)
+            finally:
+                finished.set()
+
+    def build(*_args, **_kwargs):
+        if stage == "builder":
+            try:
+                release.wait(1)
+            finally:
+                finished.set()
+        return MetricsRunSink(HangingTransport())
+
+    def short_guard(worker, **kwargs):
+        return bounded_emission(worker, **{**kwargs, "timeout_seconds": 0.03})
+
+    monkeypatch.setattr(pipeline_metrics_module, "build_metrics_sink", build)
+    monkeypatch.setattr(pipeline_metrics_module, "bounded_emission", short_guard)
+    started = monotonic()
+    try:
+        outcome = _metrics_runner(logger=logger).execute(plan, registry, config, paths)
+        elapsed = monotonic() - started
+        assert 0.03 <= elapsed < 0.5
+        assert outcome == baseline
+        assert path.read_bytes() == before
+        assert len(logger.warnings) == 1
+        assert logger.warnings[0][1]["step"] == "budget"
+        assert logger.warnings[0][1]["exception_type"] == "EmissionTimeoutError"
+        record_property(
+            "timeout_evidence",
+            json.dumps(
+                {
+                    "stage": stage,
+                    "budget_seconds": 0.03,
+                    "elapsed_seconds": elapsed,
+                    "unchanged_outcome": outcome == baseline,
+                    "summary_sha256_before": sha256(before).hexdigest(),
+                    "summary_sha256_after": sha256(path.read_bytes()).hexdigest(),
+                    "warnings": logger.warnings,
+                }
+            ),
+        )
+    finally:
+        release.set()
+        assert finished.wait(1)
+
+
+def test_pipeline_metrics_do_not_emit_when_summary_persistence_fails(tmp_path, monkeypatch):
+    plan, registry, config, paths = _batch(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        pipeline_metrics_module,
+        "build_metrics_sink",
+        lambda *_args, **_kwargs: calls.append("emit"),
+    )
+    store = PipelineSummaryStore(
+        StorageLayout.from_environment_config(config, plan.request.project_root),
+        atomic_replace=lambda *_args: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+    with pytest.raises(PipelineSummaryPersistenceError):
+        _metrics_runner().execute(plan, registry, config, paths, summary_store=store)
+    assert calls == []
+    assert not store.summary_path(plan.request.pipeline_run_id).exists()

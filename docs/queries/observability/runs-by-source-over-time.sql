@@ -31,6 +31,14 @@ SELECT
     SUM(records_extracted) AS records_extracted,
     SUM(records_written) AS records_written,
     SUM(artifact_count) AS artifacts_persisted,
+    -- request_count is NULL for the file family, so SUM/AVG skip those rows, not zero-fill.
+    SUM(request_count) AS request_count,
+    -- retry_count is NULL for the file family, so SUM/AVG skip those rows, not zero-fill.
+    SUM(retry_count) AS retry_count,
+    -- attempt_count is NULL for the file family, so SUM/AVG skip those rows, not zero-fill.
+    SUM(attempt_count) AS attempt_count,
+    -- dead_letter_count is NULL for the file family, so SUM/AVG skip those rows, not zero-fill.
+    SUM(dead_letter_count) AS dead_letter_count,
     AVG(duration_seconds) AS average_duration_seconds
 FROM latest_runs
 GROUP BY

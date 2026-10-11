@@ -129,6 +129,13 @@ RUNS_TABLE_SCHEMA = (
     RunsTableColumn(47, "contract_preflight_outcome", IcebergType.STRING, True),
     RunsTableColumn(48, "schema_evolution", IcebergType.STRING, True),
     RunsTableColumn(49, "malformed_rows", IcebergType.LONG, True),
+    RunsTableColumn(50, "duration_budget_seconds", IcebergType.INTEGER, True),
+    RunsTableColumn(51, "duration_budget_outcome", IcebergType.STRING, True),
+    RunsTableColumn(52, "freshness_max_age_seconds", IcebergType.INTEGER, True),
+    RunsTableColumn(53, "request_count", IcebergType.LONG, True),
+    RunsTableColumn(54, "retry_count", IcebergType.LONG, True),
+    RunsTableColumn(55, "attempt_count", IcebergType.LONG, True),
+    RunsTableColumn(56, "dead_letter_count", IcebergType.LONG, True),
 )
 
 RUNS_TABLE_PARTITION_SPEC = (

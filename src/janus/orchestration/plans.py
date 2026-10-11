@@ -48,6 +48,7 @@ class BatchPlanRequest:
     attempt: int = 1
     trigger: str = DEFAULT_TRIGGER
     attributes: tuple[tuple[str, str], ...] = ()
+    fail_on_budget_breach: bool = False
 
     def __post_init__(self) -> None:
         """Validate identity and scope here, so no later layer has to re-check them."""
@@ -62,7 +63,8 @@ class BatchPlanRequest:
             raise BatchPlanningError("planned_at must be timezone-aware")
 
     @classmethod
-    def create(
+    # The factory preserves the public batch identity, selection and budget-policy inputs.
+    def create(  # noqa: PLR0913
         cls,
         *,
         environment: str,
@@ -73,6 +75,7 @@ class BatchPlanRequest:
         attempt: int = 1,
         trigger: str = DEFAULT_TRIGGER,
         attributes: Mapping[str, str] | None = None,
+        fail_on_budget_breach: bool = False,
     ) -> Self:
         """Normalize the inputs an entry point collects into one frozen request."""
         resolved_planned_at = planned_at or datetime.now(tz=UTC)
@@ -90,6 +93,7 @@ class BatchPlanRequest:
             attempt=attempt,
             trigger=trigger,
             attributes=_freeze_string_mapping(attributes),
+            fail_on_budget_breach=fail_on_budget_breach,
         )
 
     def source_run_id(self, source_id: str) -> str:

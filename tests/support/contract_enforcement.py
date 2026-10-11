@@ -214,7 +214,7 @@ def render_source_config(case: EnforcementCase) -> dict[str, Any]:
         "input_format": case.input_format,
         "handoff": "pages",
         "write_mode": case.write_mode,
-        "repartition": 1,
+        "write": {"partitions": 1},
         "partition_by": list(case.partition_by),
     }
     if case.read_options:

@@ -12,8 +12,10 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from janus.models.config.constants import DURATION_BUDGET_EXCEEDED
+from janus.observability.metrics.pipeline import emit_pipeline_metrics
 from janus.orchestration.persistence import PipelineSummaryStore
-from janus.orchestration.plans import BatchPlan, PlannedSource
+from janus.orchestration.plans import BatchPlan, BatchPlanRequest, PlannedSource
 from janus.orchestration.results import (
     FailureDetails,
     PipelineOutcome,
@@ -175,6 +177,7 @@ def execute_source_attempt(
     *,
     source_execution: SourceExecution | None = None,
     clock: PipelineClock | None = None,
+    request: BatchPlanRequest | None = None,
 ) -> SourceAttempt:
     """Execute and translate one planned source through the shared runtime seam.
 
@@ -200,13 +203,14 @@ def execute_source_attempt(
 
     timing = execution_clock.finish(started)
     try:
-        return SourceAttempt.from_executed_run(
+        attempt = SourceAttempt.from_executed_run(
             executed_run,
             timing=timing,
             source_id=planned_source.source_id,
             run_id=planned_source.run_id,
             attempt=planned_source.attempt,
         )
+        return _apply_budget_policy(attempt, planned_source, request)
     except Exception as exc:
         return SourceAttempt(
             source_id=planned_source.source_id,
@@ -225,6 +229,7 @@ class BatchExecutor:
     source_execution: SourceExecution = field(default_factory=SourceExecutionService)
     clock: PipelineClock = field(default_factory=PipelineClock)
     summary_store_factory: Callable[[StorageLayout], PipelineSummaryStore] = PipelineSummaryStore
+    logger: StructuredLogger | None = None
 
     def execute(
         self,
@@ -268,6 +273,7 @@ class BatchExecutor:
                     planned_source,
                     environment_config,
                     resolved_paths,
+                    request=plan.request,
                 )
                 outcomes[planned_source.source_id] = SourceOutcome.from_attempts(
                     planned_source,
@@ -286,13 +292,25 @@ class BatchExecutor:
             timing=self.clock.finish(pipeline_started),
             sources=_completed_outcomes(plan, outcomes),
         )
-        return store.persist(outcome)
+        persisted_outcome = store.persist(outcome)
+        self._emit_pipeline_metrics(persisted_outcome, environment_config, resolved_paths)
+        return persisted_outcome
+
+    def _emit_pipeline_metrics(
+        self,
+        outcome: PipelineOutcome,
+        environment_config: Mapping[str, Any],
+        resolved_paths: Mapping[str, RuntimeLocation],
+    ) -> None:
+        emit_pipeline_metrics(outcome, environment_config, resolved_paths, logger=self.logger)
 
     def _execute_source(
         self,
         planned_source: PlannedSource,
         environment_config: Mapping[str, Any],
         resolved_paths: Mapping[str, RuntimeLocation],
+        *,
+        request: BatchPlanRequest,
     ) -> SourceAttempt:
         """Measure and translate exactly one call through the shared source service."""
         return execute_source_attempt(
@@ -301,7 +319,25 @@ class BatchExecutor:
             resolved_paths,
             source_execution=self.source_execution,
             clock=self.clock,
+            request=request,
         )
+
+
+def _apply_budget_policy(
+    attempt: SourceAttempt, planned_source: PlannedSource, request: BatchPlanRequest | None
+) -> SourceAttempt:
+    if (
+        request is not None
+        and request.fail_on_budget_breach
+        and attempt.status == "succeeded"
+        and attempt.evidence.get("duration_budget_outcome") == DURATION_BUDGET_EXCEEDED
+    ):
+        budget_seconds = (
+            planned_source.require_planned_run().plan.source_config.operations.max_duration_seconds
+        )
+        assert budget_seconds is not None
+        return attempt.as_budget_breach(budget_seconds)
+    return attempt
 
 
 def _preflight(plan: BatchPlan, registry: SourceRegistry) -> None:

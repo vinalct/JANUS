@@ -37,6 +37,7 @@
           "attempt": 1,
           "attempted": true,
           "evidence": {
+            "duration_budget_outcome": "undeclared",
             "error_type": "ContractPreflightError",
             "failure_reason": "example.federal_open_data_example v1.0.1: preflight catalog_unavailable \u2014 ModuleNotFoundError",
             "failure_stage": "contract_preflight",

@@ -2,6 +2,7 @@ usage: janus run-all [-h] [--environment ENVIRONMENT]
                      [--project-root PROJECT_ROOT] [--tag TAG |
                      --domain DOMAIN] [--pipeline-run-id PIPELINE_RUN_ID]
                      [--started-at STARTED_AT] [--resume]
+                     [--fail-on-budget-breach]
 
 Run enabled sources once in deterministic dependency order. Filters select
 roots; required upstreams are included automatically and identified in the
@@ -33,3 +34,9 @@ options:
   --resume              Resume each source's extraction progress when
                         available. This does not mark an earlier pipeline
                         successful or suppress required upstream execution.
+  --fail-on-budget-breach
+                        Treat a run that exceeded its
+                        operations.max_duration_seconds as a failed attempt,
+                        skipping its dependents. Off by default: a slow run
+                        that produced correct data is a scheduling signal, not
+                        a data failure.

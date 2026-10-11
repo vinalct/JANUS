@@ -18,6 +18,7 @@ from janus.cli.common import (
     log_source_config_deprecations,
     parse_started_at,
 )
+from janus.observability.metrics import resolve_metrics_settings
 from janus.observability.openlineage import resolve_openlineage_settings
 from janus.orchestration import (
     BatchPlan,
@@ -122,6 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
             "earlier pipeline successful or suppress required upstream execution."
         ),
     )
+    parser.add_argument(
+        "--fail-on-budget-breach",
+        action="store_true",
+        help=(
+            "Treat a run that exceeded its operations.max_duration_seconds as a failed "
+            "attempt, skipping its dependents. Off by default: a slow run that produced "
+            "correct data is a scheduling signal, not a data failure."
+        ),
+    )
     _add_unsupported_legacy_options(parser)
     return parser
 
@@ -171,6 +181,8 @@ class _PreparedBatch:
 
 def _prepare_batch(args: argparse.Namespace, project_root: Path) -> _PreparedBatch:
     config = load_environment_config(args.environment, project_root)
+    # Fail closed before registry reads without creating paths for an invalid registry.
+    resolve_metrics_settings(config)
     selection = BatchSelection.create(tags=args.tag, domains=args.domain)
     request = BatchPlanRequest.create(
         environment=args.environment,
@@ -179,11 +191,13 @@ def _prepare_batch(args: argparse.Namespace, project_root: Path) -> _PreparedBat
         planned_at=args.started_at,
         selection=selection,
         attributes={"resume": "true"} if args.resume else None,
+        fail_on_budget_breach=args.fail_on_budget_breach,
     )
     registry = load_registry(project_root, write_defaults=read_spark_write_defaults(config))
     plan = BatchPlanner().plan(request, registry=registry)
     resolved_paths = prepare_runtime(config, project_root)
     resolve_openlineage_settings(config)
+    resolve_metrics_settings(config)
     return _PreparedBatch(config, resolved_paths, request, registry, plan)
 
 
@@ -243,7 +257,8 @@ def _execute_batch(prepared: _PreparedBatch, *, resume: bool) -> int:
 def _build_batch_executor(logger: StructuredLogger) -> BatchExecutor:
     """Construct the production runner behind an injectable CLI composition seam."""
     return BatchExecutor(
-        source_execution=SourceExecutionService(executor=SourceExecutor(logger=logger))
+        source_execution=SourceExecutionService(executor=SourceExecutor(logger=logger)),
+        logger=logger,
     )
 
 

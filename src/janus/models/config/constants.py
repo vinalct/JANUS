@@ -24,6 +24,18 @@ SUPPORTED_AUTH_TYPES = frozenset(
     {"basic", "bearer_token", "header_token", "none", "query_token"}
 )
 SUPPORTED_EXTRACTION_MODES = frozenset({"full_refresh", "incremental", "snapshot"})
+#: Canonical freshness units, shared by parsing and operational consumers.
+FRESHNESS_UNIT_SECONDS: dict[str, int] = {"h": 3600, "d": 86400}
+MIN_MAX_DURATION_SECONDS = 1
+
+#: Outcomes of comparing a measured duration with a declared budget.
+DURATION_BUDGET_WITHIN = "within"
+DURATION_BUDGET_EXCEEDED = "exceeded"
+DURATION_BUDGET_UNDECLARED = "undeclared"
+DURATION_BUDGET_OUTCOMES = frozenset(
+    {DURATION_BUDGET_WITHIN, DURATION_BUDGET_EXCEEDED, DURATION_BUDGET_UNDECLARED}
+)
+
 SUPPORTED_CHECKPOINT_STRATEGIES = frozenset({"date_window", "max_value", "none"})
 SUPPORTED_PAGINATION_TYPES = frozenset({"cursor", "none", "offset", "page_number"})
 DEFAULT_PAST_END_STATUS_CODES: tuple[int, ...] = (404, 416)

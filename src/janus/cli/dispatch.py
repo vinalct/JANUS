@@ -7,7 +7,16 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from janus.cli import checkpoint, dead_letters, list_sources, maintain, run, run_all, validate
+from janus.cli import (
+    checkpoint,
+    dead_letters,
+    list_sources,
+    maintain,
+    run,
+    run_all,
+    status,
+    validate,
+)
 from janus.cli.common import build_parent_parser
 
 PROG = "janus"
@@ -110,6 +119,12 @@ def verbs() -> tuple[Verb, ...]:
             "Plan declared retention policies by default, or apply them with recorded evidence.",
             maintain.configure,
             maintain.maintain_command,
+        ),
+        Verb(
+            "status",
+            "Report each source's freshness against its declared window.",
+            status.configure_status_parser,
+            status.run_status,
         ),
     )
 

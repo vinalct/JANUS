@@ -29,6 +29,8 @@
   ],
   "contract_id": "example.keyed",
   "contract_version": "1.0.0",
+  "duration_budget_outcome": "undeclared",
+  "duration_budget_seconds": null,
   "emitted_at": "2026-07-04T12:00:05+00:00",
   "environment": "local",
   "error_type": "RuntimeError",
@@ -49,6 +51,7 @@
   },
   "extraction_mode": "full_refresh",
   "failure_reason": "Quality validation failed: config.quality_contract",
+  "freshness_max_age_seconds": null,
   "materialized_outputs": [
     {
       "format": "json",

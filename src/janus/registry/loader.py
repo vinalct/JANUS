@@ -9,6 +9,7 @@ from typing import Any, Self
 
 import yaml
 
+from janus.models.config.yaml_support import safe_load_yaml
 from janus.models.data_contracts import DataContract
 from janus.models.dependencies import SourceDependencyGraph
 from janus.models.source_config import (
@@ -498,7 +499,7 @@ def _load_yaml_document(config_path: Path) -> Any:
 
     with config_path.open("r", encoding="utf-8") as stream:
         try:
-            raw = yaml.safe_load(stream) or {}
+            raw = safe_load_yaml(stream) or {}
         except yaml.YAMLError as exc:
             raise ValueError(f"Failed to parse YAML config: {config_path}: {exc}") from exc
 

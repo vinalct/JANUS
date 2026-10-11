@@ -211,7 +211,7 @@ def test_complete_override_survives_unrelated_issues(retain_last, older_than_day
 def test_from_mapping_collects_retention_and_two_unrelated_issues():
     data = yaml.safe_load(SOURCE_FIXTURE.read_text(encoding="utf-8"))
     data["schema"]["path"] = "retired.json"
-    data["spark"]["repartition"] = 0
+    data["spark"]["write"]["partitions"] = 0
     data["outputs"]["bronze"]["retention"] = {"retain_last": 0, "older_than_days": 0}
 
     with pytest.raises(SourceConfigValidationError) as raised:
@@ -219,13 +219,13 @@ def test_from_mapping_collects_retention_and_two_unrelated_issues():
 
     assert {issue.path for issue in raised.value.issues} == {
         "schema.path",
-        "spark.repartition",
+        "spark.write.partitions",
         "outputs.bronze.retention.retain_last",
     }
     assert len(raised.value.issues) == 3
     message = str(raised.value)
     assert "schema.path: is no longer supported:" in message
-    assert "spark.repartition: must be >= 1" in message
+    assert "spark.write.partitions: must be >= 1" in message
     assert "outputs.bronze.retention.retain_last: must be a positive integer" in message
 
 

@@ -8,13 +8,18 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Self
 
+from janus.lineage.outputs import ArtifactSnapshot, ConfiguredOutput, MaterializedOutput
 from janus.models import (
     ExecutionPlan,
-    ExtractedArtifact,
     ExtractionResult,
     WriteResult,
 )
 from janus.models import compute_schema_version as _compute_schema_version
+from janus.models.config.constants import (
+    DURATION_BUDGET_EXCEEDED,
+    DURATION_BUDGET_OUTCOMES,
+    DURATION_BUDGET_WITHIN,
+)
 
 SUPPORTED_RUN_STATUSES = frozenset({"failed", "running", "succeeded"})
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -31,113 +36,6 @@ _RECORD_TEXT_FIELDS = (
     "checkpoint_strategy",
     "source_config_path",
 )
-
-
-@dataclass(frozen=True, slots=True)
-class ConfiguredOutput:
-    """Configured output target kept in metadata and lineage artifacts."""
-
-    zone: str
-    path: str
-    format: str
-
-    def __post_init__(self) -> None:
-        if not self.zone.strip():
-            raise ValueError("zone must not be empty")
-        if not self.path.strip():
-            raise ValueError("path must not be empty")
-        if not self.format.strip():
-            raise ValueError("format must not be empty")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "zone": self.zone,
-            "path": self.path,
-            "format": self.format,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class MaterializedOutput:
-    """One output that was actually written during a run."""
-
-    zone: str
-    path: str
-    format: str
-    mode: str
-    records_written: int | None = None
-    partition_by: tuple[str, ...] = ()
-    metadata: tuple[tuple[str, str], ...] = ()
-
-    def __post_init__(self) -> None:
-        if not self.zone.strip():
-            raise ValueError("zone must not be empty")
-        if not self.path.strip():
-            raise ValueError("path must not be empty")
-        if not self.format.strip():
-            raise ValueError("format must not be empty")
-        if not self.mode.strip():
-            raise ValueError("mode must not be empty")
-
-    @classmethod
-    def from_write_result(cls, write_result: WriteResult) -> Self:
-        return cls(
-            zone=write_result.zone,
-            path=write_result.path,
-            format=write_result.format,
-            mode=write_result.mode,
-            records_written=write_result.records_written,
-            partition_by=write_result.partition_by,
-            metadata=write_result.metadata,
-        )
-
-    def metadata_as_dict(self) -> dict[str, str]:
-        return dict(self.metadata)
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "zone": self.zone,
-            "path": self.path,
-            "format": self.format,
-            "mode": self.mode,
-            "partition_by": list(self.partition_by),
-            "metadata": self.metadata_as_dict(),
-        }
-        if self.records_written is not None:
-            payload["records_written"] = self.records_written
-        return payload
-
-
-@dataclass(frozen=True, slots=True)
-class ArtifactSnapshot:
-    """Raw extraction artifact preserved in lineage records."""
-
-    path: str
-    format: str
-    checksum: str | None = None
-
-    def __post_init__(self) -> None:
-        if not self.path.strip():
-            raise ValueError("path must not be empty")
-        if not self.format.strip():
-            raise ValueError("format must not be empty")
-
-    @classmethod
-    def from_extracted_artifact(cls, artifact: ExtractedArtifact) -> Self:
-        return cls(
-            path=artifact.path,
-            format=artifact.format,
-            checksum=artifact.checksum,
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        payload = {
-            "path": self.path,
-            "format": self.format,
-        }
-        if self.checksum is not None:
-            payload["checksum"] = self.checksum
-        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +69,9 @@ class RunMetadata:
     contract_id: str | None = None
     contract_version: str | None = None
     failure_stage: str | None = None
+    duration_budget_seconds: int | None = None
+    duration_budget_outcome: str | None = None
+    freshness_max_age_seconds: int | None = None
 
     def __post_init__(self) -> None:
         if self.status not in SUPPORTED_RUN_STATUSES:
@@ -185,6 +86,11 @@ class RunMetadata:
         )
         if self.failure_stage is not None and not self.failure_stage.strip():
             raise ValueError("failure_stage must not be empty")
+        _validate_duration_budget(
+            self.duration_budget_seconds,
+            self.duration_budget_outcome,
+            pending=self.status == "running",
+        )
 
     @classmethod
     def started(
@@ -192,6 +98,9 @@ class RunMetadata:
         plan: ExecutionPlan,
         *,
         metadata: Mapping[str, str] | None = None,
+        duration_budget_seconds: int | None = None,
+        duration_budget_outcome: str | None = None,
+        freshness_max_age_seconds: int | None = None,
     ) -> Self:
         return cls(
             run_id=plan.run_context.run_id,
@@ -210,6 +119,9 @@ class RunMetadata:
             run_attributes=plan.run_context.attributes,
             plan_notes=plan.notes,
             metadata=_freeze_string_mapping(metadata),
+            duration_budget_seconds=duration_budget_seconds,
+            duration_budget_outcome=duration_budget_outcome,
+            freshness_max_age_seconds=freshness_max_age_seconds,
             **_contract_identity(plan),
         )
 
@@ -222,6 +134,9 @@ class RunMetadata:
         *,
         finished_at: datetime | None = None,
         metadata: Mapping[str, str] | None = None,
+        duration_budget_seconds: int | None = None,
+        duration_budget_outcome: str | None = None,
+        freshness_max_age_seconds: int | None = None,
     ) -> Self:
         completed_at = finished_at or datetime.now(tz=UTC)
         return cls(
@@ -249,11 +164,14 @@ class RunMetadata:
             run_attributes=plan.run_context.attributes,
             plan_notes=plan.notes,
             metadata=_freeze_string_mapping(metadata),
+            duration_budget_seconds=duration_budget_seconds,
+            duration_budget_outcome=duration_budget_outcome,
+            freshness_max_age_seconds=freshness_max_age_seconds,
             **_contract_identity(plan),
         )
 
     @classmethod
-    def failed(
+    def failed(  # noqa: PLR0913 - explicit fields preserve caller compatibility
         cls,
         plan: ExecutionPlan,
         error: Exception | str,
@@ -262,6 +180,9 @@ class RunMetadata:
         *,
         finished_at: datetime | None = None,
         metadata: Mapping[str, str] | None = None,
+        duration_budget_seconds: int | None = None,
+        duration_budget_outcome: str | None = None,
+        freshness_max_age_seconds: int | None = None,
     ) -> Self:
         failed_at = finished_at or datetime.now(tz=UTC)
         failure_reason = str(error).strip()
@@ -300,6 +221,9 @@ class RunMetadata:
             run_attributes=plan.run_context.attributes,
             plan_notes=plan.notes,
             metadata=_freeze_string_mapping(metadata),
+            duration_budget_seconds=duration_budget_seconds,
+            duration_budget_outcome=duration_budget_outcome,
+            freshness_max_age_seconds=freshness_max_age_seconds,
             failure_stage=_failure_stage(error),
             **_contract_identity(plan),
         )
@@ -330,6 +254,9 @@ class RunMetadata:
             "run_attributes": self.run_attributes_as_dict(),
             "plan_notes": list(self.plan_notes),
             "metadata": self.metadata_as_dict(),
+            "duration_budget_seconds": self.duration_budget_seconds,
+            "duration_budget_outcome": self.duration_budget_outcome,
+            "freshness_max_age_seconds": self.freshness_max_age_seconds,
         }
         if self.checkpoint_field is not None:
             payload["checkpoint_field"] = self.checkpoint_field
@@ -384,6 +311,9 @@ class LineageRecord:
     contract_id: str | None = None
     contract_version: str | None = None
     failure_stage: str | None = None
+    duration_budget_seconds: int | None = None
+    duration_budget_outcome: str | None = None
+    freshness_max_age_seconds: int | None = None
 
     def __post_init__(self) -> None:
         if self.status not in SUPPORTED_RUN_STATUSES:
@@ -396,9 +326,14 @@ class LineageRecord:
         )
         if self.failure_stage is not None and not self.failure_stage.strip():
             raise ValueError("failure_stage must not be empty")
+        _validate_duration_budget(
+            self.duration_budget_seconds,
+            self.duration_budget_outcome,
+            pending=self.status == "running",
+        )
 
     @classmethod
-    def from_runtime(
+    def from_runtime(  # noqa: PLR0913 - explicit fields preserve caller compatibility
         cls,
         plan: ExecutionPlan,
         *,
@@ -409,6 +344,9 @@ class LineageRecord:
         error_type: str | None = None,
         emitted_at: datetime | None = None,
         metadata: Mapping[str, str] | None = None,
+        duration_budget_seconds: int | None = None,
+        duration_budget_outcome: str | None = None,
+        freshness_max_age_seconds: int | None = None,
     ) -> Self:
         resolved_emitted_at = emitted_at or datetime.now(tz=UTC)
         return cls(
@@ -451,6 +389,9 @@ class LineageRecord:
                 extraction_result.metadata if extraction_result is not None else ()
             ),
             metadata=_freeze_string_mapping(metadata),
+            duration_budget_seconds=duration_budget_seconds,
+            duration_budget_outcome=duration_budget_outcome,
+            freshness_max_age_seconds=freshness_max_age_seconds,
             **_contract_identity(plan),
         )
 
@@ -486,6 +427,9 @@ class LineageRecord:
             "plan_notes": list(self.plan_notes),
             "extraction_metadata": self.extraction_metadata_as_dict(),
             "metadata": self.metadata_as_dict(),
+            "duration_budget_seconds": self.duration_budget_seconds,
+            "duration_budget_outcome": self.duration_budget_outcome,
+            "freshness_max_age_seconds": self.freshness_max_age_seconds,
         }
         if self.checkpoint_field is not None:
             payload["checkpoint_field"] = self.checkpoint_field
@@ -559,6 +503,22 @@ def _validate_contract_identity(
         raise ValueError("contract_id must not be empty")
     if contract_version is not None and _SEMVER_PATTERN.fullmatch(contract_version) is None:
         raise ValueError("contract_version must be MAJOR.MINOR.PATCH using digits only")
+
+
+def _validate_duration_budget(
+    seconds: int | None, outcome: str | None, *, pending: bool
+) -> None:
+    if outcome is not None and outcome not in DURATION_BUDGET_OUTCOMES:
+        allowed = ", ".join(sorted(DURATION_BUDGET_OUTCOMES))
+        raise ValueError(f"duration_budget_outcome must be one of: {allowed}")
+    # START carries the declaration before any comparison has happened.
+    if pending and outcome is None:
+        return
+    if (seconds is not None) != (outcome in {DURATION_BUDGET_WITHIN, DURATION_BUDGET_EXCEEDED}):
+        raise ValueError(
+            "duration_budget_seconds is present exactly when duration_budget_outcome "
+            "is within or exceeded"
+        )
 
 
 def _require_text(record: Any, *names: str) -> None:

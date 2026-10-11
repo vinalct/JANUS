@@ -10,8 +10,15 @@ from typing import Any, Self
 
 from janus.checkpoints.store import SUPPORTED_CHECKPOINT_DECISIONS, CheckpointWriteResult
 from janus.lineage.models import LineageRecord, MaterializedOutput, RunMetadata
+from janus.models.config.constants import (
+    DURATION_BUDGET_EXCEEDED,
+    DURATION_BUDGET_OUTCOMES,
+    DURATION_BUDGET_WITHIN,
+)
 from janus.observability.vocabulary import (
+    ATTEMPT_COUNT_KEY,
     BRONZE_ZONE,
+    DEAD_LETTER_COUNT_KEY,
     MALFORMED_ROWS_CHECK_NAME,
     MALFORMED_ROWS_CHECK_PHASE,
     MALFORMED_ROWS_COUNT_DETAIL,
@@ -21,6 +28,8 @@ from janus.observability.vocabulary import (
     PREFLIGHT_ATTRIBUTE_NAME,
     PREFLIGHT_OUTCOMES,
     QUALITY_NOT_RUN,
+    REQUEST_COUNT_KEY,
+    RETRY_COUNT_KEY,
     RUN_RECORD_SCHEMA_VERSION,
     RUN_RECORD_STATUSES,
     SCHEMA_EVOLUTION_METADATA_KEY,
@@ -95,6 +104,17 @@ class RunRecord:
     contract_preflight_outcome: str | None = None
     schema_evolution: str | None = None
     malformed_rows: int | None = None
+    # Declared expectations, evaluated once before persistence and carried here.
+    duration_budget_seconds: int | None = None
+    duration_budget_outcome: str | None = None
+    freshness_max_age_seconds: int | None = None
+    # Extraction volume: a family may not report a counter, or its value may be
+    # unparseable; neither is "counted zero", so neither may render as 0.
+    # attempt_count counts HTTP attempts, not the batch attempt pipeline_attempt.
+    request_count: int | None = None
+    retry_count: int | None = None
+    attempt_count: int | None = None
+    dead_letter_count: int | None = None
 
     def __post_init__(self) -> None:
         if self.status not in RUN_RECORD_STATUSES:
@@ -103,6 +123,12 @@ class RunRecord:
         if self.quality_outcome not in SUPPORTED_QUALITY_OUTCOMES:
             allowed = ", ".join(sorted(SUPPORTED_QUALITY_OUTCOMES))
             raise ValueError(f"quality_outcome must be one of: {allowed}")
+        if (
+            self.duration_budget_outcome is not None
+            and self.duration_budget_outcome not in DURATION_BUDGET_OUTCOMES
+        ):
+            allowed = ", ".join(sorted(DURATION_BUDGET_OUTCOMES))
+            raise ValueError(f"duration_budget_outcome must be one of: {allowed}")
         if (
             self.checkpoint_decision is not None
             and self.checkpoint_decision not in SUPPORTED_CHECKPOINT_DECISIONS
@@ -142,6 +168,13 @@ class RunRecord:
 
     def _validate_three_valued_columns(self) -> None:
         """Pin the NULL / zero / empty-list distinctions a later refactor would collapse."""
+        if (self.duration_budget_seconds is not None) != (
+            self.duration_budget_outcome in {DURATION_BUDGET_WITHIN, DURATION_BUDGET_EXCEEDED}
+        ):
+            raise ValueError(
+                "duration_budget_seconds is present exactly when duration_budget_outcome "
+                "is within or exceeded"
+            )
         if (self.status == "failed") != (self.failure_reason is not None):
             raise ValueError("a failed run must carry a failure_reason, and a success must not")
         reason_companions = (self.failure_reason_truncated, self.failure_reason_length)
@@ -204,6 +237,7 @@ class RunRecord:
             )
 
         attributes = run_metadata.run_attributes_as_dict()
+        extraction = lineage_record.extraction_metadata_as_dict()
         bronze_outputs = _bronze_outputs(lineage_record)
         reason, reason_truncated, reason_length = _bounded_failure_reason(
             run_metadata.failure_reason
@@ -228,6 +262,9 @@ class RunRecord:
             ended_at=run_metadata.ended_at,
             emitted_at=emitted_at,
             duration_seconds=run_metadata.duration_seconds,
+            duration_budget_seconds=run_metadata.duration_budget_seconds,
+            duration_budget_outcome=run_metadata.duration_budget_outcome,
+            freshness_max_age_seconds=run_metadata.freshness_max_age_seconds,
             config_version=lineage_record.config_version,
             schema_version=lineage_record.schema_version,
             contract_id=lineage_record.contract_id,
@@ -239,6 +276,10 @@ class RunRecord:
             records_extracted=run_metadata.records_extracted,
             artifact_count=len(lineage_record.artifacts),
             records_written=_sum_records_written(bronze_outputs),
+            request_count=_optional_int(extraction.get(REQUEST_COUNT_KEY)),
+            retry_count=_optional_int(extraction.get(RETRY_COUNT_KEY)),
+            attempt_count=_optional_int(extraction.get(ATTEMPT_COUNT_KEY)),
+            dead_letter_count=_optional_int(extraction.get(DEAD_LETTER_COUNT_KEY)),
             bronze_table_identifier=bronze_outputs[0].path if bronze_outputs else None,
             bronze_write_mode=bronze_outputs[0].mode if bronze_outputs else None,
             checkpoint_field=run_metadata.checkpoint_field,
@@ -286,11 +327,18 @@ class RunRecord:
             "ended_at": self.ended_at,
             "emitted_at": self.emitted_at,
             "duration_seconds": self.duration_seconds,
+            "duration_budget_seconds": self.duration_budget_seconds,
+            "duration_budget_outcome": self.duration_budget_outcome,
+            "freshness_max_age_seconds": self.freshness_max_age_seconds,
             "config_version": self.config_version,
             "source_config_path": self.source_config_path,
             "records_extracted": self.records_extracted,
             "artifact_count": self.artifact_count,
             "records_written": self.records_written,
+            "request_count": self.request_count,
+            "retry_count": self.retry_count,
+            "attempt_count": self.attempt_count,
+            "dead_letter_count": self.dead_letter_count,
             "bronze_table_identifier": self.bronze_table_identifier,
             "bronze_write_mode": self.bronze_write_mode,
             "checkpoint_field": self.checkpoint_field,

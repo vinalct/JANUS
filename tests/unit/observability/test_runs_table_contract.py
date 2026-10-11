@@ -30,7 +30,7 @@ from janus.utils.environment import load_environment_config
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REST_ENV_PATH = PROJECT_ROOT / "conf" / "environments" / "cluster-rest.env.example"
 FORBIDDEN_IMPORT_ROOTS = ("pyspark", "pyiceberg", "pyarrow")
-EXPECTED_COLUMN_COUNT = 48
+EXPECTED_COLUMN_COUNT = 55
 V2_COLUMN_COUNT = 45
 
 EXPECTED_SCHEMA = (
@@ -82,6 +82,13 @@ EXPECTED_SCHEMA = (
     ("contract_preflight_outcome", "string", True),
     ("schema_evolution", "string", True),
     ("malformed_rows", "long", True),
+    ("duration_budget_seconds", "int", True),
+    ("duration_budget_outcome", "string", True),
+    ("freshness_max_age_seconds", "int", True),
+    ("request_count", "long", True),
+    ("retry_count", "long", True),
+    ("attempt_count", "long", True),
+    ("dead_letter_count", "long", True),
 )
 
 
@@ -159,7 +166,7 @@ def test_field_ids_are_stable_unique_and_include_the_list_element():
     )
     all_ids = [*field_ids, failed_checks.element_id]
 
-    assert field_ids == [*range(1, 43), *range(44, 50)]
+    assert field_ids == [*range(1, 43), *range(44, 57)]
     assert failed_checks.iceberg_type is IcebergType.STRING_LIST
     assert failed_checks.element_id == 43
     assert None not in all_ids
@@ -352,7 +359,7 @@ def test_declaration_stays_well_under_the_module_size_ceiling():
 def test_the_three_columns_are_appended_after_the_contract_identity():
     appended = tuple(
         (column.field_id, column.name, column.iceberg_type, column.nullable)
-        for column in RUNS_TABLE_SCHEMA[-3:]
+        for column in RUNS_TABLE_SCHEMA[V2_COLUMN_COUNT:48]
     )
 
     assert appended == (
@@ -362,17 +369,61 @@ def test_the_three_columns_are_appended_after_the_contract_identity():
     )
 
 
-def test_the_declaration_has_48_columns_and_nothing_was_renumbered():
-    assert len(RUNS_TABLE_SCHEMA) == 48
+def test_the_declaration_has_55_columns_and_nothing_was_renumbered():
+    assert len(RUNS_TABLE_SCHEMA) == 55
     assert [column.field_id for column in RUNS_TABLE_SCHEMA] == [
         *range(1, 43),
-        *range(44, 50),
+        *range(44, 57),
     ]
-    assert tuple(
-        (column.name, column.iceberg_type, column.nullable)
-        for column in RUNS_TABLE_SCHEMA[:V2_COLUMN_COUNT]
-    ) == EXPECTED_SCHEMA[:V2_COLUMN_COUNT]
+    assert (
+        tuple(
+            (column.name, column.iceberg_type, column.nullable)
+            for column in RUNS_TABLE_SCHEMA[:V2_COLUMN_COUNT]
+        )
+        == EXPECTED_SCHEMA[:V2_COLUMN_COUNT]
+    )
 
 
 def test_new_run_records_use_schema_version_three():
     assert RUN_RECORD_SCHEMA_VERSION == 3
+
+
+class TestOrder23Schema:
+    @staticmethod
+    def test_field_ids_and_nullable_types_are_stable_after_all_reserved_ids():
+        appended = tuple(
+            (column.field_id, column.name, column.iceberg_type, column.nullable)
+            for column in RUNS_TABLE_SCHEMA[-7:]
+        )
+        assert appended == (
+            (50, "duration_budget_seconds", IcebergType.INTEGER, True),
+            (51, "duration_budget_outcome", IcebergType.STRING, True),
+            (52, "freshness_max_age_seconds", IcebergType.INTEGER, True),
+            (53, "request_count", IcebergType.LONG, True),
+            (54, "retry_count", IcebergType.LONG, True),
+            (55, "attempt_count", IcebergType.LONG, True),
+            (56, "dead_letter_count", IcebergType.LONG, True),
+        )
+        assert [column.field_id for column in RUNS_TABLE_SCHEMA] == [*range(1, 43), *range(44, 57)]
+        assert (
+            tuple(
+                (column.name, column.iceberg_type, column.nullable)
+                for column in RUNS_TABLE_SCHEMA[:-7]
+            )
+            == EXPECTED_SCHEMA[:-7]
+        )
+        assert RUNS_TABLE_SCHEMA[32].element_id == 43
+
+    @staticmethod
+    def test_extended_schema_and_projection_cover_each_other_both_ways():
+        from dataclasses import fields
+
+        from tests.support.metrics_order23 import NEW_FIELDS
+
+        projected = {field.name for field in fields(RunRecord)}
+        columns = {column.name for column in RUNS_TABLE_SCHEMA}
+        assert projected and columns and NEW_FIELDS
+        assert set(NEW_FIELDS) <= projected
+        assert set(NEW_FIELDS) <= columns
+        assert projected - columns == set()
+        assert columns - projected == set()

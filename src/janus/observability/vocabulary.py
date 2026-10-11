@@ -12,6 +12,12 @@ PIPELINE_ATTEMPT_ATTRIBUTE = "pipeline_attempt"
 TRIGGER_ATTRIBUTE = "trigger"
 BRONZE_ZONE = "bronze"
 
+# Extraction-metadata keys lifted into typed columns; families keep emitting strings.
+REQUEST_COUNT_KEY = "request_count"
+RETRY_COUNT_KEY = "retry_count"
+ATTEMPT_COUNT_KEY = "attempt_count"
+DEAD_LETTER_COUNT_KEY = "dead_letter_count"
+
 PREFLIGHT_ATTRIBUTE_NAME = "contract_preflight_outcome"
 PREFLIGHT_OUTCOMES = frozenset(
     {"ok", "will_evolve", "refused", "table_missing", "catalog_unavailable"}

@@ -10,10 +10,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from janus.models.config.outputs import resolve_spark_write_defaults
 from janus.models.config.types import SparkWriteDefaults
+from janus.models.config.yaml_support import safe_load_yaml
 from janus.utils.catalog_options import (
     CATALOG_AUTH_KEY,
     CATALOG_AUTH_OPTIONS,
@@ -108,7 +107,7 @@ def load_environment_config(environment: str, project_root: Path) -> dict[str, A
         raise FileNotFoundError(f"Environment config not found: {config_path}")
 
     with config_path.open("r", encoding="utf-8") as stream:
-        data = yaml.safe_load(stream) or {}
+        data = safe_load_yaml(stream) or {}
 
     if not isinstance(data, dict):
         raise ValueError(f"Environment config must be a mapping: {config_path}")

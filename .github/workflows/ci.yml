@@ -44,8 +44,11 @@ jobs:
           python -I -m janus.main --help >/dev/null
       - name: Validate every checked-in data contract against the pinned ODCS schema
         run: make test-contract-schema PYTHON=python
-      - name: Assert required jobs configure no HTTP lineage destination
-        run: python -m pytest -q tests/unit/observability/test_architecture_guardrails.py::test_required_ci_jobs_do_not_configure_http_openlineage
+      - name: Assert required jobs configure hermetic observability
+        run: |
+          python -m pytest -q \
+            tests/unit/observability/test_architecture_guardrails.py::test_required_ci_jobs_do_not_configure_http_openlineage \
+            tests/unit/observability/test_architecture_guardrails.py::test_required_ci_jobs_do_not_configure_external_metrics
       - name: Lint (ruff, pinned 0.11.6)
         run: |
           ruff --version
@@ -88,6 +91,7 @@ jobs:
     runs-on: ubuntu-latest          
     timeout-minutes: 30             
     env:
+      JANUS_CONTAINER_ENGINE: docker
       IVY_JAR: org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar
       IVY_JAR_SHA256: 2192a0881ed0f5773b5a83a8820d2b0b2069beec203028643a1c338551007f09
       # The SQLite JDBC driver the default (jdbc) catalog opens its catalog database with.
@@ -100,6 +104,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+      - name: Verify Make can reach the Docker engine
+        run: make check-compose
       - name: Build JANUS image (buildx GHA layer cache)   
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
@@ -134,10 +140,27 @@ jobs:
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus sh -lc 'test "$(id -u)" != 0 && test "$(stat -c %a /etc/passwd)" = 644 && whoami'
           JANUS_CONTAINER_USER=4242:4242 docker compose -f docker/docker-compose.yml run --rm -T janus sh -lc 'whoami && python -c "import os,pwd; print(pwd.getpwuid(os.getuid()).pw_name)"'
+      - name: Verify Make exec identity and Spark startup
+        run: make test-spark-startup
       - name: Type check with PySpark installed
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \
             python -m mypy
+      - name: CLI response-time budget without coverage
+        run: |
+          set -o pipefail
+          JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m pytest -ra --no-cov \
+              tests/unit/toolchain/test_cli_surface.py::test_the_verb_completes_within_the_budget \
+              --durations=5 \
+              --junitxml=data/metadata/test-reports/ci-cli-timing.xml \
+            | tee data/pytest-cli-timing-output.txt
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate \
+              data/metadata/test-reports/ci-cli-timing.xml \
+              --class-name tests.unit.toolchain.test_cli_surface \
+              --test-name test_the_verb_completes_within_the_budget --minimum-passed 5
       - name: Full test suite + coverage in isolated Spark processes
         run: |
           set -o pipefail
@@ -149,8 +172,10 @@ jobs:
             python -m pytest -ra -m 'not cluster' tests/unit \
               --ignore=tests/unit/adapters/test_dagster_adapter.py \
               --deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule \
+              --deselect=tests/unit/toolchain/test_cli_surface.py::test_the_verb_completes_within_the_budget \
               --cov=janus \
               --cov-report= \
+              --durations=20 \
               --junitxml=data/metadata/test-reports/ci-unit.xml \
             | tee data/pytest-output.txt
           JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
@@ -163,6 +188,7 @@ jobs:
               --cov=janus \
               --cov-append \
               --cov-report= \
+              --durations=20 \
               --junitxml=data/metadata/test-reports/ci.xml \
             | tee -a data/pytest-output.txt
           JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
@@ -175,6 +201,7 @@ jobs:
               --cov-append \
               --cov-report=term-missing \
               --cov-report=xml:data/coverage.xml \
+              --durations=20 \
               --junitxml=data/metadata/test-reports/ci-large.xml \
             | tee -a data/pytest-output.txt
       - name: Assert the maintenance deletion boundary executed
@@ -186,6 +213,11 @@ jobs:
         run: make test-maintenance
       - name: Exercise make maintain-dry-run against a populated fixture catalog
         run: make test-maintenance-smoke
+      - name: Assert all six frozen metrics acceptance cases executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml \
+              --class-name tests.unit.observability.test_acceptance_evidence.TestReferenceContainerGoldens --minimum-passed 6
       - name: Prove both runtime engines are importable in the image
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \
@@ -245,6 +277,15 @@ jobs:
             exit 1
           fi
           docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.catalog_commits.test_contract_preflight_real_catalog --minimum-passed 10
+      - name: Assert metrics schema evolution and three-way freshness parity executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate \
+              data/metadata/test-reports/ci-unit.xml --suite status_catalog
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate \
+              data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml \
+              --suite metrics
       - name: Assert the contract enforcement suites executed
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.contracts.test_pre_write_gate --minimum-passed 13
@@ -317,4 +358,7 @@ jobs:
           path: |
             data/coverage.xml
             data/coverage-summary.txt
+            data/metadata/test-reports/ci*.xml
+            data/pytest-output.txt
+            data/pytest-cli-timing-output.txt
           if-no-files-found: warn

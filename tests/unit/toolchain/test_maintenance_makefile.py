@@ -23,6 +23,7 @@ MAKEFILE = PROJECT_ROOT / "Makefile"
 def run_make(tmp_path):
     if shutil.which("make") is None or not MAKEFILE.is_file():
         pytest.skip("the maintenance target checks need GNU make and the checkout's Makefile")
+    (tmp_path / "Makefile").write_text(MAKEFILE.read_text())
     log = tmp_path / "compose.jsonl"
     compose = tmp_path / "fixture-compose"
     compose.write_text(
@@ -96,6 +97,18 @@ def test_a_makefile_default_other_than_local_still_requires_an_operator_choice(r
     assert result.returncode == 2 and calls == []
 
 
+@pytest.mark.parametrize("target", [
+    "test-maintenance", "test-maintenance-smoke", "test-spark-startup",
+])
+def test_container_exec_initializes_identity_for_each_maintenance_command(run_make, target):
+    result, calls = run_make(target)
+    assert result.returncode == 0, result.stderr
+    executed = [call for call in calls if "exec" in call]
+    assert executed
+    for command in executed:
+        assert command[command.index("janus") + 1] == "/usr/local/bin/entrypoint.sh"
+
+
 @pytest.mark.parametrize("target", ["maintain-dry-run", "maintain-apply", "require-environment"])
 def test_same_named_files_cannot_bypass_the_guard(run_make, tmp_path, target):
     (tmp_path / target).touch()
@@ -107,13 +120,16 @@ def test_workflow_and_make_ci_run_the_same_maintenance_steps_in_order():
     if not MAKEFILE.is_file():
         pytest.skip("the workflow parity check needs the checkout's Makefile")
     workflow = yaml.safe_load((PROJECT_ROOT / ".github/workflows/ci.yml").read_text())
+    assert workflow["jobs"]["spark"]["env"]["JANUS_CONTAINER_ENGINE"] == "docker"
     steps = [step.get("run", "") for step in workflow["jobs"]["spark"]["steps"]]
     full_suite = next(index for index, step in enumerate(steps) if "--cov=janus" in step)
+    assert steps.index("make test-spark-startup") < full_suite
     maintenance = steps[full_suite + 1 : full_suite + 4]
     assert "test_no_deletion_outside_maintenance --minimum-passed 63" in maintenance[0]
     assert maintenance[1:] == ["make test-maintenance", "make test-maintenance-smoke"]
     makefile = MAKEFILE.read_text()
     recipe = makefile.split("\nci: ensure-up\n", 1)[1].split("\n\n", 1)[0]
+    assert recipe.index("test-spark-startup") < recipe.index("--cov=janus")
     assert recipe.index("--cov=janus") < recipe.index("$(MAINTENANCE_SWEEP_CLASS)")
     assert recipe.index("$(MAINTENANCE_SWEEP_CLASS)") < recipe.index("test-maintenance\n")
     assert recipe.index("test-maintenance\n") < recipe.index("test-maintenance-smoke\n")

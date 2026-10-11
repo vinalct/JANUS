@@ -42,6 +42,8 @@
       ],
       "contract_id": "example.minimal",
       "contract_version": "1.0.0",
+      "duration_budget_outcome": "undeclared",
+      "duration_budget_seconds": null,
       "emitted_at": "2026-09-13T12:00:05+00:00",
       "environment": "local",
       "extraction_metadata": {
@@ -50,6 +52,7 @@
         "rediscovered_raw_artifact_count": "1"
       },
       "extraction_mode": "full_refresh",
+      "freshness_max_age_seconds": null,
       "materialized_outputs": [
         {
           "format": "json",
@@ -138,10 +141,13 @@
       ],
       "contract_id": "example.minimal",
       "contract_version": "1.0.0",
+      "duration_budget_outcome": "undeclared",
+      "duration_budget_seconds": null,
       "duration_seconds": 5.0,
       "ended_at": "2026-09-13T12:00:05+00:00",
       "environment": "local",
       "extraction_mode": "full_refresh",
+      "freshness_max_age_seconds": null,
       "materialized_outputs": [
         {
           "format": "json",
@@ -301,6 +307,7 @@
   "requests": [],
   "summary": {
     "executed_run": {
+      "duration_budget_outcome": "undeclared",
       "handoff_artifact_count": 1,
       "materialized_outputs": [
         {

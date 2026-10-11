@@ -302,7 +302,7 @@ def _source_config(
         "spark": {
             "input_format": "json",
             "write_mode": write_mode,
-            "repartition": 1,
+            "write": {"partitions": 1},
             "partition_by": [],
         },
         "outputs": {

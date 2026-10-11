@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime
+import json
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
+import yaml
 
-from janus.lineage import RunObserver, compute_config_version
+from janus.lineage import LineageRecord, RunObserver, compute_config_version
+from janus.lineage.persistence import write_json_atomic
+from janus.main import main
+from janus.models import ExecutionPlan, RunContext
 from janus.observability import (
     IcebergAppendOutcome,
     RunRecord,
@@ -18,6 +23,7 @@ from janus.observability import (
     build_run_event_emitter,
 )
 from janus.planner import HookCatalog, Planner, PlanningRequest, StrategyBinding, StrategyCatalog
+from janus.registry import load_registry
 from janus.runtime import SourceExecutor, SparkSessionProvider
 from janus.scripts.raw_to_bronze import RawToBronzeLoader
 from janus.strategies.api import ApiStrategy
@@ -25,6 +31,8 @@ from janus.strategies.catalog import CatalogStrategy
 from janus.utils.storage import StorageLayout
 from tests.support import observability_baseline as baseline
 from tests.support.contracts import keyed_contract_yaml
+from tests.support.metadata_zone_fixture import MetadataZoneFixture, build_metadata_zone
+from tests.support.metrics_order23 import exit_code
 from tests.support.spark_sessions import (
     CatalogTarget,
     catalog_acceptance_prerequisites_available,
@@ -582,3 +590,337 @@ def test_published_ac2_queries_execute_verbatim_with_retry_and_window_boundaries
     assert drift_rows[1]["validation_report_path"] == (
         f"data/metadata/{drift_source}/validations/{drift_token}_malformed.json"
     )
+
+
+def _freshness_query_zone(root: Path) -> MetadataZoneFixture:
+    """The same terminal history in metadata and the catalog, including boundary cases."""
+    zone = build_metadata_zone(root, now=datetime(2026, 9, 18, 12, tzinfo=UTC), seed=23)
+    sources = list(zone.sources)
+    template = sources[0]
+    cases = (
+        ("boundary", "24h", "fresh", timedelta(hours=24), "succeeded"),
+        ("boundary_over", "24h", "stale", timedelta(hours=24, microseconds=1), "succeeded"),
+        ("future", "24h", "fresh", timedelta(hours=-1), "succeeded"),
+        ("undeclared_never", None, "undeclared", timedelta(hours=1), "failed"),
+        ("duplicate", "24h", "stale", timedelta(hours=50), "succeeded"),
+    )
+    for name, max_age, outcome, age, status in cases:
+        source_id = f"fixture.{name}"
+        config_path = template.config_path.with_name(f"{name}.yaml")
+        document = yaml.safe_load(template.config_path.read_text(encoding="utf-8"))
+        document.update(source_id=source_id, name=f"Freshness fixture: {name}")
+        document["access"]["path"] = f"/{name}"
+        for output_zone, output in document["outputs"].items():
+            output["path"] = f"data/{output_zone}/fixture/{name}"
+        document["operations"] = {"max_duration_seconds": 300}
+        if max_age is not None:
+            document["operations"]["freshness"] = {"max_age": max_age}
+        config_path.write_text(yaml.safe_dump(document), encoding="utf-8")
+        ended_at = zone.now - age
+        run = replace(
+            template.runs[-1],
+            source_id=source_id,
+            source_name=document["name"],
+            run_id=f"{name}-{uuid4().hex}",
+            source_config_path=str(config_path.relative_to(zone.root)),
+            configured_outputs=tuple(
+                replace(output, path=document["outputs"][output.zone]["path"])
+                for output in template.runs[-1].configured_outputs
+            ),
+            started_at=ended_at - timedelta(minutes=5),
+            ended_at=ended_at,
+            status=status,
+            failure_reason="fixture failure" if status == "failed" else None,
+            error_type="RuntimeError" if status == "failed" else None,
+        )
+        sources.append(
+            replace(
+                template,
+                source_id=source_id,
+                config_path=config_path,
+                metadata_dir=zone.root / document["outputs"]["metadata"]["path"],
+                max_age=max_age,
+                expected_outcome=outcome,
+                runs=(run,),
+            )
+        )
+
+    never_run = next(source for source in sources if source.source_id == "fixture.never").runs[0]
+    sources = [
+        replace(
+            source,
+            runs=(replace(never_run, source_id=source.source_id, run_id=f"empty-{uuid4().hex}"),),
+        )
+        if source.source_id == "fixture.empty"
+        else source
+        for source in sources
+    ]
+    stale = next(source for source in sources if source.source_id == "fixture.stale")
+    document = yaml.safe_load(stale.config_path.read_text(encoding="utf-8"))
+    document["operations"]["max_duration_seconds"] = 60
+    stale.config_path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    return replace(zone, sources=tuple(sources))
+
+
+def _append_freshness_history(zone: MetadataZoneFixture, catalog_target: CatalogTarget) -> None:
+    config = catalog_target.environment_config()
+    config["spark"].update(
+        warehouse_dir="data/metadata/spark-warehouse", ivy_dir="data/metadata/ivy"
+    )
+    config["storage"] = {
+        "root_dir": "data",
+        **{f"{name}_dir": f"data/{name}" for name in ("raw", "bronze", "metadata")},
+    }
+    directory = zone.root / "conf/environments"
+    directory.mkdir(parents=True)
+    (directory / "local.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    registry = load_registry(zone.root)
+    for source in zone.sources:
+        source_config = registry.get_source(source.source_id)
+        budget = source_config.operations.max_duration_seconds
+        freshness = source_config.operations.freshness
+        for original in source.runs:
+            run = replace(
+                original,
+                duration_budget_seconds=budget,
+                duration_budget_outcome=(
+                    "undeclared" if budget is None else "exceeded" if budget < 300 else "within"
+                ),
+                freshness_max_age_seconds=None if freshness is None else freshness.max_age_seconds,
+            )
+            write_json_atomic(source.metadata_dir / "runs" / f"{run.run_id}.json", run.to_dict())
+            plan = ExecutionPlan.from_source_config(
+                source_config,
+                RunContext.create(
+                    run_id=run.run_id,
+                    environment="local",
+                    project_root=zone.root,
+                    started_at=run.started_at,
+                ),
+            )
+            lineage = LineageRecord.from_runtime(
+                plan,
+                status=run.status,
+                extraction_result=None,
+                write_results=(),
+                emitted_at=run.ended_at,
+            )
+            record = RunRecord.from_run(run, lineage, emitted_at=run.ended_at)
+            if source.source_id == "fixture.fresh" and original == source.runs[0]:
+                # The most recently emitted success has the oldest completion time.
+                record = replace(record, emitted_at=zone.now)
+            if source.source_id == "fixture.duplicate":
+                superseded = replace(
+                    record,
+                    status="failed",
+                    failure_reason="superseded failure",
+                    failure_reason_truncated=False,
+                    failure_reason_length=len("superseded failure"),
+                    error_type="RuntimeError",
+                    started_at=record.ended_at - timedelta(seconds=1201),
+                    ended_at=record.ended_at - timedelta(seconds=1),
+                    emitted_at=record.emitted_at - timedelta(seconds=1),
+                    duration_seconds=1200.0,
+                    freshness_max_age_seconds=72 * 3600,
+                    duration_budget_seconds=900,
+                    duration_budget_outcome="exceeded",
+                )
+                result = append_run_record(superseded, config, catalog_target.resolved_paths)
+                assert result.outcome is IcebergAppendOutcome.EMITTED, result
+            result = append_run_record(record, config, catalog_target.resolved_paths)
+            assert result.outcome is IcebergAppendOutcome.EMITTED, result
+
+
+class TestOrder23Queries:
+    @staticmethod
+    @pytest.mark.spark
+    @pytest.mark.skipif(not CATALOG_ACCEPTANCE_AVAILABLE, reason=AC2_QUERY_SKIP_REASON)
+    def test_order23_stale_query_and_both_status_readers_return_the_same_breaches(
+        catalog_target: CatalogTarget, shared_catalog_session, tmp_path, capsys
+    ):
+        sql = (QUERY_DIRECTORY / "stale-sources.sql").read_text(encoding="utf-8")
+        assert sql.strip()
+        zone = _freshness_query_zone(tmp_path / "freshness")
+        _append_freshness_history(zone, catalog_target)
+        # PyIceberg commits outside Spark; discard any relation from an earlier query.
+        shared_catalog_session.catalog.refreshTable("janus.metadata.runs")
+        argv = [
+            "status",
+            "--project-root",
+            str(zone.root),
+            "--now",
+            zone.now.isoformat(),
+            "--format",
+            "json",
+        ]
+        assert exit_code(lambda: main(argv)) == 1
+        metadata = json.loads(capsys.readouterr().out)
+        assert exit_code(lambda: main([*argv, "--from-runs-table"])) == 1
+        table = json.loads(capsys.readouterr().out)
+        parameters = {
+            "window_start_day": datetime(2026, 9, 1).date(),
+            "window_start": datetime(2026, 9, 1, tzinfo=UTC),
+            "window_end": datetime(2026, 10, 1, tzinfo=UTC),
+            "evaluated_at": zone.now,
+        }
+        rows = shared_catalog_session.sql(sql, args=parameters).collect()
+        ids = set(zone.expected_outcomes)
+        expected = {
+            source_id
+            for source_id, outcome in zone.expected_outcomes.items()
+            if outcome in {"stale", "never_ran"}
+        }
+        assert ids and expected and rows
+        by_id = {row["source_id"]: row.asDict() for row in rows if row["source_id"] in ids}
+        assert {source_id: row["outcome"] for source_id, row in by_id.items()} == (
+            zone.expected_outcomes
+        )
+        assert by_id["fixture.boundary"]["age_seconds"] == 86400
+        assert by_id["fixture.boundary_over"]["age_seconds"] == 86400.000001
+        assert by_id["fixture.future"]["age_seconds"] == -3600
+        assert by_id["fixture.undeclared_never"]["last_success_at"] is None
+        assert by_id["fixture.duplicate"]["duration_budget_seconds"] == 300
+        assert by_id["fixture.duplicate"]["freshness_max_age_seconds"] == 86400
+        assert by_id["fixture.duplicate"]["budget_exceeded_runs"] == 0
+        assert by_id["fixture.stale"]["duration_budget_seconds"] == 60
+        assert by_id["fixture.stale"]["budget_exceeded_runs"] == 2
+        assert {
+            row["source_id"]
+            for row in rows
+            if row["source_id"] in ids and row["outcome"] in {"stale", "never_ran"}
+        } == expected
+        for payload in (metadata, table):
+            assert {row["source_id"]: row["outcome"] for row in payload["sources"]} == (
+                zone.expected_outcomes
+            )
+            for row in payload["sources"]:
+                query_row = by_id[row["source_id"]]
+                assert query_row["age_seconds"] == row["age_seconds"]
+                assert query_row["freshness_max_age_seconds"] == row["max_age_seconds"]
+                assert (
+                    query_row["last_success_at"].replace(tzinfo=UTC).isoformat()
+                    if query_row["last_success_at"] is not None
+                    else None
+                ) == row["last_success_at"]
+            assert {
+                row["source_id"]
+                for row in payload["sources"]
+                if row["outcome"] in {"stale", "never_ran"}
+            } == expected
+
+        # With an older success outside the emission window, SQL has only the
+        # recent failure. The unwindowed commands above still find the success.
+        narrow_start = zone.now - timedelta(hours=24)
+        narrow = {
+            row["source_id"]: row["outcome"]
+            for row in shared_catalog_session.sql(
+                sql,
+                args={
+                    **parameters,
+                    "window_start": narrow_start,
+                    "window_start_day": narrow_start.date(),
+                },
+            ).collect()
+        }
+        assert narrow["fixture.stale"] == "never_ran"
+        assert by_id["fixture.stale"]["outcome"] == "stale"
+        assert narrow["fixture.boundary"] == "fresh"
+        assert "fixture.boundary_over" not in narrow
+        print(
+            f"Three-way parity: {len(ids)} sources, {len(expected)} breaches "
+            f"({', '.join(sorted(expected))}); boundary=86400 fresh, "
+            "boundary+1us stale; 2 exceeded runs; narrow-window stale -> never_ran"
+        )
+
+    @staticmethod
+    @pytest.mark.spark
+    @pytest.mark.skipif(not CATALOG_ACCEPTANCE_AVAILABLE, reason=AC2_QUERY_SKIP_REASON)
+    def test_stale_sources_query_uses_a_half_open_emission_window(
+        catalog_target: CatalogTarget, shared_catalog_session
+    ):
+        token = f"freshness_window_{uuid4().hex}"
+        lower = datetime(2026, 9, 1, 12, tzinfo=UTC)
+        upper = datetime(2026, 10, 1, tzinfo=UTC)
+        instants = {
+            "lower": lower,
+            "same_day_before": lower - timedelta(microseconds=1),
+            "previous_day": lower - timedelta(days=1),
+            "just_inside": upper - timedelta(microseconds=1),
+            "upper": upper,
+        }
+        config = catalog_target.environment_config()
+        for suffix, emitted_at in instants.items():
+            record = _seed_record(
+                run_id=f"{token}_{suffix}",
+                source_id=f"{token}_{suffix}",
+                status="failed",
+                started_at=lower - timedelta(days=2),
+                emitted_at=emitted_at,
+                freshness_max_age_seconds=86400,
+            )
+            result = append_run_record(record, config, catalog_target.resolved_paths)
+            assert result.outcome is IcebergAppendOutcome.EMITTED, result
+        shared_catalog_session.catalog.refreshTable("janus.metadata.runs")
+        sql = (QUERY_DIRECTORY / "stale-sources.sql").read_text(encoding="utf-8")
+        rows = shared_catalog_session.sql(
+            sql,
+            args={
+                "window_start_day": lower.date(),
+                "window_start": lower,
+                "window_end": upper,
+                "evaluated_at": upper,
+            },
+        ).collect()
+        assert {
+            row["source_id"]: row["outcome"]
+            for row in rows
+            if row["source_id"].startswith(token)
+        } == {f"{token}_lower": "never_ran", f"{token}_just_inside": "never_ran"}
+
+    @staticmethod
+    @pytest.mark.spark
+    @pytest.mark.skipif(not CATALOG_ACCEPTANCE_AVAILABLE, reason=AC2_QUERY_SKIP_REASON)
+    def test_source_volume_query_sums_counters_and_preserves_file_family_nulls(
+        catalog_target: CatalogTarget, shared_catalog_session
+    ):
+        token = f"source_volume_{uuid4().hex}"
+        now = datetime(2026, 9, 18, 12, tzinfo=UTC)
+        counters = ("request_count", "retry_count", "attempt_count", "dead_letter_count")
+        config = catalog_target.environment_config()
+        for family in ("api", "file"):
+            for index in range(2):
+                counts = {name: 2**33 + index if family == "api" else None for name in counters}
+                record = replace(
+                    _seed_record(
+                        run_id=f"{token}_{family}_{index}",
+                        source_id=f"{token}_{family}",
+                        status="succeeded",
+                        started_at=now,
+                        emitted_at=now,
+                        **counts,
+                    ),
+                    strategy_family=family,
+                    strategy_variant="static_file" if family == "file" else "page_number_api",
+                )
+                # Re-emission must contribute once, despite two physical rows.
+                for emitted_at in (now, now + timedelta(seconds=1)):
+                    result = append_run_record(
+                        replace(record, emitted_at=emitted_at),
+                        config,
+                        catalog_target.resolved_paths,
+                    )
+                    assert result.outcome is IcebergAppendOutcome.EMITTED, result
+        shared_catalog_session.catalog.refreshTable("janus.metadata.runs")
+        sql = (QUERY_DIRECTORY / "runs-by-source-over-time.sql").read_text(encoding="utf-8")
+        rows = {
+            row["source_id"]: row.asDict()
+            for row in shared_catalog_session.sql(sql).collect()
+            if row["source_id"].startswith(token)
+        }
+        assert set(rows) == {f"{token}_api", f"{token}_file"}
+        for family in ("api", "file"):
+            row = rows[f"{token}_{family}"]
+            assert row["run_count"] == 2
+            assert {name: row[name] for name in counters} == {
+                name: 2**34 + 1 if family == "api" else None for name in counters
+            }

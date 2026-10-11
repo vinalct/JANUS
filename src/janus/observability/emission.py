@@ -9,8 +9,6 @@ run's exposure whatever a transport was configured to wait for.
 from __future__ import annotations
 
 import logging
-import math
-import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -25,11 +23,24 @@ from janus.lineage.store import (
 )
 from janus.models import ExecutionPlan
 from janus.models.data_contracts import DataContract
+from janus.observability.bounded import (
+    DEFAULT_EMISSION_TIMEOUT_SECONDS,
+    EmissionGuardError,
+    bounded_emission,
+)
 from janus.observability.iceberg_sink import (
     IcebergAppendOutcome,
     IcebergAppendResult,
     append_run_record,
 )
+from janus.observability.metrics.sink import (
+    MetricsRunSink,
+    build_metrics_sink,
+    complete_metrics_result,
+    disabled_metrics_sink,
+    emit_guarded_metrics,
+)
+from janus.observability.metrics.transport import MetricsEmissionResult
 from janus.observability.openlineage.sink import (
     OpenLineageRunSink,
     build_openlineage_sink,
@@ -48,7 +59,6 @@ from janus.observability.runs_table import (
 from janus.utils.environment import RuntimeLocation
 from janus.utils.logging import StructuredLogger
 
-DEFAULT_EMISSION_TIMEOUT_SECONDS = 5.0
 _LOG = logging.getLogger(__name__)
 
 
@@ -86,6 +96,7 @@ class RunEmissionResult:
     exception_type: str | None = None
     duration_seconds: float = 0.0
     openlineage: OpenLineageEmissionResult | None = None
+    metrics: MetricsEmissionResult | None = None
 
     @property
     def emitted(self) -> bool:
@@ -106,6 +117,8 @@ class RunEmissionResult:
             summary["exception_type"] = self.exception_type
         if self.openlineage is not None:
             summary["openlineage"] = self.openlineage.to_summary()
+        if self.metrics is not None:
+            summary["metrics"] = self.metrics.to_summary()
         return summary
 
 
@@ -140,6 +153,7 @@ class GuardedRunEventEmitter:
     )
     runs_table_sink: _RunRecordAppender = append_run_record
     openlineage_sink: OpenLineageRunSink = field(default_factory=disabled_openlineage_sink)
+    metrics_sink: MetricsRunSink = field(default_factory=disabled_metrics_sink)
     last_result: RunEmissionResult | None = field(default=None, init=False)
     last_started_result: RunEmissionResult | None = field(default=None, init=False)
 
@@ -181,6 +195,9 @@ class GuardedRunEventEmitter:
                 results, lifecycle, persisted, data_contract, started_at, table_identifier
             ),
         )
+        result = replace(
+            result, metrics=complete_metrics_result(self.metrics_sink, result, logger=self.logger)
+        )
         self._finish(result, started_at)
 
     def _bounded(
@@ -191,58 +208,22 @@ class GuardedRunEventEmitter:
         worker: Callable[[list[RunEmissionResult]], None],
     ) -> RunEmissionResult:
         """Run one fan-out inside the total budget, whatever its destinations cost."""
-        if not _valid_timeout(self.timeout_seconds):
-            return _failed(
-                lifecycle,
-                table_identifier,
-                stage="budget",
-                exception_type="InvalidEmissionTimeout",
-            )
-
-        results: list[RunEmissionResult] = []
-        fatal_errors: list[BaseException] = []
-
-        def bridge() -> None:
-            # Anything the per-stage guards did not already turn into data crosses the
-            # thread boundary: a KeyboardInterrupt during emission must still interrupt.
-            try:
-                worker(results)
-            except BaseException as exc:
-                fatal_errors.append(exc)
+        def operation() -> RunEmissionResult:
+            results: list[RunEmissionResult] = []
+            worker(results)
+            if results:
+                return results[0]
+            raise EmissionGuardError("worker", "WorkerExitedWithoutResult")
 
         try:
-            thread = threading.Thread(
-                target=bridge,
-                name="janus-run-event-emission",
-                daemon=True,
-            )
-            thread.start()
-            thread.join(self.timeout_seconds)
-        except Exception as exc:
+            return bounded_emission(operation, timeout_seconds=self.timeout_seconds)
+        except EmissionGuardError as exc:
             return _failed(
                 lifecycle,
                 table_identifier,
-                stage="worker",
-                exception_type=type(exc).__name__,
+                stage=exc.stage,
+                exception_type=exc.exception_type,
             )
-
-        if thread.is_alive():
-            return _failed(
-                lifecycle,
-                table_identifier,
-                stage="budget",
-                exception_type="EmissionTimeoutError",
-            )
-        if fatal_errors:
-            raise fatal_errors[0]
-        if results:
-            return results[0]
-        return _failed(
-            lifecycle,
-            table_identifier,
-            stage="worker",
-            exception_type="WorkerExitedWithoutResult",
-        )
 
     def _run_started_worker(
         self,
@@ -289,7 +270,7 @@ class GuardedRunEventEmitter:
             )
             return
 
-        # One projection, both destinations: the event and the row cannot disagree.
+        # One projection feeds every terminal destination.
         openlineage = self._emit_openlineage(
             persisted.run_metadata,
             started_at,
@@ -307,6 +288,7 @@ class GuardedRunEventEmitter:
                     stage="budget",
                     exception_type="EmissionTimeoutError",
                     openlineage=openlineage,
+                    metrics=self._emit_metrics(record, started_at),
                 )
             )
             return
@@ -319,17 +301,29 @@ class GuardedRunEventEmitter:
                 logger=self.logger,
                 timeout_seconds=remaining,
             )
-            results.append(_from_sink_result(lifecycle, sink_result, openlineage))
+            result = _from_sink_result(lifecycle, sink_result, openlineage)
         except Exception as exc:
-            results.append(
-                _failed(
-                    lifecycle,
-                    table_identifier,
-                    stage="runs_table",
-                    exception_type=type(exc).__name__,
-                    openlineage=openlineage,
-                )
+            result = _failed(
+                lifecycle,
+                table_identifier,
+                stage="runs_table",
+                exception_type=type(exc).__name__,
+                openlineage=openlineage,
             )
+        metrics = self._emit_metrics(record, started_at, result)
+        results.append(replace(result, metrics=metrics))
+
+    def _emit_metrics(
+        self, record: RunRecord, started_at: float, result: RunEmissionResult | None = None
+    ) -> MetricsEmissionResult | None:
+        return emit_guarded_metrics(
+            self.metrics_sink,
+            record,
+            timeout_seconds=self.timeout_seconds,
+            started_at=started_at,
+            emission_result=result,
+            logger=self.logger,
+        )
 
     def _emit_openlineage(
         self,
@@ -379,6 +373,7 @@ def build_run_event_emitter(
     projector: Callable[[PersistedArtifacts], RunRecord] | None = None,
     runs_table_sink: _RunRecordAppender | None = None,
     openlineage_sink: OpenLineageRunSink | None = None,
+    metrics_sink: MetricsRunSink | None = None,
 ) -> GuardedRunEventEmitter:
     """Build one isolated emitter from one execution's resolved environment profile.
 
@@ -396,6 +391,11 @@ def build_run_event_emitter(
             openlineage_sink
             if openlineage_sink is not None
             else build_openlineage_sink(config, resolved_paths, logger=logger)
+        ),
+        metrics_sink=(
+            metrics_sink
+            if metrics_sink is not None
+            else build_metrics_sink(config, resolved_paths, logger=logger)
         ),
     )
 
@@ -451,6 +451,7 @@ def _from_sink_result(
     lifecycle: str,
     result: IcebergAppendResult,
     openlineage: OpenLineageEmissionResult | None = None,
+    metrics: MetricsEmissionResult | None = None,
 ) -> RunEmissionResult:
     return RunEmissionResult(
         lifecycle=lifecycle,
@@ -460,6 +461,7 @@ def _from_sink_result(
         stage=result.step,
         exception_type=result.exception_type,
         openlineage=openlineage,
+        metrics=metrics,
     )
 
 
@@ -470,6 +472,7 @@ def _failed(
     stage: str,
     exception_type: str,
     openlineage: OpenLineageEmissionResult | None = None,
+    metrics: MetricsEmissionResult | None = None,
 ) -> RunEmissionResult:
     return RunEmissionResult(
         lifecycle=lifecycle,
@@ -479,6 +482,7 @@ def _failed(
         stage=stage,
         exception_type=exception_type,
         openlineage=openlineage,
+        metrics=metrics,
     )
 
 
@@ -502,13 +506,6 @@ def _safe_table_identifier(config: Mapping[str, Any]) -> str:
         return resolve_runs_table_identifier(config)
     except Exception:
         return DEFAULT_RUNS_TABLE_IDENTIFIER
-
-
-def _valid_timeout(value: float) -> bool:
-    try:
-        return math.isfinite(value) and value > 0
-    except Exception:
-        return False
 
 
 def _elapsed(started_at: float) -> float:

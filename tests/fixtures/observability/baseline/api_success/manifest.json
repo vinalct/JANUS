@@ -32,6 +32,7 @@
         }
       ],
       "checkpoint_value": "2026-07-02",
+      "duration_budget_outcome": "undeclared",
       "extraction_metadata": {
         "attempt_count": "1",
         "auth_type": "none",

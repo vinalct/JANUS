@@ -21,6 +21,9 @@ from janus.models.config.constants import (
     DEFAULT_PAST_END_STATUS_CODES,
     DEFAULT_RETRYABLE_STATUS_CODES,
     DEFAULT_TARGET_FILE_SIZE_MB,
+    DURATION_BUDGET_EXCEEDED,
+    DURATION_BUDGET_UNDECLARED,
+    DURATION_BUDGET_WITHIN,
     MAX_REDIRECTS_CEILING,
 )
 
@@ -331,6 +334,48 @@ class OutputsConfig:
     raw: OutputTarget
     bronze: OutputTarget
     metadata: OutputTarget
+
+
+@dataclass(frozen=True, slots=True)
+class FreshnessConfig:
+    """How old this source's newest successful run may be before it is stale."""
+
+    max_age_seconds: int
+
+    def __post_init__(self) -> None:
+        if self.max_age_seconds < 1:
+            raise ValueError("max_age_seconds must be >= 1")
+
+
+@dataclass(frozen=True, slots=True)
+class OperationsConfig:
+    """What the operator expects of this source.
+
+    Duration and freshness declarations are optional and independent. An absent
+    declaration is undeclared, never a claim that a run is within budget or fresh.
+    """
+
+    max_duration_seconds: int | None = None
+    freshness: FreshnessConfig | None = None
+
+    @property
+    def declares_duration_budget(self) -> bool:
+        return self.max_duration_seconds is not None
+
+    def evaluate_duration(self, duration_seconds: float | None) -> str:
+        """Evaluate a measured run against its declared budget in one shared place.
+
+        Only a duration strictly greater than the budget is exceeded; equality is
+        within. A missing budget or measurement is undeclared because no comparison
+        was possible. Returns one of ``DURATION_BUDGET_OUTCOMES``.
+        """
+        if self.max_duration_seconds is None or duration_seconds is None:
+            return DURATION_BUDGET_UNDECLARED
+        return (
+            DURATION_BUDGET_EXCEEDED
+            if duration_seconds > self.max_duration_seconds
+            else DURATION_BUDGET_WITHIN
+        )
 
 
 @dataclass(frozen=True, slots=True)

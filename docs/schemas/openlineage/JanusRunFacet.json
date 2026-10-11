@@ -129,6 +129,9 @@
         },
         "extraction_metadata": {"$ref": "#/$defs/StringMap"},
         "metadata": {"$ref": "#/$defs/StringMap"},
+        "duration_budget_seconds": {"type": ["integer", "null"], "minimum": 1},
+        "duration_budget_outcome": {"enum": ["within", "exceeded", "undeclared", null]},
+        "freshness_max_age_seconds": {"type": ["integer", "null"], "minimum": 1},
         "started_at": {"type": "string", "format": "date-time"},
         "checkpoint_decision": {
           "type": ["string", "null"],

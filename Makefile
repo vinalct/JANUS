@@ -1,13 +1,17 @@
 COMPOSE_FILE := docker/docker-compose.yml
 PODMAN_COMPOSE_FILE := docker/docker-compose.podman.yml
 SERVICE := janus
+JANUS_ENTRYPOINT := /usr/local/bin/entrypoint.sh
 ENVIRONMENT ?= local
 RUN_ARGS ?=
 MAINTAIN_ARGS ?=
 PYTHON ?= python
+JANUS_CONTAINER_ENGINE ?= auto
 JANUS_UID := $(shell id -u)
 JANUS_GID := $(shell id -g)
 JANUS_PROJECT_ROOT := $(CURDIR)
+# Atomic saves can leave the single-file bind mount on the previous Makefile inode.
+JANUS_MAKEFILE_CHECKSUM := $(shell cksum < "$(abspath $(lastword $(MAKEFILE_LIST)))")
 COMMA := ,
 
 ICEBERG_JAR_NAME := org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar
@@ -22,9 +26,12 @@ IVY_JAR_DEST_DIR := data/metadata/ivy/jars
 DAGSTER_VERSION := 1.13.22
 DAGSTER_TEST_REPORT := data/metadata/test-reports/dagster.xml
 FAST_TEST_REPORT := data/metadata/test-reports/fast.xml
+METRICS_TEST_REPORT := data/metadata/test-reports/metrics.xml
 CI_TEST_REPORT := data/metadata/test-reports/ci.xml
 CI_UNIT_TEST_REPORT := data/metadata/test-reports/ci-unit.xml
 CI_LARGE_TEST_REPORT := data/metadata/test-reports/ci-large.xml
+CLI_TIMING_TEST_REPORT := data/metadata/test-reports/ci-cli-timing.xml
+CLI_TIMING_TEST := tests/unit/toolchain/test_cli_surface.py::test_the_verb_completes_within_the_budget
 CI_GATE_REPORTS := $(CI_TEST_REPORT) --additional-report $(CI_UNIT_TEST_REPORT) --additional-report $(CI_LARGE_TEST_REPORT)
 MAINTENANCE_TEST_REPORT := data/metadata/test-reports/maintenance.xml
 MAINTENANCE_SMOKE_ROOT := data/metadata/maintenance-smoke
@@ -35,6 +42,8 @@ DAGSTER_TESTS := tests/unit/adapters/test_dagster_adapter.py \
 SPARK_UNIT_TEST_ARGS := -ra -m 'not cluster' tests/unit \
 	--ignore=tests/unit/adapters/test_dagster_adapter.py \
 	--deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
+# The two-second CLI requirement is measured separately, without coverage tracing.
+SPARK_COVERAGE_UNIT_TEST_ARGS := $(SPARK_UNIT_TEST_ARGS) --deselect=$(CLI_TIMING_TEST)
 SPARK_INTEGRATION_TEST_ARGS := -ra -m 'not cluster and not large_handoff' tests/integration \
 	--ignore=tests/integration/dagster
 SPARK_LARGE_TEST_ARGS := -ra -m 'not cluster and large_handoff' tests/integration/writers
@@ -69,6 +78,24 @@ FAST_REQUIRED_CLASSES := \
 	tests.unit.observability.test_pyiceberg_append_sink \
 	tests.unit.observability.test_run_record_projection \
 	tests.unit.observability.test_runs_table_contract
+METRICS_REQUIRED_CLASSES := \
+	tests.unit.models.test_operations_block \
+	tests.unit.lineage.test_observer_budget_persistence \
+	tests.unit.cli.test_status \
+	tests.unit.orchestration.test_budget_breach_policy \
+	tests.unit.observability.test_freshness \
+	tests.unit.observability.test_metrics_budget_acceptance \
+	tests.unit.observability.metrics.test_settings \
+	tests.unit.observability.metrics.test_catalogue_drift \
+	tests.unit.observability.metrics.test_transports \
+	tests.unit.observability.metrics.test_exposition \
+	tests.unit.observability.metrics.test_sink \
+	tests.unit.observability.metrics.test_pipeline_metrics
+METRICS_TEST_ARGS := $(foreach class_name,$(METRICS_REQUIRED_CLASSES),$(subst .,/,$(class_name)).py) \
+	tests/unit/observability/test_architecture_guardrails.py \
+	tests/unit/observability/test_example_queries_and_docs.py \
+	tests/unit/toolchain/test_cli_surface.py \
+	tests/unit/toolchain/test_required_test_gate.py
 COMPACTION_REQUIRED_CLASSES := \
 	tests.unit.strategies.api.test_handoff_compaction \
 	tests.unit.strategies.api.test_handoff_layout \
@@ -143,20 +170,31 @@ ICEBERG_JDBC_SCHEMA_VERSION := V1
 # export the generated stack credentials so compose can substitute them. Default: no-op.
 COMPOSE_PRELUDE ?= :
 
-DETECT_COMPOSE = if podman compose version >/dev/null 2>&1; then echo 'podman compose'; elif command -v podman-compose >/dev/null 2>&1; then echo podman-compose; elif docker compose version >/dev/null 2>&1; then echo 'docker compose'; elif command -v docker-compose >/dev/null 2>&1; then echo docker-compose; else exit 1; fi
+# A version check only finds the CLI; `ps` also proves its engine is reachable.
+# CI selects Docker explicitly because buildx loads the image into that engine.
+DETECT_COMPOSE = case "$(JANUS_CONTAINER_ENGINE)" in auto|docker|podman) ;; \
+	*) echo "Invalid JANUS_CONTAINER_ENGINE: $(JANUS_CONTAINER_ENGINE). Use auto, docker, or podman." >&2; exit 1 ;; esac; \
+	if [ "$(JANUS_CONTAINER_ENGINE)" != docker ]; then \
+		if podman compose -f $(COMPOSE_FILE) -f $(PODMAN_COMPOSE_FILE) ps >/dev/null 2>&1; then echo 'podman compose'; exit 0; \
+		elif podman-compose -f $(COMPOSE_FILE) -f $(PODMAN_COMPOSE_FILE) ps >/dev/null 2>&1; then echo podman-compose; exit 0; fi; \
+	fi; \
+	if [ "$(JANUS_CONTAINER_ENGINE)" != podman ]; then \
+		if docker compose -f $(COMPOSE_FILE) ps >/dev/null 2>&1; then echo 'docker compose'; exit 0; \
+		elif docker-compose -f $(COMPOSE_FILE) ps >/dev/null 2>&1; then echo docker-compose; exit 0; fi; \
+	fi; exit 1
 
 define RUN_COMPOSE
 	@compose_cmd="$$( $(DETECT_COMPOSE) )" || { \
-		echo "No compose-capable container engine found. Install Docker Compose, docker-compose, podman compose, or podman-compose." >&2; \
+		echo "No reachable Compose provider found for JANUS_CONTAINER_ENGINE=$(JANUS_CONTAINER_ENGINE). Check that the engine is running and its Compose provider can reach it." >&2; \
 		exit 1; \
 	}; \
 	compose_files="$$(case "$$compose_cmd" in podman* ) printf '%s' '-f $(COMPOSE_FILE) -f $(PODMAN_COMPOSE_FILE)' ;; * ) printf '%s' '-f $(COMPOSE_FILE)' ;; esac)"; \
 	container_user="$$(case "$$compose_cmd" in podman* ) printf '%s:%s' '$(JANUS_UID)' '$(JANUS_GID)' ;; * ) printf '%s:%s' '$(JANUS_UID)' '$(JANUS_GID)' ;; esac)"; \
 	$(COMPOSE_PRELUDE); \
-	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
+	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) JANUS_MAKEFILE_CHECKSUM='$(JANUS_MAKEFILE_CHECKSUM)' $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-handoff test-write-sizing test-contract-schema test-adapter test-maintenance test-maintenance-smoke ci require-environment maintain-dry-run maintain-apply validate run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
+.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-metrics test-handoff test-write-sizing test-contract-schema test-adapter test-maintenance test-maintenance-smoke ci require-environment maintain-dry-run maintain-apply validate run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
 
 # Guard every setup prerequisite too, so even `make -j` refuses before touching containers.
 ifneq ($(filter maintain-dry-run maintain-apply,$(MAKECMDGOALS)),)
@@ -174,7 +212,7 @@ seed-ivy:
 
 check-compose:
 	@compose_cmd="$$( $(DETECT_COMPOSE) )" || { \
-		echo "No compose-capable container engine found. Install Docker Compose, docker-compose, podman compose, or podman-compose." >&2; \
+		echo "No reachable Compose provider found for JANUS_CONTAINER_ENGINE=$(JANUS_CONTAINER_ENGINE). Check that the engine is running and its Compose provider can reach it." >&2; \
 		exit 1; \
 	}; \
 	printf 'Using %s\n' "$$compose_cmd"; \
@@ -207,7 +245,7 @@ logs: check-compose
 	$(call RUN_COMPOSE,logs $(SERVICE))
 
 shell: ensure-up
-	$(call RUN_COMPOSE,exec $(SERVICE) sh)
+	$(call RUN_COMPOSE,exec $(SERVICE) $(JANUS_ENTRYPOINT) sh)
 
 # The REPL reads the same catalog knobs the environment profile does
 # (conf/environments/*.yaml) so `make pyspark-local` and the app cannot drift onto
@@ -216,7 +254,7 @@ shell: ensure-up
 # the directories below are, because the app resolves it too (build_spark_options) and a
 # relative path would otherwise follow the REPL's working directory.
 pyspark-local: ensure-up
-	$(call RUN_COMPOSE,exec $(SERVICE) sh -lc '\
+	$(call RUN_COMPOSE,exec $(SERVICE) $(JANUS_ENTRYPOINT) sh -lc '\
 	ivy_dir="$${JANUS_SPARK_IVY_DIR:-data/metadata/ivy}"; \
 	if [ "$$ivy_dir" = "$${ivy_dir#/}" ]; then ivy_dir="/workspace/$$ivy_dir"; fi; \
 	iceberg_warehouse="$${JANUS_ICEBERG_WAREHOUSE_DIR:-data/bronze/iceberg}"; \
@@ -261,16 +299,16 @@ pyspark-local: ensure-up
 		--conf spark.ui.enabled=false')
 
 lint: ensure-up
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m ruff check src tests)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m ruff check src tests)
 
 typecheck: ensure-up
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m mypy)
 
 # Match CI's local selections and isolate the 2 GiB case from earlier Spark sessions.
 test: ensure-up
-	$(call RUN_COMPOSE,exec -T -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_UNIT_TEST_ARGS))
-	$(call RUN_COMPOSE,exec -T -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_INTEGRATION_TEST_ARGS))
-	$(call RUN_COMPOSE,exec -T -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_LARGE_TEST_ARGS))
+	$(call RUN_COMPOSE,exec -T -e SPARK_DRIVER_MEMORY=2g $(SERVICE) $(JANUS_ENTRYPOINT) python -m pytest $(SPARK_UNIT_TEST_ARGS))
+	$(call RUN_COMPOSE,exec -T -e SPARK_DRIVER_MEMORY=2g $(SERVICE) $(JANUS_ENTRYPOINT) python -m pytest $(SPARK_INTEGRATION_TEST_ARGS))
+	$(call RUN_COMPOSE,exec -T -e SPARK_DRIVER_MEMORY=2g $(SERVICE) $(JANUS_ENTRYPOINT) python -m pytest $(SPARK_LARGE_TEST_ARGS))
 
 test-handoff:          
 	$(PYTHON) -m pytest tests/integration/handoff -v
@@ -281,8 +319,8 @@ test-write-sizing:
 # Dependency-free orchestration and repository guardrails, matching CI's host-side fast job.
 test-fast:
 	@mkdir -p "$(dir $(FAST_TEST_REPORT))"
-	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --junitxml="$(FAST_TEST_REPORT)"
-	@for class_name in $(FAST_REQUIRED_CLASSES) $(COMPACTION_REQUIRED_CLASSES); do \
+	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --durations=20 --junitxml="$(FAST_TEST_REPORT)"
+	@for class_name in $(FAST_REQUIRED_CLASSES) $(COMPACTION_REQUIRED_CLASSES) $(METRICS_REQUIRED_CLASSES); do \
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
@@ -296,6 +334,15 @@ test-fast:
 	done
 	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63
 
+# Focused, session-free metrics/budget/freshness gate; Spark parity is required by ci.
+test-metrics:
+	@mkdir -p "$(dir $(METRICS_TEST_REPORT))"
+	$(PYTHON) -m pytest -ra $(METRICS_TEST_ARGS) --junitxml="$(METRICS_TEST_REPORT)"
+	@for class_name in $(METRICS_REQUIRED_CLASSES); do \
+		$(PYTHON) -m tests.support.required_test_gate "$(METRICS_TEST_REPORT)" \
+			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
+	done
+
 test-contract-schema:
 	$(PYTHON) -m pytest -q $(CONTRACT_SCHEMA_TESTS)
 
@@ -305,55 +352,73 @@ test-adapter:
 	$(PYTHON) -m pytest -ra $(DAGSTER_TESTS) --junitxml="$(DAGSTER_TEST_REPORT)"
 	$(PYTHON) -m tests.support.required_test_gate "$(DAGSTER_TEST_REPORT)" --minimum-passed 13
 
+.PHONY: test-spark-startup
+
+# Exercise the exec path before the long suites, including arbitrary-uid identity.
+test-spark-startup: ensure-up
+	$(call RUN_COMPOSE,exec -T -e SPARK_DRIVER_MEMORY=2g $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.container_spark_smoke)
+
 # Counts from the local, non-cluster cases: 3 snapshot cases x 2 layouts, 2 runs cases.
 test-maintenance: ensure-up
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m pytest -ra -m 'not cluster' tests/integration/maintenance/test_snapshot_expiration.py tests/integration/maintenance/test_runs_table_retention.py --junitxml=$(MAINTENANCE_TEST_REPORT))
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(MAINTENANCE_TEST_REPORT) --class-name $(MAINTENANCE_SNAPSHOT_CLASS) --minimum-passed 6)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(MAINTENANCE_TEST_REPORT) --class-name $(MAINTENANCE_RUNS_CLASS) --minimum-passed 2)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m pytest -ra -m 'not cluster' tests/integration/maintenance/test_snapshot_expiration.py tests/integration/maintenance/test_runs_table_retention.py --junitxml=$(MAINTENANCE_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(MAINTENANCE_TEST_REPORT) --class-name $(MAINTENANCE_SNAPSHOT_CLASS) --minimum-passed 6)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(MAINTENANCE_TEST_REPORT) --class-name $(MAINTENANCE_RUNS_CLASS) --minimum-passed 2)
 
 # Persist a dedicated catalog across container invocations. Only skip the already-run
 # setup when capturing stdout, so the actual maintenance target emits parseable JSON.
 test-maintenance-smoke: ensure-up
 	@mkdir -p "$(dir $(MAINTENANCE_SMOKE_OUTPUT))"
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.maintenance_smoke prepare $(MAINTENANCE_SMOKE_ROOT))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.maintenance_smoke prepare $(MAINTENANCE_SMOKE_ROOT))
 	@$(MAKE) --no-print-directory --silent -o ensure-up maintain-dry-run ENVIRONMENT=local \
 		MAINTAIN_ARGS="--zone bronze --source-id full_refresh_history_unpartitioned --format json --project-root $(MAINTENANCE_SMOKE_ROOT)" \
 		> "$(MAINTENANCE_SMOKE_OUTPUT)" || { cat "$(MAINTENANCE_SMOKE_OUTPUT)"; exit 1; }
 	@cat "$(MAINTENANCE_SMOKE_OUTPUT)"
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.maintenance_smoke verify $(MAINTENANCE_SMOKE_ROOT) $(MAINTENANCE_SMOKE_OUTPUT))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.maintenance_smoke verify $(MAINTENANCE_SMOKE_ROOT) $(MAINTENANCE_SMOKE_OUTPUT))
+
+.PHONY: test-cli-timing
+
+# Keep the real CLI response-time requirement independent of coverage overhead.
+test-cli-timing: ensure-up
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m pytest -ra --no-cov $(CLI_TIMING_TEST) --durations=5 --junitxml=$(CLI_TIMING_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CLI_TIMING_TEST_REPORT) --class-name tests.unit.toolchain.test_cli_surface --test-name test_the_verb_completes_within_the_budget --minimum-passed 5)
 
 # Reproduce CI locally, with fresh Spark processes for units, integration and the 2 GiB case.
 # Coverage appends and required JUnit gates combine all three reports. Keep in lockstep with CI.
 ci: ensure-up
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m ruff check src tests)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
-	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_UNIT_TEST_ARGS) --cov=janus --cov-report= --junitxml=$(CI_UNIT_TEST_REPORT))
-	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_INTEGRATION_TEST_ARGS) --cov=janus --cov-append --cov-report= --junitxml=$(CI_TEST_REPORT))
-	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_LARGE_TEST_ARGS) --cov=janus --cov-append --cov-report=term-missing --cov-report=xml:data/coverage.xml --junitxml=$(CI_LARGE_TEST_REPORT))
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m ruff check src tests)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m mypy)
+	@$(MAKE) --no-print-directory -o ensure-up test-spark-startup
+	@$(MAKE) --no-print-directory -o ensure-up test-cli-timing
+	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) $(JANUS_ENTRYPOINT) python -m pytest $(SPARK_COVERAGE_UNIT_TEST_ARGS) --cov=janus --cov-report= --durations=20 --junitxml=$(CI_UNIT_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) $(JANUS_ENTRYPOINT) python -m pytest $(SPARK_INTEGRATION_TEST_ARGS) --cov=janus --cov-append --cov-report= --durations=20 --junitxml=$(CI_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) $(JANUS_ENTRYPOINT) python -m pytest $(SPARK_LARGE_TEST_ARGS) --cov=janus --cov-append --cov-report=term-missing --cov-report=xml:data/coverage.xml --durations=20 --junitxml=$(CI_LARGE_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63)
 	@$(MAKE) --no-print-directory test-maintenance
 	@$(MAKE) --no-print-directory test-maintenance-smoke
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_SINK_CLASS) --minimum-passed 4)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_DECLARATION_CLASS) --minimum-passed 1)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(PREFLIGHT_REAL_CATALOG_CLASS) --minimum-passed 10)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(PRE_WRITE_GATE_CLASS) --minimum-passed 13)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(MALFORMED_ROWS_CLASS) --minimum-passed 9)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(EVOLUTION_MATRIX_CLASS) --minimum-passed 59)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(CONTRACTS_GOLDEN_CLASS) --minimum-passed 23)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(HANDOFF_GOLDEN_CLASS) --minimum-passed 8)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(HANDOFF_READ_PARTITIONS_CLASS) --minimum-passed 1)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(WRITE_PROPERTIES_CLASS) --minimum-passed 38)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(WRITE_PARTITIONING_CLASS) --minimum-passed 21)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(DEAD_LETTER_REPLAY_CLASS) --minimum-passed 7)
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main validate --environment $(ENVIRONMENT))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name tests.unit.observability.test_acceptance_evidence.TestReferenceContainerGoldens --minimum-passed 6)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_SINK_CLASS) --minimum-passed 4)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_UNIT_TEST_REPORT) --suite status_catalog)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --suite metrics)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_DECLARATION_CLASS) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(PREFLIGHT_REAL_CATALOG_CLASS) --minimum-passed 10)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(PRE_WRITE_GATE_CLASS) --minimum-passed 13)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(MALFORMED_ROWS_CLASS) --minimum-passed 9)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(EVOLUTION_MATRIX_CLASS) --minimum-passed 59)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(CONTRACTS_GOLDEN_CLASS) --minimum-passed 23)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(HANDOFF_GOLDEN_CLASS) --minimum-passed 8)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(HANDOFF_READ_PARTITIONS_CLASS) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(WRITE_PROPERTIES_CLASS) --minimum-passed 38)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(WRITE_PARTITIONING_CLASS) --minimum-passed 21)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(DEAD_LETTER_REPLAY_CLASS) --minimum-passed 7)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m janus.main validate --environment $(ENVIRONMENT))
 
 # Registry semantics and profile wiring, with no Spark session and no writes.
 validate: ensure-up
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main validate --environment $(ENVIRONMENT))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m janus.main validate --environment $(ENVIRONMENT))
 
 # GNU make's origin distinguishes an operator's choice from the local file default.
 require-environment:
@@ -365,13 +430,13 @@ require-environment:
 	exit 2
 
 maintain-dry-run: require-environment ensure-up
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main maintain --environment $(ENVIRONMENT) --dry-run $(MAINTAIN_ARGS))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m janus.main maintain --environment $(ENVIRONMENT) --dry-run $(MAINTAIN_ARGS))
 
 maintain-apply: require-environment ensure-up
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main maintain --environment $(ENVIRONMENT) --apply $(MAINTAIN_ARGS))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m janus.main maintain --environment $(ENVIRONMENT) --apply $(MAINTAIN_ARGS))
 
 run-local: ensure-up
-	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m janus.main --environment $(ENVIRONMENT) --with-spark)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m janus.main --environment $(ENVIRONMENT) --with-spark)
 
 # Engine-free registry load and planning, also run by the CI fast job.
 run-local-config:
@@ -439,18 +504,18 @@ logs-cluster: check-compose
 	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) logs --no-color postgres minio minio-init)
 
 shell-cluster: up-cluster
-	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) exec $(CLUSTER_SERVICE) sh)
+	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) exec $(CLUSTER_SERVICE) $(JANUS_ENTRYPOINT) sh)
 
 # Mirrors run-local, against the cluster profile. Extra CLI arguments go in RUN_ARGS, e.g.
 # `make run-cluster RUN_ARGS="--source-id <id> --execute"`.
 run-cluster: up-cluster
-	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) exec -T $(CLUSTER_SERVICE) python -m janus.main --environment $(CLUSTER_PROFILE) --with-spark $(RUN_ARGS))
+	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) exec -T $(CLUSTER_SERVICE) $(JANUS_ENTRYPOINT) python -m janus.main --environment $(CLUSTER_PROFILE) --with-spark $(RUN_ARGS))
 
 # The atomicity and engine-neutrality suites, re-run against the Postgres catalog and the
 # object-store warehouse instead of the local SQLite one (AC-5 on the stack a deployment
 # would actually use).
 test-cluster: up-cluster
-	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) exec -T -e JANUS_CLUSTER_SUITE=1 $(CLUSTER_SERVICE) python -m pytest -ra tests/integration/catalog_commits)
+	$(call RUN_COMPOSE,--profile $(CLUSTER_PROFILE) exec -T -e JANUS_CLUSTER_SUITE=1 $(CLUSTER_SERVICE) $(JANUS_ENTRYPOINT) python -m pytest -ra tests/integration/catalog_commits)
 
 up-cluster-rest: check-compose seed-ivy seed-cluster-jars cluster-secrets
 	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) up -d || { printf '\n=== the stack did not come up; the catalog service log follows ===\n' >&2; $$compose_cmd $$compose_files --profile $(CLUSTER_REST_PROFILE) logs --no-color nessie >&2; $$compose_cmd $$compose_files --profile $(CLUSTER_REST_PROFILE) ps -a >&2; exit 1; })
@@ -465,13 +530,13 @@ logs-cluster-rest: check-compose
 	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) logs --no-color nessie postgres minio minio-init)
 
 shell-cluster-rest: up-cluster-rest
-	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) exec $(CLUSTER_REST_SERVICE) sh)
+	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) exec $(CLUSTER_REST_SERVICE) $(JANUS_ENTRYPOINT) sh)
 
 run-cluster-rest: up-cluster-rest
-	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) exec -T $(CLUSTER_REST_SERVICE) python -m janus.main --environment $(CLUSTER_PROFILE) --with-spark $(RUN_ARGS))
+	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) exec -T $(CLUSTER_REST_SERVICE) $(JANUS_ENTRYPOINT) python -m janus.main --environment $(CLUSTER_PROFILE) --with-spark $(RUN_ARGS))
 
 test-cluster-rest: up-cluster-rest
-	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) exec -T -e JANUS_CLUSTER_REST_SUITE=1 $(CLUSTER_REST_SERVICE) python -m pytest -ra tests/integration/catalog_commits)
+	$(call RUN_COMPOSE,--profile $(CLUSTER_REST_PROFILE) exec -T -e JANUS_CLUSTER_REST_SUITE=1 $(CLUSTER_REST_SERVICE) $(JANUS_ENTRYPOINT) python -m pytest -ra tests/integration/catalog_commits)
 
 docker-build: bootstrap
 

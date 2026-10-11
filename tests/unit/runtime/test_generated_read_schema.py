@@ -284,7 +284,7 @@ def _source_config(tmp_path: Path) -> SourceConfig:
         "spark": {
             "input_format": "json",
             "write_mode": "overwrite",
-            "repartition": 1,
+            "write": {"partitions": 1},
             "partition_by": [],
             "read_options": {"multiLine": "true"},
         },

@@ -39,3 +39,11 @@ storage:
   raw_dir: ${JANUS_RAW_DIR:-data/raw}
   bronze_dir: ${JANUS_BRONZE_DIR:-data/bronze}
   metadata_dir: ${JANUS_METADATA_DIR:-data/metadata}
+
+observability:
+  metrics:
+    transport: ${JANUS_METRICS_TRANSPORT:-disabled}
+    path: ${JANUS_METRICS_DIR:-metrics}
+    host: ${JANUS_METRICS_STATSD_HOST:-}
+    port: ${JANUS_METRICS_STATSD_PORT:-}
+    prefix: ${JANUS_METRICS_PREFIX:-janus}

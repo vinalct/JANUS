@@ -1,0 +1,28 @@
+{
+  "advanced": true,
+  "candidate_value": "2026-07-02",
+  "checkpoint_field": "updated_at",
+  "checkpoint_strategy": "max_value",
+  "decision": "advanced",
+  "metadata": {
+    "attempt_count": "1",
+    "auth_type": "none",
+    "checkpoint_loaded": "false",
+    "dead_letter_count": "0",
+    "dead_letter_skipped_count": "0",
+    "pagination_concurrency": "1",
+    "pagination_type": "page_number",
+    "raw_path_prefix": "runs/ingestion_date=2026-07-04/run_id=order15-api_success",
+    "records_extracted": "2",
+    "request_count": "1",
+    "request_input_count": "1",
+    "request_input_type": "none",
+    "retry_count": "0"
+  },
+  "recorded_at": "2026-07-04T12:00:05+00:00",
+  "run_id": "order15-api_success",
+  "source_id": "baseline_api",
+  "stored_value": "2026-07-02",
+  "strategy_family": "api",
+  "strategy_variant": "page_number_api"
+}

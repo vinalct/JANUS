@@ -1,11 +1,12 @@
 # Queryable observability operations
 
-JANUS exposes run observability through two additive, best-effort surfaces:
+JANUS exposes run observability through three additive, best-effort surfaces:
 
 - an attempted terminal-row append per run in the Iceberg runs table;
 - OpenLineage lifecycle events through a file, HTTP, or disabled transport.
+- metrics through a disabled, NDJSON file, Prometheus textfile, or StatsD transport.
 
-The per-run JSON artifacts remain authoritative. The table and events are indexes over that
+The per-run JSON artifacts remain authoritative. The table, events and metrics are indexes over that
 evidence, not replacements for it. **A missing runs-table row is not evidence that a run did not
 happen.** Emission failures are logged and dropped so observability cannot change a run's status,
 artifacts, or exit code.
@@ -119,13 +120,22 @@ check counts are counts of rows or checks, not bytes.
 | `contract_preflight_outcome` | string, nullable | What the session-free preflight found before extraction: `ok`, `will_evolve`, `refused`, `table_missing`, `catalog_unavailable`; `NULL` for runs before. |
 | `schema_evolution` | string, nullable | What the writer changed on the bronze table for this run: `none`, `added:<cols>`, `promoted:<col>(<from>-><to>)`, `added:…;promoted:…`, `breaking_replace`; `NULL` when no bronze output was written. |
 | `malformed_rows` | long, nullable | Rows Spark could not parse into the contract's types across the run's batches (JSON/CSV handoffs); `0` when counted and clean; `NULL` when not counted (Parquet, or no validation). |
+| `duration_budget_seconds` | int, nullable | Duration window declared in `operations.max_duration_seconds` at the time of this run; `NULL` when undeclared. |
+| `duration_budget_outcome` | string, nullable | `within`, `exceeded`, or `undeclared`; a breach records evidence and never changes the run's status. `NULL` in older rows. |
+| `freshness_max_age_seconds` | int, nullable | Window declared in `operations.freshness.max_age` at the time of this run, carried so SQL can evaluate staleness without the source registry; `NULL` when undeclared. |
+| `request_count` | long, nullable | Successful HTTP requests reported during extraction, aggregated in the source-volume query; `NULL` for the file family, so `SUM` and `AVG` skip those rows rather than count them as zero. |
+| `retry_count` | long, nullable | HTTP retries during extraction, used to investigate transport instability; `NULL` for the file family, so `SUM` and `AVG` skip those rows rather than count them as zero. |
+| `attempt_count` | long, nullable | Extraction attempts reported by the HTTP strategy, used to compare retry pressure over time; `NULL` for the file family, so `SUM` and `AVG` skip those rows rather than count them as zero. |
+| `dead_letter_count` | long, nullable | Dead letters reported during extraction, including by the file family; `NULL` only when the strategy did not report a count. Used to investigate skipped work. |
 
-Adding a nullable column is the only routine schema evolution and requires a
-`record_schema_version` bump. Version 2 appends `schema_version`, `contract_id`, and
+Adding a nullable column is the only routine schema evolution and follows the declared
+`record_schema_version` and stable field IDs. Version 2 appends `schema_version`, `contract_id`, and
 `contract_version` with stable field IDs 44–46. Existing v1 rows read `NULL` for those fields.
 Version 3 appends the contract enforcement columns `contract_preflight_outcome`,
 `schema_evolution`, and `malformed_rows` with stable field IDs 47–49; v1 and v2 rows read `NULL`
-for them, and a v1 table gains all six in one transaction. The
+for them, and a v1 table gains all six in one transaction. Order-23 adds the three operations
+fields with stable IDs 50–52 and the four HTTP counters with IDs 53–56, retaining row-contract
+version 3; older rows read `NULL` for all seven. The
 sink applies all missing declared nullable columns in one Iceberg schema transaction, reloads the
 table, and verifies the declared schema before appending. A type change, rename, dropped or extra
 field, required addition, or field-ID mismatch is still refused. Removing a column or changing its
@@ -138,12 +148,56 @@ all de-duplicate on `run_id` before answering the question:
 
 - [failed runs in a window](queries/observability/failed-runs-in-window.sql) — the first AC-2 query;
 - [quality breaches by source](queries/observability/quality-breaches-by-source.sql) — the second AC-2 query;
-- [runs by source over time with volume](queries/observability/runs-by-source-over-time.sql);
+- [runs by source over time with volume and HTTP counters](queries/observability/runs-by-source-over-time.sql);
 - [checkpoint decisions by source](queries/observability/checkpoint-decisions-by-source.sql);
 - [config and contract version drift](queries/observability/config-version-drift.sql);
 - [failed sources in one pipeline run](queries/observability/pipeline-failures.sql);
 - [schema drift by source](queries/observability/schema-drift-by-source.sql) — what each run's
-  contract decided: preflight outcome, schema evolution, malformed rows, and enforcement errors.
+  contract decided: preflight outcome, schema evolution, malformed rows, and enforcement errors;
+- [source freshness and duration-budget breaches](queries/observability/stale-sources.sql) — the
+  latest successful completion, declared windows, exceeded-run count, age, and freshness outcome.
+
+The source-volume query sums `request_count`, `retry_count`, `attempt_count`, and
+`dead_letter_count` after de-duplication. File-family runs carry `NULL` for the three HTTP
+counters and can report a real dead-letter count. `SUM` and `AVG` skip `NULL` values;
+a group containing only unreported values remains `NULL`.
+
+The freshness query reports one row per `source_id` and `environment`. It takes the greatest
+`ended_at` among successful runs, so a later failed run cannot make a source fresh. Its outcome
+precedence matches `janus status`: no declared window is `undeclared`, then no success is
+`never_ran`, then an age **greater than** the window is `stale`, otherwise `fresh`. An age
+exactly equal to the window is fresh; fractional seconds and negative ages are preserved.
+Filter `outcome IN ('stale', 'never_ran')` when consuming the result as a breach list.
+
+Bind all four named parameters when executing the checked-in SQL through Spark:
+
+```python
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+sql = Path("docs/queries/observability/stale-sources.sql").read_text(encoding="utf-8")
+spark.sql(sql, args={
+    "window_start_day": date(2026, 9, 1),
+    "window_start": datetime(2026, 9, 1, tzinfo=UTC),
+    "window_end": datetime(2026, 10, 1, tzinfo=UTC),
+    "evaluated_at": datetime(2026, 9, 18, 12, tzinfo=UTC),
+}).show()
+```
+
+This query's half-open window applies to **`emitted_at`**, since it asks about available
+terminal evidence rather than runs started in a month. Set `window_start_day` to the UTC date
+of `window_start`. The timestamp predicates prune the hidden `emitted_at_day` partitions;
+that partition field is not a selectable runs-table column. Choose a window covering the
+history being compared: if a source's last success predates the window but a failed run is
+inside it, SQL reports `never_ran`, while `janus status` scanning the whole metadata directory
+finds the older success and evaluates its age. `status --from-runs-table` also reads without
+this query window.
+
+The query uses the greatest declared freshness and duration windows recorded in the selected
+history. Both status readers use the source config's current freshness declaration. To compare
+the three answers, use matching declarations, the same environment, and the same available
+history. SQL can report only sources with rows in the window; `janus status` also lists registry
+sources with empty history. Missing best-effort table rows cannot prove that a run never happened.
 
 The drift query emits the first observed run for each source and every later change in either
 `config_version` or `schema_version`. Compare `contract_id` and `contract_version` to tell a
@@ -209,6 +263,212 @@ source-code/config version, job type, error message, and output row counts. A co
 the custom facet for JANUS-specific operational detail and the standard datasets/facets for
 cross-platform lineage.
 
+## Metrics
+
+Metrics use the same run projection as the runs table. Terminal delivery follows OpenLineage,
+then the runs-table append, then metrics, within one five-second budget. START emits no metrics.
+A metrics failure is recorded under `run_event_emission.metrics` in the returned summary and
+does not change the aggregate emission outcome, the run's status, its exit code, or its JSON.
+Batch metrics come from the finished `PipelineOutcome`; see [Pipeline metrics](orchestration.md#pipeline-metrics).
+
+Every shipped profile, including overlays, declares metrics **disabled** by default. An absent
+block also means disabled. An unknown `observability.metrics.transport` is a profile error
+(exit `2`), naming `disabled`, `file`, `textfile`, and `statsd`; inside an already-running
+observer it logs one warning and degrades to disabled. There is no new runtime dependency,
+HTTP endpoint, daemon, alert delivery, or dashboard.
+
+Select a transport through environment variables, without editing tracked YAML:
+
+```sh
+export JANUS_METRICS_TRANSPORT=textfile
+export JANUS_METRICS_DIR=metrics/textfile
+```
+
+`JANUS_METRICS_DIR` is relative to the profile's metadata root (`metadata_dir`), rather than
+each source's `outputs.metadata.path`. Absolute paths and paths escaping that root are refused
+by the metadata zone's containment rule. The shipped profiles default this variable to
+`metrics`; set it explicitly as above for the collector directory used below.
+
+| Transport | Output and intended use |
+|---|---|
+| `disabled` | A real no-op transport; no metrics files or sockets. The shipped default. |
+| `file` | One NDJSON batch per terminal run or finished pipeline, appended to a UTC day file. Mainly a hermetic test and inspection target. |
+| `textfile` | Atomic Prometheus exposition files, with the latest run per source and latest pipeline per environment/trigger. For the node exporter textfile collector. |
+| `statsd` | Tagged StatsD UDP, without retries. For a receiver that supports DogStatsD-style tags. |
+
+### Catalogue and labels
+
+The [catalogue](../src/janus/observability/metrics/catalogue.py) declares each metric's type,
+help, projection and labels once. Missing numeric values are omitted, never converted to
+measured zero. Counters are **per-run totals**, reset on each invocation; textfiles retain the
+latest value rather than a cumulative process registry. Do not assume that `rate()` of these
+textfile counters measures all intervening runs. Use NDJSON history or the runs table for
+complete counts.
+
+| Metric | Type | Projection |
+|---|---|---|
+| `janus_run_duration_seconds` | gauge | `RunRecord.duration_seconds` |
+| `janus_run_total` | counter | One terminal record, labelled by its status |
+| `janus_records_extracted` | gauge | `RunRecord.records_extracted` |
+| `janus_records_written` | gauge | `RunRecord.records_written` |
+| `janus_http_requests_total` | counter | `RunRecord.request_count` (successful requests) |
+| `janus_http_retries_total` | counter | `RunRecord.retry_count` |
+| `janus_dead_letters_total` | counter | `RunRecord.dead_letter_count` |
+| `janus_quality_checks_failed` | gauge | `RunRecord.quality_checks_failed` |
+| `janus_duration_budget_exceeded_total` | counter | `duration_budget_outcome`: exceeded `1`, within `0`, undeclared omitted |
+| `janus_last_run_timestamp_seconds` | gauge | `RunRecord.ended_at`, Unix seconds |
+| `janus_last_success_timestamp_seconds` | gauge | `ended_at` for a succeeded run; textfiles preserve it after failure |
+| `janus_emission_failures_total` | counter | Failed OpenLineage and runs-table destinations; excludes its own metrics send |
+| `janus_pipeline_duration_seconds` | gauge | `PipelineOutcome.totals().duration_seconds` |
+| `janus_pipeline_sources_total` | gauge | Finished batch counts with `status="succeeded"`, `"failed"`, or `"skipped"`, including zero |
+
+The six allowed labels are `source_id`, `strategy_family`, `strategy_variant`, `environment`,
+`status`, and `trigger`. Run samples use those labels when present. Pipeline duration uses
+`environment` and `trigger`; source counts also use `status` (rather than a seventh `outcome`
+label). Registry identities and controlled outcomes keep the series count bounded. `run_id`,
+pipeline IDs, URLs, failure messages and other unbounded values must never become labels.
+The two-way drift test accounts for every numeric record/summary field, including deliberate
+omissions such as attempt counts and declared thresholds.
+
+### Prometheus textfile collector
+
+With the exports above and the shipped local metadata root, start the node exporter with:
+
+```sh
+node_exporter --collector.textfile.directory=/path/to/janus/data/metadata/metrics/textfile
+```
+
+Use the same host directory as JANUS's container mount. JANUS needs write/search permissions
+on the directory; the exporter needs read/search permissions on it and every parent and read
+permission on the `.prom` files. Staged files are mode `0644` and replaced with `os.replace`, so
+the collector sees a complete old or new exposition. Run files are `<sanitized_source_id>.prom`;
+pipeline files are `pipeline-<environment>-<trigger>.prom` after identifier sanitization.
+
+Each failed run reads the previous exposition, preserves its last-success timestamp, and
+rewrites the other gauges. It retains the original success labels, including `status="succeeded"`,
+so the freshness series keeps its identity across failures. A first-ever failure has no success
+gauge. Invalid previous exposition is discarded with `metrics_textfile_existing_discarded`;
+an I/O error fails that delivery and leaves the previous file in place. Simultaneous writers
+are not serialized: atomic replacement guarantees complete files, not newest-run ordering.
+
+The intended alert relationship is:
+
+```promql
+time() - janus_last_success_timestamp_seconds > janus_freshness_max_age_seconds
+```
+
+**`janus_freshness_max_age_seconds` is not emitted by JANUS.** The freshness window is a
+runs-table column and a source declaration, deliberately unmapped in the catalogue. Supply
+the threshold in an operator-managed rule, for example a literal for a source declared `24h`:
+
+```promql
+time() - janus_last_success_timestamp_seconds{source_id="transparencia__orgaos__siafi__full_refresh"} > 86400
+```
+
+If an operator supplies a threshold series instead, its labels must match the success series
+or the rule must specify vector matching. The exporter and Prometheus own collection and
+alerting. Use `janus status` for `never_ran`: an absent success series does not satisfy the
+comparison above.
+
+### StatsD receiver
+
+```sh
+export JANUS_METRICS_TRANSPORT=statsd
+export JANUS_METRICS_STATSD_HOST=127.0.0.1
+export JANUS_METRICS_STATSD_PORT=8125
+export JANUS_METRICS_PREFIX=janus
+```
+
+The host is required; the default port is `8125` and prefix is `janus`. Hostnames are resolved
+once when building the sink. Lines have the form
+`<prefix>.<name_without_janus_>:<value>|g|#key:value,key:value` for gauges, and `|c|` for counters:
+
+```text
+janus.run_duration_seconds:12.5|g|#environment:local,source_id:transparencia__orgaos__siafi__full_refresh,status:succeeded
+```
+
+Tags are sorted; commas, pipes, colons, newlines and carriage returns in values become `_`.
+One batch normally fits one datagram; larger batches split at whole-line boundaries within
+the 1,432-byte ceiling. A single oversized line fails the delivery. Each send has a timeout
+of at most `0.5s`, within the remaining shared budget, and there is no retry or backoff.
+**UDP is fire-and-forget:** a successful send to a black hole reports success. It proves
+only that the local socket accepted the bytes, not that a receiver ingested them. Detected
+failures produce one redacted warning without host/secret-bearing exception messages.
+
+### NDJSON file target
+
+```sh
+export JANUS_METRICS_TRANSPORT=file
+export JANUS_METRICS_DIR=metrics
+```
+
+Files are `<metadata_dir>/metrics/metrics-YYYY-MM-DD.ndjson`, using the record's UTC
+`emitted_at` (pipeline completion time for a batch). Each line is one `O_APPEND` single write
+and validates against the [pinned NDJSON schema](../tests/fixtures/observability/metrics_ndjson.schema.json).
+A shortened example batch has this shape:
+
+```json
+{"emitted_at":"2026-10-10T12:00:00+00:00","scope":"run","labels":{"source_id":"transparencia__orgaos__siafi__full_refresh","environment":"local","status":"succeeded"},"samples":[{"name":"janus_run_duration_seconds","type":"gauge","value":12.5},{"name":"janus_run_total","type":"counter","value":1}]}
+```
+
+Run labels are shared at batch level. Pipeline batches have `scope="pipeline"`, shared
+environment/trigger labels, and a per-sample `labels.status` for the three source counts.
+Partial writes report failure; no transport rotates, removes, or retries a metrics file.
+
+## Source freshness with `janus status`
+
+```sh
+janus status --environment local
+janus status --environment local --source-id transparencia__orgaos__siafi__full_refresh --format json
+janus status --environment local --from-runs-table
+```
+
+This command loads the registry, including disabled sources, and evaluates each source's
+**current** `operations.freshness.max_age`. It starts no Spark session, plans no run, and
+does not evaluate duration budgets. By default it reads `runs/*.json` in each source's own
+`outputs.metadata.path`, resolved from the registry; there is no shared `runs/` root. It
+selects the greatest successful `ended_at` across the whole directory, not file mtime.
+Malformed files are counted as `unreadable_run_files` and scanning continues. A `never_ran`
+answer with unreadable files can mean that successful history could not be read.
+If sources share a metadata path, the command notes that fact and scans all files there for
+each source; it does not filter embedded source IDs. Give sources separate metadata paths
+when their histories must remain independent.
+
+| Flag | Meaning |
+|---|---|
+| `--environment`, `--project-root` | Shared profile and registry location selectors |
+| `--source-id` | Select one source; repeat for several, including disabled sources |
+| `--from-runs-table` | Read latest successful evidence from the profile-selected catalog through PyIceberg, without Spark; useful for deployed profiles and long histories |
+| `--format text\|json` | Table by default, or structured ages, thresholds, outcomes and reader diagnostics |
+| `--now` | Timezone-aware ISO-8601 evaluation instant, normalized to UTC; defaults to current UTC time |
+
+| Outcome | Meaning | Breach |
+|---|---|---|
+| `undeclared` | No freshness window in the current source config | No |
+| `never_ran` | A window is declared but no successful completion is available | Yes |
+| `stale` | Age is strictly greater than the declared window | Yes |
+| `fresh` | Age is at most the window, including equality | No |
+
+Exit `0` means no selected source breaches; `1` names at least one stale/never-ran source;
+`2` means invalid arguments/configuration or a reader failure. The text and JSON views carry
+the same result. Ages retain fractional seconds and may be negative under clock skew.
+The metadata reader is authoritative local evidence; the table reader is best-effort evidence
+and can lack rows. Both status readers use current config, unlike the query's recorded
+windows; see [Published Spark SQL](#published-spark-sql) for history-window differences.
+The table reader filters successful rows by source ID, without an environment predicate
+or the query's latest-row de-duplication. `--environment` selects the profile/catalog, not
+a row filter. Use isolated profile histories, or account for shared environments and
+conflicting re-emissions when comparing its result with SQL.
+
+An hourly cron invocation can hand any nonzero outcome to the operator's alert script:
+
+```cron
+0 * * * * cd /path/to/janus && janus status --environment local >>/var/log/janus-status.log 2>&1 || /path/to/notify-janus-status
+```
+
+The notification script is operator-owned. Distinguish exit `1` (freshness breach) from
+exit `2` (the check could not be evaluated) when routing alerts.
+
 ## Retention
 
 The table is retained only by an explicit `janus maintain` (the `runs-table` zone, selected by
@@ -249,9 +509,10 @@ FROM janus.metadata.runs.partitions;
 ## Batch and replay behavior
 
 A `run-all` batch attempts one terminal table row and lifecycle events per attempted source. A
-skipped descendant never reaches `RunObserver`, so it emits neither a row nor an OpenLineage event.
+skipped descendant never reaches `RunObserver`, so it emits no row, OpenLineage event, or run metric.
 Use the order-14 pipeline summary for skipped descendants; a smaller runs-table row count than the
 planned batch is not by itself data loss.
+Skips are counted only in the finished pipeline's `janus_pipeline_sources_total{status="skipped"}`.
 
 A raw-to-bronze replay is its own run and emits its own terminal row and events, distinct from the
 original extraction. A retry or explicit re-emission that reuses a `run_id` creates duplicate
@@ -260,7 +521,7 @@ physical rows; the latest-row pattern makes the published answers logical-run sa
 ## Troubleshooting
 
 Start with the structured `run_event_emission_finished` event. Its `outcome`, `reason`, `stage`,
-`exception_type`, `table_identifier`, and nested `openlineage` result describe what happened. A
+`exception_type`, `table_identifier`, and nested `openlineage` and `metrics` results describe what happened. A
 terminal `outcome=failed` or `skipped` does not change the ingestion outcome.
 
 | Symptom | Actual signal and action |

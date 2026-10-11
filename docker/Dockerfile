@@ -17,7 +17,12 @@ RUN apt-get update \
     && groupadd --gid 1000 janus \
     && useradd --uid 1000 --gid 1000 --home-dir /tmp --shell /usr/sbin/nologin janus
 
-COPY requirements.txt pyproject.toml README.md ./
+# Source changes should reuse the expensive PySpark and runtime dependency layer.
+COPY requirements.txt ./
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -r requirements.txt
+
+COPY pyproject.toml README.md ./
 COPY src ./src
 COPY conf ./conf
 COPY .github ./.github
@@ -26,9 +31,7 @@ COPY examples ./examples
 COPY tests ./tests
 COPY --chown=1000:1000 data ./data
 
-RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements.txt \
-    && python -m pip install --no-deps .
+RUN python -m pip install --no-deps .
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
