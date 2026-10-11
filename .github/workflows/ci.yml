@@ -253,6 +253,12 @@ jobs:
             exit 1
           fi
           docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.catalog_commits.test_contract_preflight_real_catalog --minimum-passed 10
+      - name: Assert metrics schema evolution and three-way freshness parity executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate \
+              data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml \
+              --suite metrics
       - name: Assert the contract enforcement suites executed
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus python -m tests.support.required_test_gate data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml --class-name tests.integration.contracts.test_pre_write_gate --minimum-passed 13

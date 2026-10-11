@@ -64,7 +64,7 @@ class BatchPlanRequest:
 
     @classmethod
     # The factory preserves the public batch identity, selection and budget-policy inputs.
-    def create( 
+    def create(
         cls,
         *,
         environment: str,

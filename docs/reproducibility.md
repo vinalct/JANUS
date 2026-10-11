@@ -450,9 +450,12 @@ extraction: copied between machines, restored from a backup, or edited by hand.
 
 Be explicit about the current project state.
 
-`janus` is one command with eight verbs. `src/janus/main.py` only delegates to the verb table in
+`janus` is one command with nine verbs. `src/janus/main.py` only delegates to the verb table in
 `src/janus/cli/dispatch.py`, and a command line that starts with an option is the `run` verb, so
 every form in this guide works as it did before the other verbs existed.
+
+The ninth verb, [`janus status`](queryable-observability.md#source-freshness-with-janus-status),
+checks declared source freshness without starting Spark.
 
 `janus run` is a reproducible runtime entry point for:
 
@@ -487,7 +490,7 @@ python -m janus.main \
   --bronze-table bronze_inep.censo_escolar_microdados
 ```
 
-The other seven verbs:
+The other eight verbs:
 
 | Verb | What it is for | Runs a source? |
 |---|---|---|
@@ -498,6 +501,7 @@ The other seven verbs:
 | `janus dead-letters` | inspecting, releasing or replaying the items a run gave up on | only `replay --execute` |
 | `janus checkpoint` | showing, setting or clearing where a source's next run starts | no |
 | `janus maintain` | planning, and with `--apply` applying, the profile's declared retention ([retention and maintenance](maintenance.md)) | no |
+| `janus status` | checking the latest successful run against each source's declared freshness window ([freshness status](queryable-observability.md#source-freshness-with-janus-status)) | no |
 
 Cross-source scheduling is `janus run-all`: it runs one batch in dependency order and
 exits. Inspecting and correcting what a run leaves behind is the operator verbs below.

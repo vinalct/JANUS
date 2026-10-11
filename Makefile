@@ -22,6 +22,7 @@ IVY_JAR_DEST_DIR := data/metadata/ivy/jars
 DAGSTER_VERSION := 1.13.22
 DAGSTER_TEST_REPORT := data/metadata/test-reports/dagster.xml
 FAST_TEST_REPORT := data/metadata/test-reports/fast.xml
+METRICS_TEST_REPORT := data/metadata/test-reports/metrics.xml
 CI_TEST_REPORT := data/metadata/test-reports/ci.xml
 CI_UNIT_TEST_REPORT := data/metadata/test-reports/ci-unit.xml
 CI_LARGE_TEST_REPORT := data/metadata/test-reports/ci-large.xml
@@ -69,6 +70,24 @@ FAST_REQUIRED_CLASSES := \
 	tests.unit.observability.test_pyiceberg_append_sink \
 	tests.unit.observability.test_run_record_projection \
 	tests.unit.observability.test_runs_table_contract
+METRICS_REQUIRED_CLASSES := \
+	tests.unit.models.test_operations_block \
+	tests.unit.lineage.test_observer_budget_persistence \
+	tests.unit.cli.test_status \
+	tests.unit.orchestration.test_budget_breach_policy \
+	tests.unit.observability.test_freshness \
+	tests.unit.observability.test_metrics_budget_acceptance \
+	tests.unit.observability.metrics.test_settings \
+	tests.unit.observability.metrics.test_catalogue_drift \
+	tests.unit.observability.metrics.test_transports \
+	tests.unit.observability.metrics.test_exposition \
+	tests.unit.observability.metrics.test_sink \
+	tests.unit.observability.metrics.test_pipeline_metrics
+METRICS_TEST_ARGS := $(foreach class_name,$(METRICS_REQUIRED_CLASSES),$(subst .,/,$(class_name)).py) \
+	tests/unit/observability/test_architecture_guardrails.py \
+	tests/unit/observability/test_example_queries_and_docs.py \
+	tests/unit/toolchain/test_cli_surface.py \
+	tests/unit/toolchain/test_required_test_gate.py
 COMPACTION_REQUIRED_CLASSES := \
 	tests.unit.strategies.api.test_handoff_compaction \
 	tests.unit.strategies.api.test_handoff_layout \
@@ -156,7 +175,7 @@ define RUN_COMPOSE
 	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
 endef
 
-.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-handoff test-write-sizing test-contract-schema test-adapter test-maintenance test-maintenance-smoke ci require-environment maintain-dry-run maintain-apply validate run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
+.PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-metrics test-handoff test-write-sizing test-contract-schema test-adapter test-maintenance test-maintenance-smoke ci require-environment maintain-dry-run maintain-apply validate run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
 
 # Guard every setup prerequisite too, so even `make -j` refuses before touching containers.
 ifneq ($(filter maintain-dry-run maintain-apply,$(MAKECMDGOALS)),)
@@ -282,7 +301,7 @@ test-write-sizing:
 test-fast:
 	@mkdir -p "$(dir $(FAST_TEST_REPORT))"
 	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --junitxml="$(FAST_TEST_REPORT)"
-	@for class_name in $(FAST_REQUIRED_CLASSES) $(COMPACTION_REQUIRED_CLASSES); do \
+	@for class_name in $(FAST_REQUIRED_CLASSES) $(COMPACTION_REQUIRED_CLASSES) $(METRICS_REQUIRED_CLASSES); do \
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
@@ -295,6 +314,15 @@ test-fast:
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
 	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63
+
+# Focused, session-free metrics/budget/freshness gate; Spark parity is required by ci.
+test-metrics:
+	@mkdir -p "$(dir $(METRICS_TEST_REPORT))"
+	$(PYTHON) -m pytest -ra $(METRICS_TEST_ARGS) --junitxml="$(METRICS_TEST_REPORT)"
+	@for class_name in $(METRICS_REQUIRED_CLASSES); do \
+		$(PYTHON) -m tests.support.required_test_gate "$(METRICS_TEST_REPORT)" \
+			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
+	done
 
 test-contract-schema:
 	$(PYTHON) -m pytest -q $(CONTRACT_SCHEMA_TESTS)
@@ -336,6 +364,7 @@ ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name tests.unit.observability.test_acceptance_evidence.TestReferenceContainerGoldens --minimum-passed 6)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_SINK_CLASS) --minimum-passed 4)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --suite metrics)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_DECLARATION_CLASS) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(PREFLIGHT_REAL_CATALOG_CLASS) --minimum-passed 10)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(PRE_WRITE_GATE_CLASS) --minimum-passed 13)

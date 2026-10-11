@@ -226,7 +226,7 @@ and no second runs-table row or lineage event is emitted. Runs with `within` or
 failure phase. Single-source `janus run` rejects `--fail-on-budget-breach` by name.
 
 Failure phases include `planning`, `execution`, `cleanup`, `result_translation`, and
-`budget`; the last identifies a scheduling-policy failure after a successful run.
+`budget`; a budget phase means the data is fine and the schedule's assumption is not.
 The policy travels on `BatchPlanRequest.fail_on_budget_breach` (default `False`).
 Dagster uses that same request through the shared attempt seam; an injected
 `DagsterAdapterServices.batch_planner` can supply requests with the policy enabled.
@@ -234,6 +234,24 @@ Dagster uses that same request through the shared attempt seam; an injected
 The runner cannot roll back a successful upstream write when a downstream source later
 fails. A partial pipeline is a real outcome: A's new bronze is committed, B never ran, and
 the summary says so.
+
+### Pipeline metrics
+
+After persisting the finished pipeline summary, the batch projects `PipelineOutcome` through
+the profile-selected metrics sink. The adapter uses the same seam, and collecting an already
+finished result emits nothing again. Delivery has the same five-second, non-raising guard as
+run metrics; failures remain logs and cannot change the summary or batch exit code.
+
+`janus_pipeline_duration_seconds` is the finished batch duration. The gauge
+`janus_pipeline_sources_total{status="succeeded|failed|skipped"}` emits three separate samples,
+including measured zeros. Both metrics carry `environment` and `trigger`; the counts also
+carry `status`, staying inside the six-label allow-list. With `--fail-on-budget-breach`, the
+pipeline counts the converted attempt as failed while its run metrics still describe a
+succeeded run. The two views answer different questions.
+
+A skipped node has no run record and emits no per-run metric, table row, or OpenLineage event.
+Skips are counted at pipeline level only. Metrics ship disabled; collector setup and the full
+catalogue are in the [observability guide](queryable-observability.md#metrics).
 
 ## Resume, retries, and backfills
 

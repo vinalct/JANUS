@@ -195,9 +195,12 @@ variant — lives in [examples/orchestration/](examples/orchestration/README.md)
 
 Completed runs are projected into the append-only Iceberg table `metadata.runs`, in the same
 catalog as bronze, and each observer lifecycle emits OpenLineage `START`, `COMPLETE`, or `FAIL`.
-Both destinations are additive to the per-run JSON and best-effort: JSON remains authoritative,
+Those destinations and optional terminal-run/pipeline metrics are additive and best-effort: JSON remains authoritative,
 and an emission problem is logged without changing run status or exit code. Consequently, a
 missing table row is not proof that a run did not happen.
+
+Metrics ship **disabled in every profile**. Opt in with `JANUS_METRICS_TRANSPORT=file`,
+`textfile`, or `statsd` and the corresponding runtime settings, without editing tracked YAML.
 
 Table columns, the tested failed-run and quality-breach queries, OpenLineage transports,
 retention limits, retry semantics, and troubleshooting are in the
@@ -219,6 +222,16 @@ verb's options.
 | `janus dead-letters list\|release\|replay` | Shows the items a run gave up on, releases them with a recorded reason, or releases them and resumes. | [Troubleshooting](docs/orchestration.md#a-source-failed-and-its-dependents-were-skipped) |
 | `janus checkpoint show\|set\|clear` | Shows where a source's next run starts, or moves or clears that point with a recorded reason. | [Troubleshooting](docs/orchestration.md#a-run-started-from-the-wrong-position) |
 | `janus maintain` | Plans the profile's declared retention for bronze snapshots, metadata history, OpenLineage files and the runs table, and applies it only with `--apply`, recording every deletion. | [Retention and maintenance](docs/maintenance.md) |
+| `janus status` | Checks age since each source's latest successful run against its declared freshness window, without Spark; exits `1` on a breach. | [Freshness status](docs/queryable-observability.md#source-freshness-with-janus-status) |
+
+For cron, route a nonzero freshness check to an operator-owned notification command:
+
+```cron
+0 * * * * cd /path/to/janus && janus status --environment local >>/var/log/janus-status.log 2>&1 || /path/to/notify-janus-status
+```
+
+Exit `1` means stale/never-ran; exit `2` means the check could not be evaluated. `status`
+also supports `--source-id`, `--format json`, and session-free PyIceberg `--from-runs-table`.
 
 `validate`, `list`, `dead-letters list`/`release` and `checkpoint` start no Spark session and
 send no request. They plan disabled sources too, so they work on the checked-in registry, where
@@ -235,7 +248,7 @@ reason, and what it replaced: the released entries, or the previous checkpoint v
 - [Data contracts](docs/data-contracts.md): the ODCS contract format, enforcement modes, the evolution matrix, and the breaking-change workflow.
 - [Batch orchestration guide](docs/orchestration.md): `run-all`, the source DAG, pipeline summaries, and the Dagster adapter.
 - [Orchestration example](examples/orchestration/README.md): a runnable dependency graph and an operations runbook.
-- [Queryable observability guide](docs/queryable-observability.md): `metadata.runs`, tested SQL, OpenLineage, and operational limits.
+- [Queryable observability guide](docs/queryable-observability.md): `metadata.runs`, tested SQL, OpenLineage, metrics collectors, freshness status, and operational limits.
 - [Retention and maintenance](docs/maintenance.md): the `maintenance:` policy, the protected set, dry runs, the maintenance record, and scheduling `janus maintain`.
 - [Reproducibility guide](docs/reproducibility.md): environment profiles, container workflow, and cluster-shaped runs.
 - [Implementation notes](docs/implementations/): component-level notes for planner, strategies, Spark I/O, quality, lineage, and source integrations.

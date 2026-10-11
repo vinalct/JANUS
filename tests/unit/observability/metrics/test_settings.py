@@ -182,7 +182,7 @@ def test_absolute_and_parent_escape_paths_are_refused_at_directory_resolution(
         resolve_metrics_directory(block.directory, {"metadata_dir": tmp_path})
 
 
-@pytest.mark.parametrize("profile", ["local", "cluster"])
+@pytest.mark.parametrize("profile", SHIPPED_PROFILES)
 def test_every_shipped_profile_declares_metrics_disabled_by_default(profile):
     root = Path(__file__).resolve().parents[4]
     document = yaml.safe_load((root / "conf/environments" / f"{profile}.yaml").read_text())
@@ -238,11 +238,8 @@ def test_tracked_metrics_values_are_environment_expansions(shipped_metrics_profi
     for path in shipped_metrics_profiles:
         block = _raw_metrics(path)
         blocks += bool(block)
-        document = yaml.safe_load(path.read_text())
-        if "observability" in document:
-            assert set(block) == {"transport", "path", "host", "port", "prefix"}
-        else:
-            assert not block, "an absent observability mapping must retain its disabled default"
+        assert set(block) == {"transport", "path", "host", "port", "prefix"}, path.name
+        assert block["transport"] == "${JANUS_METRICS_TRANSPORT:-disabled}", path.name
         for key, value in block.items():
             assert isinstance(value, str) and re.fullmatch(
                 r"\$\{[A-Z][A-Z0-9_]*:-[^{}]*\}", value

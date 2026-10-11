@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from tests.support.required_test_gate import assert_required_tests_ran, main
+from tests.support.required_test_gate import (
+    REQUIRED_SUITES,
+    assert_required_suite_ran,
+    assert_required_tests_ran,
+    main,
+)
 
 
 def _report(tmp_path: Path, cases: str, *, name: str = "pytest.xml") -> Path:
@@ -160,3 +165,58 @@ def test_a_later_pass_cannot_hide_an_earlier_skip(tmp_path: Path) -> None:
 
     with pytest.raises(AssertionError, match="did not execute successfully"):
         assert_required_tests_ran(skipped, additional_reports=(passed,), minimum_passed=1)
+
+
+def _metrics_cases(*, missing: int | None = None, skipped: int | None = None) -> str:
+    cases = []
+    for index, (class_name, test_name) in enumerate(REQUIRED_SUITES["metrics"]):
+        # A green neighbouring test must not replace the required acceptance case.
+        reported_name = test_name + "_neighbour" if index == missing else test_name
+        outcome = "<skipped />" if index == skipped else ""
+        cases.append(
+            f'<testcase classname="{class_name}" name="{reported_name}">{outcome}</testcase>'
+        )
+    return "".join(cases)
+
+
+@pytest.mark.parametrize("missing", range(len(REQUIRED_SUITES["metrics"])))
+def test_each_deselected_metrics_acceptance_case_fails_the_suite(tmp_path, missing):
+    assert len(REQUIRED_SUITES["metrics"]) == 2
+    report = _report(tmp_path, _metrics_cases(missing=missing))
+    with pytest.raises(AssertionError, match="collected 0 matching cases"):
+        assert_required_suite_ran(report, suite="metrics")
+
+
+@pytest.mark.parametrize("skipped", range(len(REQUIRED_SUITES["metrics"])))
+def test_each_skipped_metrics_acceptance_case_fails_the_suite(tmp_path, skipped):
+    report = _report(tmp_path, _metrics_cases(skipped=skipped))
+    with pytest.raises(AssertionError, match="did not execute successfully"):
+        assert_required_suite_ran(report, suite="metrics")
+
+
+def test_metrics_suite_cli_requires_both_cases(tmp_path):
+    report = _report(tmp_path, _metrics_cases())
+    assert main([str(report), "--suite", "metrics"]) == 0
+
+
+@pytest.mark.parametrize("selectors", [[], ["--suite", "metrics", "--minimum-passed", "0"]])
+def test_suite_cli_cannot_disable_the_required_count(tmp_path, selectors):
+    report = _report(tmp_path, "")
+    with pytest.raises(SystemExit) as result:
+        main([str(report), *selectors])
+    assert result.value.code == 2
+
+
+def test_metrics_acceptance_suite_is_required_by_local_and_hosted_spark_gates():
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    makefile = (root / "Makefile").read_text(encoding="utf-8")
+    ci_recipe = makefile.split("\nci: ensure-up\n", 1)[1].split("\n# Registry", 1)[0]
+    assert "tests.support.required_test_gate $(CI_GATE_REPORTS) --suite metrics" in ci_recipe
+    workflow = yaml.safe_load((root / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    commands = [step.get("run", "") for step in workflow["jobs"]["spark"]["steps"]]
+    assert any(
+        "tests.support.required_test_gate" in command and "--suite metrics" in command
+        for command in commands
+    )
