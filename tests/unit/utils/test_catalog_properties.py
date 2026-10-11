@@ -661,6 +661,9 @@ def test_the_postgres_credentials_are_the_same_on_both_sides(tmp_path):
 FORBIDDEN_RUNTIME_IMPORTS = ("pyarrow", "pyiceberg", "sqlalchemy", "duckdb")
 ALLOWED_SESSION_FREE_IMPORTS = {
     "observability/iceberg_sink.py": frozenset({"pyarrow", "pyiceberg"}),
+    # `status --from-runs-table` scans history through the shared catalog without
+    # acquiring a session; metadata-zone reads never import this dependency.
+    "observability/freshness.py": frozenset({"pyiceberg"}),
     # SQLAlchemy inspects SQL catalog metadata without bootstrapping it. Both
     # dependencies remain lazy and confined to this session-free adapter.
     "runtime/contract_preflight.py": frozenset({"pyiceberg", "sqlalchemy"}),
@@ -687,7 +690,7 @@ def _source_modules() -> list[Path]:
 
 
 def test_only_session_free_catalog_adapters_import_a_second_engine():
-    """Allow lazy second-engine imports only in the sink and execution preflight."""
+    """Allow lazy second-engine imports only in the declared session-free catalog adapters."""
 
     offenders = {
         str(module.relative_to(JANUS_PACKAGE)): sorted(unexpected)
@@ -726,7 +729,7 @@ def test_session_free_engine_imports_are_present_and_lazy():
 
         assert imported == allowed_imports
         assert module_level.isdisjoint(allowed_imports), (
-            f"{relative_path} must import {sorted(allowed_imports)} only inside the sink "
+            f"{relative_path} must import {sorted(allowed_imports)} only inside the adapter "
             "function so importing janus stays engine-free"
         )
 

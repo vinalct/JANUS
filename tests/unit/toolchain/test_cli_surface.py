@@ -16,7 +16,7 @@ import pytest
 import janus
 from tests.support.cli_golden import REPO_ROOT, materialize_fixture
 from tests.support.operator_cli import arm_spark_tripwire, run_janus
-from tests.support.semantics_fixtures import CLEAN, CLEAN_PRODUCER, materialize
+from tests.support.semantics_fixtures import CLEAN, CLEAN_PRODUCER, install_profile, materialize
 
 PACKAGE_ROOT = Path(janus.__file__).resolve().parent
 CLI_ROOT = PACKAGE_ROOT / "cli"
@@ -39,6 +39,7 @@ EXPECTED_CLI_MODULES = frozenset(
         "checkpoint",
         "operator",
         "maintain",
+        "status",
     }
 )
 
@@ -47,7 +48,17 @@ EXPECTED_CLI_MODULES = frozenset(
 EXPECTED_MAIN_MODULES = frozenset({"janus.cli.dispatch", "janus.cli.run_all", "janus.cli.contract"})
 
 EXPECTED_VERBS = frozenset(
-    {"run", "run-all", "contract", "validate", "list", "dead-letters", "checkpoint", "maintain"}
+    {
+        "run",
+        "run-all",
+        "contract",
+        "validate",
+        "list",
+        "dead-letters",
+        "checkpoint",
+        "maintain",
+        "status",
+    }
 )
 
 FORBIDDEN_MODULE_SCOPE_IMPORTS = ("pyspark", "pyiceberg", "pyarrow", "dagster")
@@ -528,6 +539,7 @@ def test_the_engine_detector_does_not_flag_a_lazy_or_type_only_import() -> None:
 #    are absent on purpose — they inherit the executor's lifecycle unchanged.
 
 SESSION_FREE_FORMS = (
+    pytest.param(("status",), id="status"),
     pytest.param(("validate",), id="validate"),
     pytest.param(("list", "--graph"), id="list"),
     pytest.param(
@@ -598,6 +610,7 @@ def test_the_verb_never_acquires_a_spark_session(
     from janus.planner import Planner, PlanningRequest
 
     root = materialize(CLEAN, tmp_path / "project")
+    install_profile(root, "local")
     plan = (
         Planner()
         .plan(

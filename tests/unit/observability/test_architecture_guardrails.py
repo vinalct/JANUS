@@ -728,10 +728,6 @@ def _order23_session_free_modules():
 
 class TestOrder23Red:
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True,
-        reason="metrics, budget and status isolation anchors are absent",
-    )
     def test_order23_metrics_budget_and_status_sweep_is_anchored_and_session_free():
         modules = _order23_session_free_modules()
         assert modules
@@ -743,10 +739,6 @@ class TestOrder23Red:
         assert violations == {}
 
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True,
-        reason="positive Spark detector meta-test awaits new-path anchors",
-    )
     def test_order23_new_path_detector_rejects_a_deliberate_spark_import():
         modules = _order23_session_free_modules()
         assert modules
@@ -754,10 +746,6 @@ class TestOrder23Red:
             assert _spark_references(source + "\nfrom pyspark.sql import SparkSession\n"), name
 
     @staticmethod
-    @pytest.mark.xfail(
-        strict=True,
-        reason="negative Spark detector meta-test awaits new-path anchors",
-    )
     def test_order23_new_path_detector_accepts_clean_profile_and_record_access():
         modules = _order23_session_free_modules()
         assert modules
