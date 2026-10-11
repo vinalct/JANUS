@@ -1,0 +1,13 @@
+{
+  "exit_code": 0,
+  "metadata_zone": {
+    "pipelines/parallel-baseline/summary.json": "89f399833c8b005e0de8286ed2878483a3b12715b098e011c3e1b19b61619fdc",
+    "shared/lineage/parallel-baseline-a-a1-12b285aeeb.json": "789909e3589e99f82e275dc968ab1460c14a4d82dad4cf64273be784a9cf54dc",
+    "shared/lineage/parallel-baseline-c-a1-a4ef3a1295.json": "b3aa4eea4f633fb2fc7aa22df8f19fbf5c82c833b4b7bce58a2621e854b76060",
+    "shared/runs/parallel-baseline-a-a1-12b285aeeb.json": "7a35feb22729070e80cab475de5827d92f357c8893e7d20433470519f98c4714",
+    "shared/runs/parallel-baseline-c-a1-a4ef3a1295.json": "1e42e185256a0d8a5b626383633a033f984a734df6a8e7d5c6ac38f293eb5541"
+  },
+  "stderr_events": [
+    "cli_batch_execution_requested"
+  ]
+}

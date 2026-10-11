@@ -1,0 +1,298 @@
+{
+  "config_versions": {
+    "A": "effd6ef951e7ed05fa238b699c85fa1e3b19a41ed6d46be5609aed1e2dda94bb",
+    "B": "effd6ef951e7ed05fa238b699c85fa1e3b19a41ed6d46be5609aed1e2dda94bb",
+    "C": "effd6ef951e7ed05fa238b699c85fa1e3b19a41ed6d46be5609aed1e2dda94bb",
+    "D": "effd6ef951e7ed05fa238b699c85fa1e3b19a41ed6d46be5609aed1e2dda94bb"
+  },
+  "graph": {
+    "edges": [
+      {
+        "consumer_id": "B",
+        "input_paths": [
+          "access.request_inputs"
+        ],
+        "producer_id": "A",
+        "table": "bronze.a"
+      },
+      {
+        "consumer_id": "C",
+        "input_paths": [
+          "access.request_inputs"
+        ],
+        "producer_id": "A",
+        "table": "bronze.a"
+      },
+      {
+        "consumer_id": "D",
+        "input_paths": [
+          "access.request_inputs.inputs[0]"
+        ],
+        "producer_id": "B",
+        "table": "bronze.b"
+      },
+      {
+        "consumer_id": "D",
+        "input_paths": [
+          "access.request_inputs.inputs[1]"
+        ],
+        "producer_id": "C",
+        "table": "bronze.c"
+      }
+    ]
+  },
+  "pipeline": {
+    "attempt": 1,
+    "ended_at": "2026-01-01T00:00:14+00:00",
+    "environment": "local",
+    "pipeline_run_id": "parallel-baseline",
+    "planned_at": "2026-01-01T00:00:00+00:00",
+    "started_at": "2026-01-01T00:00:00+00:00",
+    "trigger": "run-all"
+  },
+  "schema_version": 1,
+  "selection": {
+    "included_upstream_ids": [],
+    "requested": {
+      "domains": [],
+      "tags": []
+    },
+    "root_ids": [
+      "A",
+      "B",
+      "C",
+      "D"
+    ],
+    "source_ids": [
+      "A",
+      "B",
+      "C",
+      "D"
+    ]
+  },
+  "sources": [
+    {
+      "attempt": 1,
+      "attempted": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "attempted": true,
+          "evidence": {
+            "artifact_count": 0,
+            "artifacts": [],
+            "checkpoint_value": "1",
+            "duration_budget_outcome": "undeclared",
+            "extraction_metadata": {},
+            "materialized_outputs": [
+              {
+                "format": "iceberg",
+                "metadata": {},
+                "mode": "overwrite",
+                "partition_by": [
+                  "ingestion_date"
+                ],
+                "path": "bronze.a",
+                "records_written": 1,
+                "zone": "bronze"
+              }
+            ],
+            "metadata_outputs": {
+              "checkpoint_history_path": "/tmp/janus-parallel-baseline/diamond_one_arm_fails/data/metadata/A/checkpoints/history/parallel-baseline-a-a1-12b285aeeb.json",
+              "checkpoint_state_path": "/tmp/janus-parallel-baseline/diamond_one_arm_fails/data/metadata/A/checkpoints/current.json",
+              "lineage_path": "/tmp/janus-parallel-baseline/diamond_one_arm_fails/data/metadata/A/lineage/parallel-baseline-a-a1-12b285aeeb.json",
+              "run_metadata_path": "/tmp/janus-parallel-baseline/diamond_one_arm_fails/data/metadata/A/runs/parallel-baseline-a-a1-12b285aeeb.json",
+              "validation_report_path": null
+            },
+            "records_extracted": 1,
+            "status": "succeeded",
+            "strategy_metadata": {}
+          },
+          "run_id": "parallel-baseline-a-a1-12b285aeeb",
+          "source_id": "A",
+          "status": "succeeded",
+          "timing": {
+            "duration_seconds": 2.0,
+            "ended_at": "2026-01-01T00:00:04+00:00",
+            "started_at": "2026-01-01T00:00:02+00:00"
+          }
+        }
+      ],
+      "config_version": "effd6ef951e7ed05fa238b699c85fa1e3b19a41ed6d46be5609aed1e2dda94bb",
+      "run_id": "parallel-baseline-a-a1-12b285aeeb",
+      "selected_directly": true,
+      "source_id": "A",
+      "status": "succeeded",
+      "timing": {
+        "duration_seconds": 2.0,
+        "ended_at": "2026-01-01T00:00:04+00:00",
+        "started_at": "2026-01-01T00:00:02+00:00"
+      },
+      "upstream_ids": []
+    },
+    {
+      "attempt": 1,
+      "attempted": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "attempted": true,
+          "evidence": {
+            "artifact_count": 0,
+            "artifacts": [],
+            "checkpoint_value": "1",
+            "duration_budget_outcome": "undeclared",
+            "error_type": "RuntimeError",
+            "extraction_metadata": {},
+            "failure_reason": "scripted execution failure",
+            "materialized_outputs": [],
+            "metadata_outputs": {
+              "checkpoint_history_path": null,
+              "checkpoint_state_path": null,
+              "lineage_path": "/tmp/janus-parallel-baseline/diamond_one_arm_fails/data/metadata/B/lineage/parallel-baseline-b-a1-dd27c9016a.json",
+              "run_metadata_path": "/tmp/janus-parallel-baseline/diamond_one_arm_fails/data/metadata/B/runs/parallel-baseline-b-a1-dd27c9016a.json",
+              "validation_report_path": null
+            },
+            "records_extracted": 1,
+            "status": "failed",
+            "strategy_metadata": {}
+          },
+          "failure": {
+            "error_type": "RuntimeError",
+            "phase": "execution",
+            "reason": "scripted execution failure"
+          },
+          "run_id": "parallel-baseline-b-a1-dd27c9016a",
+          "source_id": "B",
+          "status": "failed",
+          "timing": {
+            "duration_seconds": 2.0,
+            "ended_at": "2026-01-01T00:00:08+00:00",
+            "started_at": "2026-01-01T00:00:06+00:00"
+          }
+        }
+      ],
+      "config_version": "effd6ef951e7ed05fa238b699c85fa1e3b19a41ed6d46be5609aed1e2dda94bb",
+      "failure": {
+        "error_type": "RuntimeError",
+        "phase": "execution",
+        "reason": "scripted execution failure"
+      },
+      "run_id": "parallel-baseline-b-a1-dd27c9016a",
+      "selected_directly": true,
+      "source_id": "B",
+      "status": "failed",
+      "timing": {
+        "duration_seconds": 2.0,
+        "ended_at": "2026-01-01T00:00:08+00:00",
+        "started_at": "2026-01-01T00:00:06+00:00"
+      },
+      "upstream_ids": [
+        "A"
+      ]
+    },
+    {
+      "attempt": 1,
+      "attempted": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "attempted": true,
+          "evidence": {
+            "artifact_count": 0,
+            "artifacts": [],
+            "checkpoint_value": "1",
+            "duration_budget_outcome": "undeclared",
+            "extraction_metadata": {},
+            "materialized_outputs": [
+              {
+                "format": "iceberg",
+                "metadata": {},
+                "mode": "overwrite",
+                "partition_by": [
+                  "ingestion_date"
+                ],
+                "path": "bronze.c",
+                "records_written": 1,
+                "zone": "bronze"
+              }
+            ],
+            "metadata_outputs": {
+              "checkpoint_history_path": "/tmp/janus-parallel-baseline/diamond_one_arm_fails/data/metadata/C/checkpoints/history/parallel-baseline-c-a1-a4ef3a1295.json",
+              "checkpoint_state_path": "/tmp/janus-parallel-baseline/diamond_one_arm_fails/data/metadata/C/checkpoints/current.json",
+              "lineage_path": "/tmp/janus-parallel-baseline/diamond_one_arm_fails/data/metadata/C/lineage/parallel-baseline-c-a1-a4ef3a1295.json",
+              "run_metadata_path": "/tmp/janus-parallel-baseline/diamond_one_arm_fails/data/metadata/C/runs/parallel-baseline-c-a1-a4ef3a1295.json",
+              "validation_report_path": null
+            },
+            "records_extracted": 1,
+            "status": "succeeded",
+            "strategy_metadata": {}
+          },
+          "run_id": "parallel-baseline-c-a1-a4ef3a1295",
+          "source_id": "C",
+          "status": "succeeded",
+          "timing": {
+            "duration_seconds": 2.0,
+            "ended_at": "2026-01-01T00:00:12+00:00",
+            "started_at": "2026-01-01T00:00:10+00:00"
+          }
+        }
+      ],
+      "config_version": "effd6ef951e7ed05fa238b699c85fa1e3b19a41ed6d46be5609aed1e2dda94bb",
+      "run_id": "parallel-baseline-c-a1-a4ef3a1295",
+      "selected_directly": true,
+      "source_id": "C",
+      "status": "succeeded",
+      "timing": {
+        "duration_seconds": 2.0,
+        "ended_at": "2026-01-01T00:00:12+00:00",
+        "started_at": "2026-01-01T00:00:10+00:00"
+      },
+      "upstream_ids": [
+        "A"
+      ]
+    },
+    {
+      "attempt": 1,
+      "attempted": false,
+      "attempts": [],
+      "config_version": "effd6ef951e7ed05fa238b699c85fa1e3b19a41ed6d46be5609aed1e2dda94bb",
+      "run_id": "parallel-baseline-d-a1-f65ae83026",
+      "selected_directly": true,
+      "skip": {
+        "direct_blocking_upstream_ids": [
+          "B"
+        ],
+        "reason_code": "upstream_failed",
+        "root_failed_source_ids": [
+          "B"
+        ]
+      },
+      "source_id": "D",
+      "status": "skipped",
+      "timing": {
+        "duration_seconds": 0.0,
+        "ended_at": null,
+        "started_at": null
+      },
+      "upstream_ids": [
+        "B",
+        "C"
+      ]
+    }
+  ],
+  "summary_persistence": {
+    "path": "/tmp/janus-parallel-baseline/diamond_one_arm_fails/data/metadata/pipelines/parallel-baseline/summary.json",
+    "status": "succeeded"
+  },
+  "totals": {
+    "attempted": 3,
+    "duration_seconds": 14.0,
+    "expanded": 4,
+    "failed": 1,
+    "selected": 4,
+    "skipped": 1,
+    "status": "failed",
+    "succeeded": 2
+  }
+}

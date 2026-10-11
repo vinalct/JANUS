@@ -1,0 +1,13 @@
+{
+  "exit_code": 1,
+  "metadata_zone": {
+    "C/checkpoints/current.json": "4856281dd8acc8544cff0fc596e10e23cc619e53c1848a78b901c612a7ba8972",
+    "C/checkpoints/history/parallel-baseline-c-a1-a4ef3a1295.json": "e836f06c95bdb08711bd6c776a9eeca0829c22a0ddead95f33289302695bad10",
+    "C/lineage/parallel-baseline-c-a1-a4ef3a1295.json": "1306d8bf9ab6ca2206b4defb7c2854ca6491113634b2094c6f97c57758c00667",
+    "C/runs/parallel-baseline-c-a1-a4ef3a1295.json": "d7fec245aace9c890cd89a97ccf7a3fd033da7ee596ff01a35b0a000f655b0d8",
+    "pipelines/parallel-baseline/summary.json": "f3a4c66a50bb4711f4b23d9cbe6c6bc5733781f672701b7c4eef2af3fe4f41fd"
+  },
+  "stderr_events": [
+    "cli_batch_execution_requested"
+  ]
+}
