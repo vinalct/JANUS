@@ -47,14 +47,21 @@ def test_every_declaration_resolves_to_a_real_record_or_pipeline_summary_field(t
     }
 
 
-def test_every_numeric_or_timestamp_field_is_mapped_or_has_a_written_exclusion():
+def test_every_numeric_or_timestamp_field_is_mapped_or_has_a_written_exclusion(tmp_path):
     hints = get_type_hints(RunRecord)
     numeric = {
         field.name
         for field in fields(RunRecord)
         if set(get_args(hints[field.name]) or (hints[field.name],)) & {int, float, datetime}
     }
-    mapped = {entry.source_field for entry in run_metrics()}
+    pipeline, _, _ = _run(tmp_path)
+    summary_numeric = {
+        name for name, value in pipeline.totals().items() if isinstance(value, int | float)
+    }
+    numeric |= summary_numeric
+    mapped = {entry.source_field for entry in (*run_metrics(), *pipeline_metrics())}
+    mapped |= {name for entry in pipeline_metrics() for name in entry.source_fields}
+    assert summary_numeric, "numeric summary field discovery must not be empty"
     excluded = set(DELIBERATELY_UNMAPPED)
     assert numeric, "numeric field discovery must not be empty"
     assert mapped, "a catalogue mapping nothing must not satisfy drift coverage"

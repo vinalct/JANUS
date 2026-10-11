@@ -9,8 +9,6 @@ run's exposure whatever a transport was configured to wait for.
 from __future__ import annotations
 
 import logging
-import math
-import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -25,6 +23,11 @@ from janus.lineage.store import (
 )
 from janus.models import ExecutionPlan
 from janus.models.data_contracts import DataContract
+from janus.observability.bounded import (
+    DEFAULT_EMISSION_TIMEOUT_SECONDS,
+    EmissionGuardError,
+    bounded_emission,
+)
 from janus.observability.iceberg_sink import (
     IcebergAppendOutcome,
     IcebergAppendResult,
@@ -56,7 +59,6 @@ from janus.observability.runs_table import (
 from janus.utils.environment import RuntimeLocation
 from janus.utils.logging import StructuredLogger
 
-DEFAULT_EMISSION_TIMEOUT_SECONDS = 5.0
 _LOG = logging.getLogger(__name__)
 
 
@@ -206,58 +208,22 @@ class GuardedRunEventEmitter:
         worker: Callable[[list[RunEmissionResult]], None],
     ) -> RunEmissionResult:
         """Run one fan-out inside the total budget, whatever its destinations cost."""
-        if not _valid_timeout(self.timeout_seconds):
-            return _failed(
-                lifecycle,
-                table_identifier,
-                stage="budget",
-                exception_type="InvalidEmissionTimeout",
-            )
-
-        results: list[RunEmissionResult] = []
-        fatal_errors: list[BaseException] = []
-
-        def bridge() -> None:
-            # Anything the per-stage guards did not already turn into data crosses the
-            # thread boundary: a KeyboardInterrupt during emission must still interrupt.
-            try:
-                worker(results)
-            except BaseException as exc:
-                fatal_errors.append(exc)
+        def operation() -> RunEmissionResult:
+            results: list[RunEmissionResult] = []
+            worker(results)
+            if results:
+                return results[0]
+            raise EmissionGuardError("worker", "WorkerExitedWithoutResult")
 
         try:
-            thread = threading.Thread(
-                target=bridge,
-                name="janus-run-event-emission",
-                daemon=True,
-            )
-            thread.start()
-            thread.join(self.timeout_seconds)
-        except Exception as exc:
+            return bounded_emission(operation, timeout_seconds=self.timeout_seconds)
+        except EmissionGuardError as exc:
             return _failed(
                 lifecycle,
                 table_identifier,
-                stage="worker",
-                exception_type=type(exc).__name__,
+                stage=exc.stage,
+                exception_type=exc.exception_type,
             )
-
-        if thread.is_alive():
-            return _failed(
-                lifecycle,
-                table_identifier,
-                stage="budget",
-                exception_type="EmissionTimeoutError",
-            )
-        if fatal_errors:
-            raise fatal_errors[0]
-        if results:
-            return results[0]
-        return _failed(
-            lifecycle,
-            table_identifier,
-            stage="worker",
-            exception_type="WorkerExitedWithoutResult",
-        )
 
     def _run_started_worker(
         self,
@@ -540,13 +506,6 @@ def _safe_table_identifier(config: Mapping[str, Any]) -> str:
         return resolve_runs_table_identifier(config)
     except Exception:
         return DEFAULT_RUNS_TABLE_IDENTIFIER
-
-
-def _valid_timeout(value: float) -> bool:
-    try:
-        return math.isfinite(value) and value > 0
-    except Exception:
-        return False
 
 
 def _elapsed(started_at: float) -> float:

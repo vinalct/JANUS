@@ -5,12 +5,11 @@ last-success gauge: deleting it would stop freshness alerts when a source fails.
 
 StatsD uses the stdlib socket directly: JANUS has no UDP primitive to compose.
 It is fire-and-forget; a successful send cannot confirm that a receiver got it.
-DNS is resolved once when building the transport, outside the emission budget.
+DNS is resolved once when building the transport; sends reuse its address.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
@@ -20,7 +19,7 @@ import time
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -32,6 +31,18 @@ from janus.observability.metrics.catalogue import (
     MetricType,
 )
 from janus.observability.metrics.exposition import ParsedSample, parse_exposition, render_exposition
+from janus.observability.metrics.serialization import (
+    emitted_at as _emitted_at,
+)
+from janus.observability.metrics.serialization import (
+    label_values as _labels,
+)
+from janus.observability.metrics.serialization import (
+    pipeline_labels,
+)
+from janus.observability.metrics.serialization import (
+    serialize_batch as _serialize,
+)
 from janus.observability.metrics.settings import MetricsTransportKind, StatsdMetricsSettings
 from janus.observability.openlineage.transport import PartialWriteError, WarningLogger, _append_line
 from janus.utils.storage import sanitize_identifier_segment
@@ -242,6 +253,14 @@ class TextfileMetricsTransport:
                     MetricsEmissionOutcome.SKIPPED, self.kind, reason="no_samples"
                 )
             labels = _labels(current[0])
+            if current[0].scope == "pipeline":
+                labels = pipeline_labels(current)
+                environment = sanitize_identifier_segment(labels["environment"])
+                trigger = sanitize_identifier_segment(labels["trigger"])
+                if not environment or not trigger:
+                    raise ValueError("pipeline textfile identity must not be empty")
+                path = self.directory / f"pipeline-{environment}-{trigger}.prom"
+                return self._rewrite(path, render_exposition(current), sample_count=len(current))
             path = self.path_for(labels)
             current = _textfile_samples(current, labels)
             payload = render_exposition(current)
@@ -496,55 +515,3 @@ def _remove_temporary(path: Path | None) -> None:
     if path is not None:
         with suppress(OSError):
             path.unlink(missing_ok=True)
-
-
-def _emitted_at(sample: MetricSample) -> datetime:
-    value = sample.emitted_at
-    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("a metrics batch requires an aware emitted_at from its record")
-    return value.astimezone(UTC)
-
-
-def _labels(sample: MetricSample) -> dict[str, str]:
-    labels: dict[str, str] = {}
-    seen: set[str] = set()
-    for name, value in sample.labels:
-        if name not in ALLOWED_LABELS or name not in sample.declaration.labels:
-            raise ValueError("metric label is not declared or allowed")
-        if name in seen:
-            raise ValueError("metric labels must not contain duplicates")
-        seen.add(name)
-        if value is None:
-            continue
-        if not isinstance(value, str):
-            raise TypeError("metric label values must be text")
-        if value.strip():
-            labels[name] = value.strip()
-    return labels
-
-
-def _serialize(samples: Sequence[MetricSample]) -> bytes:
-    """One timestamp and one shared label set, never a timestamp per measurement."""
-    first = samples[0]
-    emitted_at = _emitted_at(first)
-    labels = _labels(first)
-    rendered = []
-    for sample in samples:
-        if (
-            _emitted_at(sample) != emitted_at
-            or sample.scope != first.scope
-            or _labels(sample) != labels
-        ):
-            raise ValueError("metrics samples must share their batch time, scope and labels")
-        if isinstance(sample.value, bool) or not isinstance(sample.value, int | float):
-            raise TypeError("metric values must be numeric")
-        rendered.append(
-            {"name": sample.name, "type": sample.metric_type.value, "value": sample.value}
-        )
-    batch = {
-        "emitted_at": emitted_at.isoformat(),
-        "scope": first.scope,
-        "labels": labels,
-        "samples": rendered,
-    }
-    return json.dumps(batch, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")

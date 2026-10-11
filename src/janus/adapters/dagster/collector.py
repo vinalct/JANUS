@@ -9,6 +9,7 @@ from typing import Any
 
 from dagster import DagsterEventType, DagsterInstance, DagsterRunStatus
 
+from janus.observability.metrics.pipeline import emit_pipeline_metrics
 from janus.orchestration import (
     ExecutionTiming,
     FailureDetails,
@@ -19,6 +20,7 @@ from janus.orchestration import (
     SourceOutcome,
     source_attempt_run_id,
 )
+from janus.utils.environment import load_environment_config
 from janus.utils.storage import StorageLayout
 
 from .errors import DagsterRunCollectionError
@@ -36,6 +38,7 @@ def collect_dagster_run(
     run_id: str,
     *,
     summary_store_factory: SummaryStoreFactory = PipelineSummaryStore,
+    environment_config: Mapping[str, Any] | None = None,
 ) -> PipelineOutcome:
     """Collect and idempotently persist one terminal Dagster run.
 
@@ -104,10 +107,21 @@ def collect_dagster_run(
         timing=timing,
         sources=tuple(outcomes[source_id] for source_id in manifest.source_order),
     )
-    return summary_store_factory(manifest.storage_layout()).persist(
+    layout = manifest.storage_layout()
+    store = summary_store_factory(layout)
+    already_persisted = store.summary_path(run_id).exists()
+    persisted_outcome = store.persist(
         outcome,
         allow_existing=True,
     )
+    if not already_persisted and dagster_run.status != DagsterRunStatus.CANCELED:
+        config = (
+            environment_config
+            if environment_config is not None
+            else (lambda: load_environment_config(manifest.environment, manifest.project_root))
+        )
+        emit_pipeline_metrics(persisted_outcome, config, layout.as_dict())
+    return persisted_outcome
 
 
 def _manifest_from_run(tags: Mapping[str, str], job_name: str) -> DagsterRunManifest:

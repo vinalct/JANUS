@@ -262,6 +262,82 @@ def test_bounded_native_retry_is_collected_once_and_releases_the_consumer(tmp_pa
     assert repeated.to_summary() == outcome.to_summary()
 
 
+@pytest.mark.parametrize("failed", [False, True], ids=["success", "failure-with-skips"])
+def test_cli_and_adapter_emit_the_same_four_aggregate_samples_after_persistence(
+    tmp_path, monkeypatch, capsys, failed, record_property
+):
+    root = _project(tmp_path, "chain_and_peer")
+    profile_path = root / "conf/environments/local.yaml"
+    config = yaml.safe_load(profile_path.read_text())
+    config["observability"] = {"metrics": {"transport": "file"}}
+    profile_path.write_text(yaml.safe_dump(config))
+    scenario = {"fail_always": {"A"}} if failed else {}
+    cli_execution = _ScenarioExecution(**scenario)
+    monkeypatch.setattr(
+        run_all_module,
+        "_build_batch_executor",
+        lambda _logger: BatchExecutor(source_execution=cli_execution),
+    )
+    exit_code = main(
+        [
+            "run-all",
+            "--project-root",
+            str(root),
+            "--pipeline-run-id",
+            "metrics",
+            "--started-at",
+            PLANNED_AT,
+        ]
+    )
+    cli_summary = json.loads(capsys.readouterr().out)
+
+    adapter = _adapter(root, _ScenarioExecution(**scenario), environment_config=config)
+    instance = DagsterInstance.ephemeral()
+    native, outcome = adapter.execute_in_process(instance=instance)
+    metadata = root / "data/metadata"
+    lines = [
+        line
+        for path in (metadata / "metrics").glob("*.ndjson")
+        for line in path.read_text().splitlines()
+    ]
+    assert len(lines) == 2
+    batches = [json.loads(line) for line in lines]
+    for batch, summary, trigger in zip(
+        batches, (cli_summary, outcome.to_summary()), ("run-all", "dagster"), strict=True
+    ):
+        assert batch["scope"] == "pipeline"
+        assert batch["labels"] == {"environment": "local", "trigger": trigger}
+        assert batch["emitted_at"] == summary["pipeline"]["ended_at"]
+        assert len(batch["samples"]) == 4
+        duration, *counts = batch["samples"]
+        assert duration == {
+            "name": "janus_pipeline_duration_seconds",
+            "type": "gauge",
+            "value": summary["totals"]["duration_seconds"],
+        }
+        assert counts == [
+            {
+                "name": "janus_pipeline_sources_total",
+                "type": "gauge",
+                "labels": {"status": status},
+                "value": summary["totals"][status],
+            }
+            for status in ("succeeded", "failed", "skipped")
+        ]
+        stored = metadata / "pipelines" / summary["pipeline"]["pipeline_run_id"] / "summary.json"
+        assert json.loads(stored.read_text()) == summary
+    assert batches[0]["samples"][1:] == batches[1]["samples"][1:]
+    record_property("pipeline_metrics_parity", json.dumps(batches))
+    assert exit_code == (1 if failed else 0)
+    assert native.success is not failed
+    assert outcome.is_successful is not failed
+    assert adapter.collect(instance, native.run_id) == outcome
+    assert (
+        sum(len(path.read_text().splitlines()) for path in (metadata / "metrics").glob("*.ndjson"))
+        == 2
+    )
+
+
 def _project(tmp_path: Path, graph: str) -> Path:
     root = build_graph_project(tmp_path, graph)
     environments = root / "conf" / "environments"
@@ -288,11 +364,16 @@ storage:
 
 
 def _adapter(
-    root: Path, execution: Any, *, batch_planner: BatchPlanner | None = None, **kwargs: Any
+    root: Path,
+    execution: Any,
+    *,
+    batch_planner: BatchPlanner | None = None,
+    environment_config: Mapping[str, Any] | None = None,
+    **kwargs: Any,
 ):
     return build_dagster_adapter(
         root,
-        environment_config=_environment_config(),
+        environment_config=environment_config or _environment_config(),
         services=DagsterAdapterServices(
             batch_planner=batch_planner or BatchPlanner(),
             source_execution_factory=lambda _logger: execution,

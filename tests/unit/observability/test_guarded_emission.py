@@ -365,7 +365,7 @@ def test_total_budget_joins_worker_once_and_records_the_timeout(tmp_path, monkey
         def is_alive(self):
             return True
 
-    monkeypatch.setattr(emission.threading, "Thread", BudgetExhaustingThread)
+    monkeypatch.setattr("janus.observability.bounded.threading.Thread", BudgetExhaustingThread)
 
     emitter = build_run_event_emitter(
         {},
@@ -677,7 +677,7 @@ class TestOrder23Red:
             metrics_action=slow_metrics,
         )
         assert emitter.timeout_seconds == emission.DEFAULT_EMISSION_TIMEOUT_SECONDS == 5.0
-        monkeypatch.setattr(emission.threading, "Thread", TrackingThread)
+        monkeypatch.setattr("janus.observability.bounded.threading.Thread", TrackingThread)
         persisted = _terminal_artifacts(tmp_path, status="succeeded")
         plan = _plan(tmp_path, "unused")
         started = time.monotonic()

@@ -57,6 +57,7 @@ class DagsterAdapter:
     manifest: DagsterRunManifest
     source_op_names: Mapping[str, str]
     summary_store_factory: SummaryStoreFactory
+    environment_config: Mapping[str, Any]
 
     def collect(self, instance: DagsterInstance, run_id: str) -> PipelineOutcome:
         """Idempotently translate and persist one terminal run."""
@@ -64,6 +65,7 @@ class DagsterAdapter:
             instance,
             run_id,
             summary_store_factory=self.summary_store_factory,
+            environment_config=self.environment_config,
         )
 
     def execute_in_process(
@@ -197,7 +199,7 @@ def build_dagster_adapter(
     )
     store_factory = resolved_services.summary_store_factory
     sensors = tuple(
-        _terminal_sensor(status, job, store_factory)
+        _terminal_sensor(status, job, store_factory, resolved_config)
         for status in (
             DagsterRunStatus.SUCCESS,
             DagsterRunStatus.FAILURE,
@@ -218,6 +220,7 @@ def build_dagster_adapter(
         manifest=manifest,
         source_op_names=op_names,
         summary_store_factory=store_factory,
+        environment_config=resolved_config,
     )
 
 
@@ -328,7 +331,7 @@ def _dependencies(source_ids, graph, op_names):
     return dependencies
 
 
-def _terminal_sensor(status, job, summary_store_factory):
+def _terminal_sensor(status, job, summary_store_factory, environment_config):
     @run_status_sensor(
         run_status=status,
         name=f"{job.name}_{status.value.lower()}_summary",
@@ -341,6 +344,7 @@ def _terminal_sensor(status, job, summary_store_factory):
             context.instance,
             context.dagster_run.run_id,
             summary_store_factory=summary_store_factory,
+            environment_config=environment_config,
         )
 
     return collect_terminal_run

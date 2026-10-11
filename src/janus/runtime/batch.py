@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from janus.models.config.constants import DURATION_BUDGET_EXCEEDED
+from janus.observability.metrics.pipeline import emit_pipeline_metrics
 from janus.orchestration.persistence import PipelineSummaryStore
 from janus.orchestration.plans import BatchPlan, BatchPlanRequest, PlannedSource
 from janus.orchestration.results import (
@@ -228,6 +229,7 @@ class BatchExecutor:
     source_execution: SourceExecution = field(default_factory=SourceExecutionService)
     clock: PipelineClock = field(default_factory=PipelineClock)
     summary_store_factory: Callable[[StorageLayout], PipelineSummaryStore] = PipelineSummaryStore
+    logger: StructuredLogger | None = None
 
     def execute(
         self,
@@ -290,7 +292,17 @@ class BatchExecutor:
             timing=self.clock.finish(pipeline_started),
             sources=_completed_outcomes(plan, outcomes),
         )
-        return store.persist(outcome)
+        persisted_outcome = store.persist(outcome)
+        self._emit_pipeline_metrics(persisted_outcome, environment_config, resolved_paths)
+        return persisted_outcome
+
+    def _emit_pipeline_metrics(
+        self,
+        outcome: PipelineOutcome,
+        environment_config: Mapping[str, Any],
+        resolved_paths: Mapping[str, RuntimeLocation],
+    ) -> None:
+        emit_pipeline_metrics(outcome, environment_config, resolved_paths, logger=self.logger)
 
     def _execute_source(
         self,

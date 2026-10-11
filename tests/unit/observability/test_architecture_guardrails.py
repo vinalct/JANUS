@@ -31,13 +31,16 @@ WORKFLOW_ROOT_CANDIDATES = (
 
 OBSERVABILITY_ANCHORS = {
     "__init__.py",
+    "bounded.py",
     "emission.py",
     "freshness.py",
     "iceberg_sink.py",
     "metrics/__init__.py",
     "metrics/catalogue.py",
     "metrics/exposition.py",
+    "metrics/pipeline.py",
     "metrics/settings.py",
+    "metrics/serialization.py",
     "metrics/sink.py",
     "metrics/transport.py",
     "openlineage/facets.py",

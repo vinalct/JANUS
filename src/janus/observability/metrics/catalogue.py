@@ -216,6 +216,12 @@ _PIPELINE_METRICS = (
 )
 
 DELIBERATELY_UNMAPPED: dict[str, str] = {
+    "selected": "Selected roots describe the stable plan, not a runtime signal.",
+    "expanded": "Expanded sources describe the stable plan, not a runtime signal.",
+    "attempted": (
+        "Succeeded plus failed sources already cover execution; a third aggregate "
+        "invites double-counting dashboards."
+    ),
     "attempt_count": (
         "Total HTTP attempts including retries. janus_http_requests_total (successful "
         "requests) and janus_http_retries_total (retries) already span it; a third "

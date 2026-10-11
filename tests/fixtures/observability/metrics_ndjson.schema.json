@@ -30,9 +30,29 @@
         "properties": {
           "name": {"type": "string", "pattern": "^[a-zA-Z_:][a-zA-Z0-9_:]*$"},
           "type": {"enum": ["gauge", "counter"]},
-          "value": {"type": "number"}
+          "value": {"type": "number"},
+          "labels": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status"],
+            "properties": {"status": {"enum": ["succeeded", "failed", "skipped"]}}
+          }
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"scope": {"const": "run"}}},
+      "then": {"properties": {"samples": {"items": {"properties": {"labels": false}}}}},
+      "else": {
+        "properties": {
+          "labels": {
+            "required": ["environment", "trigger"],
+            "propertyNames": {"enum": ["environment", "trigger"]}
+          }
+        }
+      }
+    }
+  ]
 }

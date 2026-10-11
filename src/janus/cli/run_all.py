@@ -257,7 +257,8 @@ def _execute_batch(prepared: _PreparedBatch, *, resume: bool) -> int:
 def _build_batch_executor(logger: StructuredLogger) -> BatchExecutor:
     """Construct the production runner behind an injectable CLI composition seam."""
     return BatchExecutor(
-        source_execution=SourceExecutionService(executor=SourceExecutor(logger=logger))
+        source_execution=SourceExecutionService(executor=SourceExecutor(logger=logger)),
+        logger=logger,
     )
 
 

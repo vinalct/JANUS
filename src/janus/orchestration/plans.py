@@ -63,6 +63,7 @@ class BatchPlanRequest:
             raise BatchPlanningError("planned_at must be timezone-aware")
 
     @classmethod
+    # The factory preserves the public batch identity, selection and budget-policy inputs.
     def create( 
         cls,
         *,

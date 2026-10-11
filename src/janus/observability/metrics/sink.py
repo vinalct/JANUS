@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -72,6 +72,16 @@ class MetricsRunSink:
                         run_record.emitted_at,
                     )
                 )
+        return self.emit_samples(samples, budget_seconds=budget_seconds, logger=logger)
+
+    def emit_samples(
+        self,
+        samples: Sequence[MetricSample],
+        *,
+        budget_seconds: float,
+        logger: WarningLogger | None = None,
+    ) -> MetricsEmissionResult:
+        """Deliver an already projected run or pipeline batch with the same failure reporting."""
         result = self.transport.send(tuple(samples), budget_seconds=budget_seconds)
         # StatsD reports delivery failures itself; file transports leave that to the sink.
         if result.outcome is MetricsEmissionOutcome.FAILED and self.transport.kind != "statsd":

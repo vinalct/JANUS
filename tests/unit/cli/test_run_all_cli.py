@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +13,9 @@ import yaml
 
 import janus.cli.run_all as run_all_module
 from janus.main import main
-from janus.orchestration import PipelineSummaryStore
+from janus.orchestration import PipelineClock, PipelineSummaryStore
 from janus.runtime import BatchExecutor as CoreBatchExecutor
+from tests.support.metrics_order23 import WarningSpy
 from tests.support.orchestration import build_graph_project
 
 STARTED_AT = "2026-09-13T12:00:00Z"
@@ -375,9 +377,15 @@ def test_interruption_uses_shell_interrupt_status_and_no_completed_summary(
     tmp_path,
     monkeypatch,
     capsys,
+    record_property,
 ):
     root = _project(tmp_path, "chain")
     execution = ExecutionSpy(interrupts={"A"})
+    emissions = []
+    monkeypatch.setattr(
+        "janus.observability.metrics.pipeline.build_metrics_sink",
+        lambda *_args, **_kwargs: emissions.append("emit"),
+    )
     _install_runner(monkeypatch, execution)
 
     exit_code = main(_arguments(root))
@@ -388,6 +396,58 @@ def test_interruption_uses_shell_interrupt_status_and_no_completed_summary(
     assert captured.out == ""
     assert "was interrupted" in captured.err
     assert "pending sources: 2" in captured.err
+    assert emissions == []
+    assert not (root / "data/metadata/pipelines" / PIPELINE_ID / "summary.json").exists()
+    record_property(
+        "interruption_evidence",
+        json.dumps(
+            {
+                "exit_code": exit_code,
+                "pipeline_metric_emissions": len(emissions),
+                "finalized_summary": False,
+                "stdout": captured.out,
+            }
+        ),
+    )
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_pipeline_metrics_failure_preserves_cli_exit_stdout_and_persisted_bytes(
+    tmp_path, monkeypatch, capsys, failed
+):
+    from janus.observability.metrics.sink import MetricsRunSink
+
+    root = _project(tmp_path)
+    clock = PipelineClock(
+        wall_clock=lambda: datetime(2026, 10, 10, tzinfo=UTC), monotonic_clock=lambda: 0.0
+    )
+    execution = ExecutionSpy(failures={"A"} if failed else set())
+    _install_runner(monkeypatch, execution, clock=clock)
+    baseline_exit = main(_arguments(root))
+    baseline_stdout = capsys.readouterr().out
+    path = root / "data/metadata/pipelines" / PIPELINE_ID / "summary.json"
+    baseline_bytes = path.read_bytes()
+    path.unlink()
+    logger = WarningSpy()
+
+    class RaisingTransport:
+        kind = "file"
+
+        def send(self, _samples, *, budget_seconds):
+            assert budget_seconds > 0
+            raise OSError("do-not-log-this-secret")
+
+    monkeypatch.setattr(
+        "janus.observability.metrics.pipeline.build_metrics_sink",
+        lambda *_args, **_kwargs: MetricsRunSink(RaisingTransport()),
+    )
+    _install_runner(monkeypatch, execution, clock=clock, logger=logger)
+    actual_exit = main(_arguments(root))
+    assert actual_exit == baseline_exit == (1 if failed else 0)
+    assert capsys.readouterr().out == baseline_stdout
+    assert path.read_bytes() == baseline_bytes
+    assert len(logger.warnings) == 1
+    assert "do-not-log" not in str(logger.warnings)
 
 
 @pytest.mark.parametrize(
