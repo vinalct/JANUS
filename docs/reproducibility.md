@@ -657,6 +657,28 @@ work for the newest `retain_last` snapshots and anything younger than `older_tha
 snapshots and 30 days in the shipped profiles), unless a source declares its own
 `outputs.bronze.retention`. Roll back before running maintenance, not after.
 
+## CI timing and coverage
+
+`make test` reuses the development container. Make passes a checksum of its current
+Makefile into the Compose service configuration, so a changed Makefile recreates the
+container on the next setup and refreshes its single-file bind mount. This avoids reading
+an older Makefile after an editor saves by replacing the file. `make up` also forces a
+fresh container when a manual refresh is needed.
+
+`make ci` and the hosted Spark gate run the five two-second operator CLI checks in a
+separate process with coverage disabled. `make test-cli-timing` runs just those checks;
+their JUnit gate requires all five to pass. The remaining unit suite, integration suite,
+and isolated 2 GiB handoff retain coverage and their required-test gates. Each suite prints
+its twenty slowest cases, and hosted CI uploads the test reports and logs with coverage.
+
+Configuration and contract reads use PyYAML's C-backed safe loader when available, falling
+back to the Python safe loader without LibYAML. Documents are read afresh on each load;
+edits to configuration and contract bytes remain visible. Docker installs pinned runtime
+dependencies before copying application code, so source changes can reuse that build layer.
+
+The fast job omits data engines. Catalog-backed status unit tests skip there when PyIceberg
+is absent; the Spark gate requires all six exact catalog status cases to execute successfully.
+
 ## Known limits at this stage
 
 A few facts are important for anyone reproducing the project today:

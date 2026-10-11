@@ -141,71 +141,9 @@ def test_unknown_source_is_a_named_argument_error(zone, capsys):
     assert "fixture.missing" in capsys.readouterr().err
 
 
-def test_runs_table_reader_matches_zone_using_one_fake_catalog_scan(zone, monkeypatch, capsys):
-    import pyiceberg.catalog
-
-    import janus.observability.freshness  # noqa: F401
-
-    rows = [
-        {
-            "source_id": source.source_id,
-            "ended_at": run.ended_at,
-            "status": run.status,
-            "freshness_max_age_seconds": 1,
-        }
-        for source in zone.sources
-        for run in source.runs
-        if run.status == "succeeded"
-    ]
-    scans = []
-
-    def scan(**kwargs):
-        scans.append(kwargs)
-        return SimpleNamespace(to_arrow=lambda: SimpleNamespace(to_pylist=lambda: rows))
-
-    loaded = []
-
-    def load_table(identifier):
-        loaded.append(identifier)
-        return SimpleNamespace(scan=scan)
-
-    monkeypatch.setattr(
-        pyiceberg.catalog,
-        "load_catalog",
-        lambda *args, **kwargs: SimpleNamespace(load_table=load_table),
-    )
-    assert _invoke(zone, "--format", "json") == 1
-    metadata = json.loads(capsys.readouterr().out)
-    spark_before = {name for name in sys.modules if name.startswith("pyspark")}
-    assert _invoke(zone, "--from-runs-table", "--format", "json") == 1
-    table = json.loads(capsys.readouterr().out)
-    assert table["source"] == "runs_table"
-    expected = {
-        row["source_id"]: (row["outcome"], row["last_success_at"], row["max_age_seconds"])
-        for row in metadata["sources"]
-    }
-    assert expected
-    assert {
-        row["source_id"]: (row["outcome"], row["last_success_at"], row["max_age_seconds"])
-        for row in table["sources"]
-    } == expected
-    assert len(scans) == len(loaded) == 1
-    assert scans[0]["selected_fields"] == ("source_id", "ended_at", "freshness_max_age_seconds")
-    assert loaded == ["metadata.runs"]
-    by_id = {row["source_id"]: row for row in table["sources"]}
-    assert by_id["fixture.fresh"]["runs_scanned"] == 2
-    assert by_id["fixture.empty"]["runs_scanned"] == 0
-    assert all(row["unreadable_run_files"] == 0 for row in table["sources"])
-    # Rewriting every historical declaration must not move the answer.
-    for row in rows:
-        row["freshness_max_age_seconds"] = 10**9
-    assert _invoke(zone, "--from-runs-table", "--format", "json") == 1
-    assert json.loads(capsys.readouterr().out) == table
-    assert {name for name in sys.modules if name.startswith("pyspark")} == spark_before
-
-
-@pytest.mark.parametrize("from_table", [False, True])
-def test_status_paths_import_no_spark_in_a_fresh_process(from_table, zone, record_property):
+def _check_status_imports(from_table, zone, record_property):
+    if from_table:
+        pytest.importorskip("pyiceberg")
     script = """
 import builtins, contextlib, io, json, sys, types
 engine_roots = ('pyspark', 'pyiceberg', 'pyarrow')
@@ -276,6 +214,10 @@ print(json.dumps({'after_import': after_import, 'after_status': after_status, 'e
         assert "pyspark" not in transcript["after_status"]
     else:
         assert transcript["after_status"] == []
+
+
+def test_status_paths_import_no_spark_in_a_fresh_process(zone, record_property):
+    _check_status_imports(False, zone, record_property)
 
 
 def test_unreadable_only_history_reports_never_ran_with_a_count(zone, capsys):
@@ -361,24 +303,6 @@ def test_invalid_now_is_an_argument_error_before_evaluation(zone, value, capsys)
     assert "timezone" in captured.err if "T" in value else "ISO-8601" in captured.err
 
 
-@pytest.mark.parametrize("stage", ["catalog", "table", "scan"])
-def test_unreachable_runs_table_exits_two_with_the_reason(zone, stage, monkeypatch, capsys):
-    import pyiceberg.catalog
-
-    def refuse(*args, **kwargs):
-        raise ConnectionError(f"offline {stage}")
-
-    table = SimpleNamespace(scan=refuse)
-    catalog = SimpleNamespace(load_table=refuse if stage == "table" else lambda _: table)
-    monkeypatch.setattr(
-        pyiceberg.catalog, "load_catalog", refuse if stage == "catalog" else lambda *a, **k: catalog
-    )
-    assert _invoke(zone, "--from-runs-table") == 2
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert f"Could not read runs table: offline {stage}" in captured.err
-
-
 def test_shared_metadata_path_is_noted_without_printing_the_path(zone, capsys):
     stale = next(source for source in zone.sources if source.source_id == "fixture.stale")
     document = yaml.safe_load(stale.config_path.read_text())
@@ -450,93 +374,6 @@ def test_status_module_stays_under_task_size_ceiling():
     assert len(Path(status.__file__).read_text().splitlines()) < 300
 
 
-def test_table_selection_filters_one_scan_and_uses_the_configured_catalog(
-    zone, monkeypatch, capsys
-):
-    import pyiceberg.catalog
-    from pyiceberg.expressions import And, EqualTo, In
-
-    from janus.utils.catalog_properties import derive_pyiceberg_catalog_properties
-    from janus.utils.environment import load_environment_config, materialize_runtime_paths
-
-    profile = zone.root / "conf" / "environments" / "local.yaml"
-    document = yaml.safe_load(profile.read_text())
-    document["spark"]["iceberg"]["catalog_name"] = "configured"
-    document["observability"] = {"runs_table": "operator.history"}
-    profile.write_text(yaml.safe_dump(document))
-    config = load_environment_config("local", zone.root)
-    expected_properties = derive_pyiceberg_catalog_properties(
-        config, materialize_runtime_paths(config, zone.root)
-    )
-    selected = ["fixture.fresh", "fixture.undeclared"]
-    rows = [
-        {"source_id": source.source_id, "ended_at": run.ended_at, "freshness_max_age_seconds": 1}
-        for source in zone.sources
-        for run in source.runs
-        if run.status == "succeeded" and source.source_id in selected
-    ]
-    scans, catalogs, tables = [], [], []
-
-    def scan(**kwargs):
-        scans.append(kwargs)
-        assert kwargs["row_filter"] == And(
-            EqualTo("status", "succeeded"), In("source_id", selected)
-        )
-        return SimpleNamespace(to_arrow=lambda: SimpleNamespace(to_pylist=lambda: rows))
-
-    def load_table(identifier):
-        tables.append(identifier)
-        return SimpleNamespace(scan=scan)
-
-    def load_catalog(name, **properties):
-        catalogs.append((name, properties))
-        return SimpleNamespace(load_table=load_table)
-
-    monkeypatch.setattr(pyiceberg.catalog, "load_catalog", load_catalog)
-    assert (
-        _invoke(
-            zone,
-            "--from-runs-table",
-            "--source-id",
-            selected[1],
-            "--source-id",
-            selected[0],
-            "--source-id",
-            selected[0],
-            "--format",
-            "json",
-        )
-        == 0
-    )
-    report = json.loads(capsys.readouterr().out)
-    assert [row["source_id"] for row in report["sources"]] == selected
-    assert report["totals"]["breaching"] == 0
-    assert len(scans) == 1
-    assert catalogs == [("configured", expected_properties)]
-    assert tables == ["operator.history"]
-
-    fresh = next(source for source in zone.sources if source.source_id == "fixture.fresh")
-    document = yaml.safe_load(fresh.config_path.read_text())
-    document["operations"]["freshness"]["max_age"] = "1h"
-    fresh.config_path.write_text(yaml.safe_dump(document))
-    assert (
-        _invoke(
-            zone,
-            "--from-runs-table",
-            "--source-id",
-            selected[0],
-            "--source-id",
-            selected[1],
-            "--format",
-            "json",
-        )
-        == 1
-    )
-    changed = json.loads(capsys.readouterr().out)
-    assert changed["sources"][0]["outcome"] == "stale"
-    assert changed["sources"][0]["max_age_seconds"] == 3600
-
-
 def test_unknown_table_source_is_rejected_before_catalog_access(zone, monkeypatch, capsys):
     import janus.cli.status as status
 
@@ -555,3 +392,185 @@ def test_missing_profile_is_a_named_configuration_error(zone, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "missing.yaml" in captured.err
+
+
+class TestRunsTable:
+    """Require PyIceberg here; the container gate requires every case in this class."""
+
+    def test_runs_table_reader_matches_zone_using_one_fake_catalog_scan(
+        self, zone, monkeypatch, capsys
+    ):
+        pyiceberg_catalog = pytest.importorskip("pyiceberg.catalog")
+
+        import janus.observability.freshness  # noqa: F401
+
+        rows = [
+            {
+                "source_id": source.source_id,
+                "ended_at": run.ended_at,
+                "status": run.status,
+                "freshness_max_age_seconds": 1,
+            }
+            for source in zone.sources
+            for run in source.runs
+            if run.status == "succeeded"
+        ]
+        scans = []
+
+        def scan(**kwargs):
+            scans.append(kwargs)
+            return SimpleNamespace(to_arrow=lambda: SimpleNamespace(to_pylist=lambda: rows))
+
+        loaded = []
+
+        def load_table(identifier):
+            loaded.append(identifier)
+            return SimpleNamespace(scan=scan)
+
+        monkeypatch.setattr(
+            pyiceberg_catalog,
+            "load_catalog",
+            lambda *args, **kwargs: SimpleNamespace(load_table=load_table),
+        )
+        assert _invoke(zone, "--format", "json") == 1
+        metadata = json.loads(capsys.readouterr().out)
+        spark_before = {name for name in sys.modules if name.startswith("pyspark")}
+        assert _invoke(zone, "--from-runs-table", "--format", "json") == 1
+        table = json.loads(capsys.readouterr().out)
+        assert table["source"] == "runs_table"
+        expected = {
+            row["source_id"]: (row["outcome"], row["last_success_at"], row["max_age_seconds"])
+            for row in metadata["sources"]
+        }
+        assert expected
+        assert {
+            row["source_id"]: (row["outcome"], row["last_success_at"], row["max_age_seconds"])
+            for row in table["sources"]
+        } == expected
+        assert len(scans) == len(loaded) == 1
+        assert scans[0]["selected_fields"] == ("source_id", "ended_at", "freshness_max_age_seconds")
+        assert loaded == ["metadata.runs"]
+        by_id = {row["source_id"]: row for row in table["sources"]}
+        assert by_id["fixture.fresh"]["runs_scanned"] == 2
+        assert by_id["fixture.empty"]["runs_scanned"] == 0
+        assert all(row["unreadable_run_files"] == 0 for row in table["sources"])
+        # Rewriting every historical declaration must not move the answer.
+        for row in rows:
+            row["freshness_max_age_seconds"] = 10**9
+        assert _invoke(zone, "--from-runs-table", "--format", "json") == 1
+        assert json.loads(capsys.readouterr().out) == table
+        assert {name for name in sys.modules if name.startswith("pyspark")} == spark_before
+
+    @pytest.mark.parametrize("stage", ["catalog", "table", "scan"])
+    def test_unreachable_runs_table_exits_two_with_the_reason(
+        self, zone, stage, monkeypatch, capsys
+    ):
+        pyiceberg_catalog = pytest.importorskip("pyiceberg.catalog")
+
+        def refuse(*args, **kwargs):
+            raise ConnectionError(f"offline {stage}")
+
+        table = SimpleNamespace(scan=refuse)
+        catalog = SimpleNamespace(load_table=refuse if stage == "table" else lambda _: table)
+        monkeypatch.setattr(
+            pyiceberg_catalog,
+            "load_catalog",
+            refuse if stage == "catalog" else lambda *a, **k: catalog,
+        )
+        assert _invoke(zone, "--from-runs-table") == 2
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert f"Could not read runs table: offline {stage}" in captured.err
+
+    def test_table_selection_filters_one_scan_and_uses_the_configured_catalog(
+        self, zone, monkeypatch, capsys
+    ):
+        pyiceberg_catalog = pytest.importorskip("pyiceberg.catalog")
+        from pyiceberg.expressions import And, EqualTo, In
+
+        from janus.utils.catalog_properties import derive_pyiceberg_catalog_properties
+        from janus.utils.environment import load_environment_config, materialize_runtime_paths
+
+        profile = zone.root / "conf" / "environments" / "local.yaml"
+        document = yaml.safe_load(profile.read_text())
+        document["spark"]["iceberg"]["catalog_name"] = "configured"
+        document["observability"] = {"runs_table": "operator.history"}
+        profile.write_text(yaml.safe_dump(document))
+        config = load_environment_config("local", zone.root)
+        expected_properties = derive_pyiceberg_catalog_properties(
+            config, materialize_runtime_paths(config, zone.root)
+        )
+        selected = ["fixture.fresh", "fixture.undeclared"]
+        rows = [
+            {
+                "source_id": source.source_id,
+                "ended_at": run.ended_at,
+                "freshness_max_age_seconds": 1,
+            }
+            for source in zone.sources
+            for run in source.runs
+            if run.status == "succeeded" and source.source_id in selected
+        ]
+        scans, catalogs, tables = [], [], []
+
+        def scan(**kwargs):
+            scans.append(kwargs)
+            assert kwargs["row_filter"] == And(
+                EqualTo("status", "succeeded"), In("source_id", selected)
+            )
+            return SimpleNamespace(to_arrow=lambda: SimpleNamespace(to_pylist=lambda: rows))
+
+        def load_table(identifier):
+            tables.append(identifier)
+            return SimpleNamespace(scan=scan)
+
+        def load_catalog(name, **properties):
+            catalogs.append((name, properties))
+            return SimpleNamespace(load_table=load_table)
+
+        monkeypatch.setattr(pyiceberg_catalog, "load_catalog", load_catalog)
+        assert (
+            _invoke(
+                zone,
+                "--from-runs-table",
+                "--source-id",
+                selected[1],
+                "--source-id",
+                selected[0],
+                "--source-id",
+                selected[0],
+                "--format",
+                "json",
+            )
+            == 0
+        )
+        report = json.loads(capsys.readouterr().out)
+        assert [row["source_id"] for row in report["sources"]] == selected
+        assert report["totals"]["breaching"] == 0
+        assert len(scans) == 1
+        assert catalogs == [("configured", expected_properties)]
+        assert tables == ["operator.history"]
+
+        fresh = next(source for source in zone.sources if source.source_id == "fixture.fresh")
+        document = yaml.safe_load(fresh.config_path.read_text())
+        document["operations"]["freshness"]["max_age"] = "1h"
+        fresh.config_path.write_text(yaml.safe_dump(document))
+        assert (
+            _invoke(
+                zone,
+                "--from-runs-table",
+                "--source-id",
+                selected[0],
+                "--source-id",
+                selected[1],
+                "--format",
+                "json",
+            )
+            == 1
+        )
+        changed = json.loads(capsys.readouterr().out)
+        assert changed["sources"][0]["outcome"] == "stale"
+        assert changed["sources"][0]["max_age_seconds"] == 3600
+
+    def test_status_paths_import_no_spark_in_a_fresh_process(self, zone, record_property):
+        _check_status_imports(True, zone, record_property)

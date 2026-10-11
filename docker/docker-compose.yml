@@ -10,6 +10,9 @@ x-janus-service: &janus-service
   user: "${JANUS_CONTAINER_USER:-1000:1000}"
   stdin_open: true
   tty: true
+  # Let `up -d` refresh a single-file mount after an editor replaces the Makefile.
+  labels:
+    io.janus.makefile-checksum: "${JANUS_MAKEFILE_CHECKSUM:-unknown}"
   volumes:
     - ${JANUS_PROJECT_ROOT:-..}/Makefile:/workspace/Makefile:ro,z
     - ${JANUS_PROJECT_ROOT:-..}/deps:/workspace/deps:ro,z

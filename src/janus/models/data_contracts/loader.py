@@ -19,6 +19,7 @@ from janus.models.config.coercion import (
     _require_string,
 )
 from janus.models.config.issues import ValidationIssue
+from janus.models.config.yaml_support import safe_load_yaml
 from janus.models.data_contracts.errors import ContractValidationError
 from janus.models.data_contracts.model import (
     SUPPORTED_COMPATIBILITY_MODES,
@@ -77,7 +78,7 @@ def load_data_contract(path: Path) -> DataContract:
     issues: list[ValidationIssue] = []
 
     try:
-        payload: Any = yaml.safe_load(contract_bytes)
+        payload: Any = safe_load_yaml(contract_bytes)
     except yaml.YAMLError as exc:
         problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
         issues.append(ValidationIssue("<root>", f"must be valid YAML: {problem}"))

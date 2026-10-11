@@ -220,3 +220,48 @@ def test_metrics_acceptance_suite_is_required_by_local_and_hosted_spark_gates():
         "tests.support.required_test_gate" in command and "--suite metrics" in command
         for command in commands
     )
+
+
+@pytest.mark.parametrize("missing", range(len(REQUIRED_SUITES["status_catalog"])))
+def test_each_missing_catalog_status_case_fails_the_suite(tmp_path, missing):
+    cases = "".join(
+        f'<testcase classname="{class_name}" name="{test_name}" />'
+        for index, (class_name, test_name) in enumerate(REQUIRED_SUITES["status_catalog"])
+        if index != missing
+    )
+    with pytest.raises(AssertionError, match="collected 0 matching cases"):
+        assert_required_suite_ran(_report(tmp_path, cases), suite="status_catalog")
+
+
+@pytest.mark.parametrize("skipped", range(len(REQUIRED_SUITES["status_catalog"])))
+def test_each_skipped_catalog_status_case_fails_the_suite(tmp_path, skipped):
+    cases = "".join(
+        f'<testcase classname="{class_name}" name="{test_name}">'
+        f'{"<skipped />" if index == skipped else ""}</testcase>'
+        for index, (class_name, test_name) in enumerate(REQUIRED_SUITES["status_catalog"])
+    )
+    with pytest.raises(AssertionError, match="did not execute successfully"):
+        assert_required_suite_ran(_report(tmp_path, cases), suite="status_catalog")
+
+
+def test_all_catalog_status_cases_satisfy_the_suite(tmp_path):
+    cases = "".join(
+        f'<testcase classname="{class_name}" name="{test_name}" />'
+        for class_name, test_name in REQUIRED_SUITES["status_catalog"]
+    )
+    assert main([str(_report(tmp_path, cases)), "--suite", "status_catalog"]) == 0
+
+
+def test_catalog_status_cases_are_required_by_local_and_hosted_spark_gates():
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    makefile = (root / "Makefile").read_text()
+    recipe = makefile.split("\nci: ensure-up\n", 1)[1].split("\n\n", 1)[0]
+    assert "required_test_gate $(CI_UNIT_TEST_REPORT) --suite status_catalog" in recipe
+    workflow = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
+    assert any(
+        "tests.support.required_test_gate" in step.get("run", "")
+        and "--suite status_catalog" in step["run"]
+        for step in workflow["jobs"]["spark"]["steps"]
+    )

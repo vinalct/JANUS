@@ -141,6 +141,21 @@ jobs:
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \
             python -m mypy
+      - name: CLI response-time budget without coverage
+        run: |
+          set -o pipefail
+          JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m pytest -ra --no-cov \
+              tests/unit/toolchain/test_cli_surface.py::test_the_verb_completes_within_the_budget \
+              --durations=5 \
+              --junitxml=data/metadata/test-reports/ci-cli-timing.xml \
+            | tee data/pytest-cli-timing-output.txt
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate \
+              data/metadata/test-reports/ci-cli-timing.xml \
+              --class-name tests.unit.toolchain.test_cli_surface \
+              --test-name test_the_verb_completes_within_the_budget --minimum-passed 5
       - name: Full test suite + coverage in isolated Spark processes
         run: |
           set -o pipefail
@@ -152,8 +167,10 @@ jobs:
             python -m pytest -ra -m 'not cluster' tests/unit \
               --ignore=tests/unit/adapters/test_dagster_adapter.py \
               --deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule \
+              --deselect=tests/unit/toolchain/test_cli_surface.py::test_the_verb_completes_within_the_budget \
               --cov=janus \
               --cov-report= \
+              --durations=20 \
               --junitxml=data/metadata/test-reports/ci-unit.xml \
             | tee data/pytest-output.txt
           JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
@@ -166,6 +183,7 @@ jobs:
               --cov=janus \
               --cov-append \
               --cov-report= \
+              --durations=20 \
               --junitxml=data/metadata/test-reports/ci.xml \
             | tee -a data/pytest-output.txt
           JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
@@ -178,6 +196,7 @@ jobs:
               --cov-append \
               --cov-report=term-missing \
               --cov-report=xml:data/coverage.xml \
+              --durations=20 \
               --junitxml=data/metadata/test-reports/ci-large.xml \
             | tee -a data/pytest-output.txt
       - name: Assert the maintenance deletion boundary executed
@@ -257,6 +276,9 @@ jobs:
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \
             python -m tests.support.required_test_gate \
+              data/metadata/test-reports/ci-unit.xml --suite status_catalog
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate \
               data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml \
               --suite metrics
       - name: Assert the contract enforcement suites executed
@@ -331,4 +353,7 @@ jobs:
           path: |
             data/coverage.xml
             data/coverage-summary.txt
+            data/metadata/test-reports/ci*.xml
+            data/pytest-output.txt
+            data/pytest-cli-timing-output.txt
           if-no-files-found: warn

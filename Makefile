@@ -8,6 +8,8 @@ PYTHON ?= python
 JANUS_UID := $(shell id -u)
 JANUS_GID := $(shell id -g)
 JANUS_PROJECT_ROOT := $(CURDIR)
+# Atomic saves can leave the single-file bind mount on the previous Makefile inode.
+JANUS_MAKEFILE_CHECKSUM := $(shell cksum < "$(abspath $(lastword $(MAKEFILE_LIST)))")
 COMMA := ,
 
 ICEBERG_JAR_NAME := org.apache.iceberg_iceberg-spark-runtime-4.0_2.13-1.10.1.jar
@@ -26,6 +28,8 @@ METRICS_TEST_REPORT := data/metadata/test-reports/metrics.xml
 CI_TEST_REPORT := data/metadata/test-reports/ci.xml
 CI_UNIT_TEST_REPORT := data/metadata/test-reports/ci-unit.xml
 CI_LARGE_TEST_REPORT := data/metadata/test-reports/ci-large.xml
+CLI_TIMING_TEST_REPORT := data/metadata/test-reports/ci-cli-timing.xml
+CLI_TIMING_TEST := tests/unit/toolchain/test_cli_surface.py::test_the_verb_completes_within_the_budget
 CI_GATE_REPORTS := $(CI_TEST_REPORT) --additional-report $(CI_UNIT_TEST_REPORT) --additional-report $(CI_LARGE_TEST_REPORT)
 MAINTENANCE_TEST_REPORT := data/metadata/test-reports/maintenance.xml
 MAINTENANCE_SMOKE_ROOT := data/metadata/maintenance-smoke
@@ -36,6 +40,8 @@ DAGSTER_TESTS := tests/unit/adapters/test_dagster_adapter.py \
 SPARK_UNIT_TEST_ARGS := -ra -m 'not cluster' tests/unit \
 	--ignore=tests/unit/adapters/test_dagster_adapter.py \
 	--deselect=tests/unit/examples/test_orchestration_example.py::test_dagster_definitions_have_exact_edge_and_disabled_schedule
+# The two-second CLI requirement is measured separately, without coverage tracing.
+SPARK_COVERAGE_UNIT_TEST_ARGS := $(SPARK_UNIT_TEST_ARGS) --deselect=$(CLI_TIMING_TEST)
 SPARK_INTEGRATION_TEST_ARGS := -ra -m 'not cluster and not large_handoff' tests/integration \
 	--ignore=tests/integration/dagster
 SPARK_LARGE_TEST_ARGS := -ra -m 'not cluster and large_handoff' tests/integration/writers
@@ -172,7 +178,7 @@ define RUN_COMPOSE
 	compose_files="$$(case "$$compose_cmd" in podman* ) printf '%s' '-f $(COMPOSE_FILE) -f $(PODMAN_COMPOSE_FILE)' ;; * ) printf '%s' '-f $(COMPOSE_FILE)' ;; esac)"; \
 	container_user="$$(case "$$compose_cmd" in podman* ) printf '%s:%s' '$(JANUS_UID)' '$(JANUS_GID)' ;; * ) printf '%s:%s' '$(JANUS_UID)' '$(JANUS_GID)' ;; esac)"; \
 	$(COMPOSE_PRELUDE); \
-	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) $$compose_cmd $$compose_files $(1)
+	JANUS_CONTAINER_USER=$$container_user JANUS_UID=$(JANUS_UID) JANUS_GID=$(JANUS_GID) JANUS_PROJECT_ROOT=$(JANUS_PROJECT_ROOT) JANUS_MAKEFILE_CHECKSUM='$(JANUS_MAKEFILE_CHECKSUM)' $$compose_cmd $$compose_files $(1)
 endef
 
 .PHONY: bootstrap check-compose check-env up ensure-up seed-ivy down status logs shell pyspark-local lint typecheck test test-fast test-metrics test-handoff test-write-sizing test-contract-schema test-adapter test-maintenance test-maintenance-smoke ci require-environment maintain-dry-run maintain-apply validate run-local run-local-config docker-build docker-run clean cluster-secrets seed-cluster-jars up-cluster down-cluster status-cluster logs-cluster shell-cluster run-cluster test-cluster up-cluster-rest down-cluster-rest status-cluster-rest logs-cluster-rest shell-cluster-rest run-cluster-rest test-cluster-rest
@@ -300,7 +306,7 @@ test-write-sizing:
 # Dependency-free orchestration and repository guardrails, matching CI's host-side fast job.
 test-fast:
 	@mkdir -p "$(dir $(FAST_TEST_REPORT))"
-	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --junitxml="$(FAST_TEST_REPORT)"
+	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --durations=20 --junitxml="$(FAST_TEST_REPORT)"
 	@for class_name in $(FAST_REQUIRED_CLASSES) $(COMPACTION_REQUIRED_CLASSES) $(METRICS_REQUIRED_CLASSES); do \
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
@@ -350,20 +356,29 @@ test-maintenance-smoke: ensure-up
 	@cat "$(MAINTENANCE_SMOKE_OUTPUT)"
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.maintenance_smoke verify $(MAINTENANCE_SMOKE_ROOT) $(MAINTENANCE_SMOKE_OUTPUT))
 
+.PHONY: test-cli-timing
+
+# Keep the real CLI response-time requirement independent of coverage overhead.
+test-cli-timing: ensure-up
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m pytest -ra --no-cov $(CLI_TIMING_TEST) --durations=5 --junitxml=$(CLI_TIMING_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CLI_TIMING_TEST_REPORT) --class-name tests.unit.toolchain.test_cli_surface --test-name test_the_verb_completes_within_the_budget --minimum-passed 5)
+
 # Reproduce CI locally, with fresh Spark processes for units, integration and the 2 GiB case.
 # Coverage appends and required JUnit gates combine all three reports. Keep in lockstep with CI.
 ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m ruff check src tests)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m mypy)
-	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_UNIT_TEST_ARGS) --cov=janus --cov-report= --junitxml=$(CI_UNIT_TEST_REPORT))
-	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_INTEGRATION_TEST_ARGS) --cov=janus --cov-append --cov-report= --junitxml=$(CI_TEST_REPORT))
-	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_LARGE_TEST_ARGS) --cov=janus --cov-append --cov-report=term-missing --cov-report=xml:data/coverage.xml --junitxml=$(CI_LARGE_TEST_REPORT))
+	@$(MAKE) --no-print-directory -o ensure-up test-cli-timing
+	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_COVERAGE_UNIT_TEST_ARGS) --cov=janus --cov-report= --durations=20 --junitxml=$(CI_UNIT_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_INTEGRATION_TEST_ARGS) --cov=janus --cov-append --cov-report= --durations=20 --junitxml=$(CI_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) python -m pytest $(SPARK_LARGE_TEST_ARGS) --cov=janus --cov-append --cov-report=term-missing --cov-report=xml:data/coverage.xml --durations=20 --junitxml=$(CI_LARGE_TEST_REPORT))
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63)
 	@$(MAKE) --no-print-directory test-maintenance
 	@$(MAKE) --no-print-directory test-maintenance-smoke
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name tests.unit.observability.test_acceptance_evidence.TestReferenceContainerGoldens --minimum-passed 6)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(QUERYABLE_CLASS) --test-name $(AC1_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_SINK_CLASS) --minimum-passed 4)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_UNIT_TEST_REPORT) --suite status_catalog)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --suite metrics)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(RUNS_DECLARATION_CLASS) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(PREFLIGHT_REAL_CATALOG_CLASS) --minimum-passed 10)

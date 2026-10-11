@@ -186,6 +186,7 @@ MODELS_ALL: tuple[str, ...] = (
 
 LAYER_RANK: dict[str, int] = {
     "constants": 0,
+    "yaml_support": 0,  # parsing only; no imports from the model or config layers
     "issues": 1,
     "strategy_registry": 1,  # imports constants (0) only; never imports issues, and vice versa
     "coercion": 2,

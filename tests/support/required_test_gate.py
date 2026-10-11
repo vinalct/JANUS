@@ -8,6 +8,27 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 REQUIRED_SUITES = {
+    "status_catalog": (
+        (
+            "tests.unit.cli.test_status.TestRunsTable",
+            "test_runs_table_reader_matches_zone_using_one_fake_catalog_scan",
+        ),
+        (
+            "tests.unit.cli.test_status.TestRunsTable",
+            "test_status_paths_import_no_spark_in_a_fresh_process",
+        ),
+        *(
+            (
+                "tests.unit.cli.test_status.TestRunsTable",
+                f"test_unreachable_runs_table_exits_two_with_the_reason[{stage}]",
+            )
+            for stage in ("catalog", "table", "scan")
+        ),
+        (
+            "tests.unit.cli.test_status.TestRunsTable",
+            "test_table_selection_filters_one_scan_and_uses_the_configured_catalog",
+        ),
+    ),
     "metrics": (
         (
             "tests.integration.catalog_commits.test_runs_table_append_sink.TestOrder23Evolution",
