@@ -7,7 +7,7 @@ import json
 import os
 import socket
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -298,3 +298,154 @@ def hold_source_state_lock(
         logger=logger,
     ) as lock:
         yield lock
+
+
+@dataclass(frozen=True, slots=True)
+class LockedEntryPoint:
+    """A public execution boundary that holds the source lock through mutation."""
+
+    qualified_name: str
+    command: str
+    reason: str
+
+
+_LIVE = "janus.runtime.executor:SourceExecutor.execute"
+_REPLAY = "janus.scripts.raw_to_bronze:RawToBronzeLoader.ingest"
+_RELEASE = "janus.cli.dead_letters:_release"
+_RETRY = "janus.cli.dead_letters:_replay_execute"
+_MAINTAIN = "janus.cli.maintain:_run"
+
+LOCKED_ENTRY_POINTS: tuple[LockedEntryPoint, ...] = (
+    LockedEntryPoint(
+        _LIVE, COMMAND_RUN_EXECUTE, "Live execution writes source run and extraction state."
+    ),
+    LockedEntryPoint(
+        _REPLAY, COMMAND_RUN_REPLAY, "Raw replay writes run, validation and checkpoint state."
+    ),
+    LockedEntryPoint(
+        _RELEASE, COMMAND_DEAD_LETTERS_RELEASE, "Release updates dead letters and their history."
+    ),
+    LockedEntryPoint(
+        _RETRY, COMMAND_DEAD_LETTERS_REPLAY, "Hold one lock across release and resumed execution."
+    ),
+    LockedEntryPoint(
+        "janus.cli.checkpoint:_set",
+        COMMAND_CHECKPOINT_SET,
+        "Reset writes checkpoint state and history.",
+    ),
+    LockedEntryPoint(
+        "janus.cli.checkpoint:_clear",
+        COMMAND_CHECKPOINT_CLEAR,
+        "Clear writes checkpoint history before removing state.",
+    ),
+    LockedEntryPoint(
+        _MAINTAIN, COMMAND_MAINTAIN, "Retention deletes source metadata and raw artifacts."
+    ),
+)
+
+
+REACHED_THROUGH: Mapping[str, tuple[tuple[str, ...], str]] = {
+    "janus.runtime.executor:SourceExecutor._execute_locked": (
+        (_LIVE,),
+        "execute delegates its complete execution body under the lock (D-6).",
+    ),
+    "janus.scripts.raw_to_bronze:RawToBronzeLoader._ingest_locked": (
+        (_REPLAY,),
+        "ingest delegates its complete replay body under the lock (D-6).",
+    ),
+    "janus.runtime.contract_preflight:start_observed_preflight": (
+        (_LIVE, _REPLAY),
+        "Both locked bodies start run observation through this preflight helper.",
+    ),
+    "janus.quality.validators:QualityGate.validate_and_store": (
+        (_LIVE, _REPLAY),
+        "Both locked bodies persist the quality gate's validation report.",
+    ),
+    "janus.lineage.store:RunObserver.start_run": (
+        (_LIVE, _REPLAY),
+        "Locked preflight persists the initial run metadata.",
+    ),
+    "janus.lineage.store:RunObserver.record_success": (
+        (_LIVE, _REPLAY),
+        "Locked terminal observation persists run, lineage and checkpoint state.",
+    ),
+    "janus.lineage.store:RunObserver.record_failure": (
+        (_LIVE, _REPLAY),
+        "Locked terminal observation persists failed run and lineage evidence.",
+    ),
+    "janus.checkpoints.dead_letters:DeadLetterStore.release": (
+        (_RELEASE, _RETRY),
+        "The locked release operation clears current state when all entries are released.",
+    ),
+    "janus.strategies.api.run_state:ResumeState.load": (
+        (_LIVE,),
+        "Live API extraction clears progress and dead letters for a fresh run.",
+    ),
+    "janus.strategies.api.extraction:run_api_extraction": (
+        (_LIVE,),
+        "Live API extraction records failed inputs and between-input progress.",
+    ),
+    "janus.strategies.api.extraction:_clear_progress_if_run_is_complete": (
+        (_LIVE,),
+        "The API extraction completion path clears saved progress.",
+    ),
+    "janus.strategies.api.pagination_loop:extract_sequential_pages": (
+        (_LIVE,),
+        "API dispatch persists each completed page under the live execution lock.",
+    ),
+    "janus.strategies.api.pagination_loop:extract_concurrent_pages": (
+        (_LIVE,),
+        "API dispatch persists completed page progress under the live execution lock.",
+    ),
+    "janus.strategies.catalog.run_state:ResumeState.load": (
+        (_LIVE,),
+        "Live catalog extraction clears state before a fresh run.",
+    ),
+    "janus.strategies.catalog.extraction:run_catalog_extraction": (
+        (_LIVE,),
+        "Live catalog extraction records dead letters and clears completed progress.",
+    ),
+    "janus.strategies.catalog.pagination_loop:extract_request_input_pages": (
+        (_LIVE,),
+        "Catalog extraction persists completed pages under the live execution lock.",
+    ),
+    "janus.strategies.files.extraction:run_file_extraction": (
+        (_LIVE,),
+        "Live file extraction clears old dead letters and records failed downloads.",
+    ),
+    "janus.cli.maintain:_apply": (
+        (_MAINTAIN,),
+        "_run retains its ExitStack of acquired source locks through _apply.",
+    ),
+    "janus.maintenance.execute:execute_retention": (
+        (_MAINTAIN,),
+        "_apply dispatches retention items while _run holds source locks.",
+    ),
+    "janus.maintenance.execute:execute_item": (
+        (_MAINTAIN,),
+        "Retention dispatches metadata/raw deletions only for acquired sources.",
+    ),
+}
+
+# Include lower-level metadata writers so bypassing RunObserver is detected too.
+STATE_MUTATING_PRIMITIVES: tuple[str, ...] = (
+    "janus.lineage.store:RunObserver.start_run",
+    "janus.lineage.store:RunObserver.record_success",
+    "janus.lineage.store:RunObserver.record_failure",
+    "janus.lineage.store:RunMetadataStore.write",
+    "janus.lineage.store:LineageStore.write",
+    "janus.checkpoints.store:CheckpointStore.save",
+    "janus.checkpoints.store:CheckpointStore.reset",
+    "janus.checkpoints.store:CheckpointStore.clear_state",
+    "janus.checkpoints.dead_letters:DeadLetterStore.record",
+    "janus.checkpoints.dead_letters:DeadLetterStore.release",
+    "janus.checkpoints.dead_letters:DeadLetterStore.clear",
+    "janus.checkpoints.progress:ExtractionProgressStore.save",
+    "janus.checkpoints.progress:ExtractionProgressStore.save_between_inputs",
+    "janus.checkpoints.progress:ExtractionProgressStore.clear",
+    "janus.quality.store:ValidationReportStore.write",
+    "janus.maintenance.execute:execute_retention",
+    "janus.maintenance.execute:execute_item",
+    "janus.maintenance.execute:execute_metadata_item",
+    "janus.maintenance.execute:delete_prefix",
+)
