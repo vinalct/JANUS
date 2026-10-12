@@ -18,6 +18,7 @@ from janus.orchestration import (
     SkipExplanation,
     SourceAttempt,
     SourceOutcome,
+    root_failures,
     source_attempt_run_id,
 )
 from janus.utils.environment import load_environment_config
@@ -268,7 +269,7 @@ def _source_outcome(
             status="skipped",
             skip=SkipExplanation.create(
                 direct_blocking_upstream_ids=blockers,
-                root_failed_source_ids=_root_failures(blockers, completed),
+                root_failed_source_ids=root_failures(blockers, completed),
             ),
         )
 
@@ -334,20 +335,6 @@ def _reconcile_native_failure(
         reason=native_failure or "Dagster failed the step after JANUS execution succeeded",
     )
     return (*attempts[:-1], replace(final, status="failed", failure=failure))
-
-
-def _root_failures(
-    blockers: Sequence[str],
-    outcomes: Mapping[str, SourceOutcome],
-) -> tuple[str, ...]:
-    roots: set[str] = set()
-    for source_id in blockers:
-        outcome = outcomes[source_id]
-        if outcome.status == "failed":
-            roots.add(source_id)
-        elif outcome.skip is not None:
-            roots.update(outcome.skip.root_failed_source_ids)
-    return tuple(sorted(roots))
 
 
 def _failure_messages(instance: DagsterInstance, run_id: str) -> dict[str, str]:

@@ -7,6 +7,10 @@ class BatchPlanningError(ValueError):
     """Base class for a refusal that invalidates the whole batch request."""
 
 
+class SchedulingOrderError(BatchPlanningError):
+    """Raised when a node is decided before all its upstream outcomes are terminal."""
+
+
 class SelectionFilterError(BatchPlanningError):
     """Raised when the requested selectors cannot be interpreted as one filter."""
 

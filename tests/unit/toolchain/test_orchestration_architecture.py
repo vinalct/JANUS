@@ -65,6 +65,7 @@ ADAPTER_IMPLEMENTATION_IMPORTS = (
 PURE_GRAPH_ANCHORS = {
     "models/dependencies.py",
     "orchestration/planning.py",
+    "orchestration/scheduling.py",
     "orchestration/selection.py",
     "registry/dependencies.py",
     "registry/loader.py",
@@ -72,6 +73,7 @@ PURE_GRAPH_ANCHORS = {
 PURE_GRAPH_FORBIDDEN_IMPORTS = (
     "airflow",
     "dagster",
+    "multiprocessing",
     "http.client",
     "pyiceberg",
     "pyspark",
@@ -79,6 +81,7 @@ PURE_GRAPH_FORBIDDEN_IMPORTS = (
     "socket",
     "sqlalchemy",
     "sqlite3",
+    "threading",
     "urllib.request",
     "janus.adapters",
     "janus.checkpoints",
@@ -92,6 +95,12 @@ PURE_GRAPH_FORBIDDEN_IMPORTS = (
     "janus.utils.spark",
     "janus.writers",
 )
+
+# The existing persistence and clock seams perform I/O and read time by design.
+PURE_OS_TIME_ALLOWANCES = {
+    "orchestration/persistence.py": ("os",),
+    "orchestration/timing.py": ("time",),
+}
 
 
 def _core_modules() -> tuple[Path, ...]:
@@ -204,6 +213,22 @@ def test_graph_and_selection_modules_cannot_reach_compute_or_catalog_clients() -
     )
 
 
+def test_pure_modules_cannot_import_os_or_time_outside_the_existing_seams() -> None:
+    modules = _pure_graph_modules()
+    matched = {str(module.relative_to(PACKAGE_ROOT)) for module in modules}
+    assert matched >= PURE_GRAPH_ANCHORS
+    violations = {}
+    for module in modules:
+        relative = str(module.relative_to(PACKAGE_ROOT))
+        allowed = PURE_OS_TIME_ALLOWANCES.get(relative, ())
+        forbidden = tuple(root for root in ("os", "time") if root not in allowed)
+        if found := _forbidden_imports(module.read_text(encoding="utf-8"), forbidden):
+            violations[relative] = found
+    assert not violations, (
+        f"pure graph or orchestration code imported OS or clock I/O: {violations}"
+    )
+
+
 @pytest.mark.parametrize(
     ("source", "roots"),
     [
@@ -217,6 +242,11 @@ def test_graph_and_selection_modules_cannot_reach_compute_or_catalog_clients() -
         ),
         ("from urllib.request import urlopen", ADAPTER_IMPLEMENTATION_IMPORTS),
         ("from pyspark.sql import SparkSession", PURE_GRAPH_FORBIDDEN_IMPORTS),
+        ("from janus.runtime import BatchExecutor", PURE_GRAPH_FORBIDDEN_IMPORTS),
+        ("import multiprocessing", PURE_GRAPH_FORBIDDEN_IMPORTS),
+        ("from threading import Thread", PURE_GRAPH_FORBIDDEN_IMPORTS),
+        ("import time", ("os", "time")),
+        ("from os import getpid", ("os", "time")),
         ("from ...strategies.http import transport", PURE_GRAPH_FORBIDDEN_IMPORTS),
     ],
 )
