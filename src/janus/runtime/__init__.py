@@ -1,4 +1,5 @@
 from janus.runtime.batch import (
+    LOCK_FAILURE_PHASE,
     BatchExecutionInterrupted,
     BatchExecutionPreflightError,
     BatchExecutor,
@@ -26,6 +27,7 @@ from janus.runtime.materialize import BronzeMaterializer
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 
 __all__ = [
+    "LOCK_FAILURE_PHASE",
     "PREFLIGHT_ATTRIBUTE",
     "BatchExecutionInterrupted",
     "BatchExecutionPreflightError",

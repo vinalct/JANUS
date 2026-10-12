@@ -9,7 +9,9 @@ import pytest
 
 from janus.lineage import MetadataZonePaths, RunObserver
 from janus.runtime import (
+    LOCK_FAILURE_PHASE,
     BatchExecutor,
+    SourceExecutionService,
     SourceExecutor,
     SparkSessionProvider,
     execute_source_attempt,
@@ -22,7 +24,6 @@ from tests.support.parallel_execution import (
     REPO_ROOT,
     file_snapshot,
     held_lock,
-    lock_at,
     planned_project,
     probe_lock,
 )
@@ -125,25 +126,50 @@ def test_lock_spans_observation_and_terminal_persistence(tmp_path, monkeypatch, 
     assert probe_lock(path)["acquired"] is True
 
 
-@pytest.mark.xfail(strict=True, reason="attempts do not classify lock refusal")
-def test_shared_attempt_seam_classifies_lock_refusal(tmp_path):
-    from janus.runtime.locking import SourceLockedError
-
+def test_shared_attempt_seam_classifies_lock_refusal(tmp_path, monkeypatch):
     root, _registry, plan, config, paths = planned_project(tmp_path)
-    holder = lock_at(root / "data/metadata/A/.lock").holder
+    provider = SparkSessionProvider(
+        config, paths, session_factory=lambda: pytest.fail("lock refusal started Spark")
+    )
+    service = SourceExecutionService(provider_factory=lambda *args: provider)
 
-    class Refused:
-        def execute(self, *args):
-            raise SourceLockedError(root / "data/metadata/A/.lock", holder, wanted=holder)
+    def reject_observer(*args, **kwargs):
+        pytest.fail("lock refusal wired an observer")
 
-    attempt = execute_source_attempt(plan.source("A"), config, paths, source_execution=Refused())
+    monkeypatch.setattr("janus.runtime.executor.wire_run_event_emitter", reject_observer)
+    with held_lock(root / "data/metadata/A/.lock") as (_process, _release, holder):
+        before = file_snapshot(root / "data")
+        attempt = execute_source_attempt(plan.source("A"), config, paths, source_execution=service)
+        assert file_snapshot(root / "data") == before
     assert attempt.status == "failed"
-    assert attempt.failure.phase == "lock"
+    assert attempt.failure.phase == LOCK_FAILURE_PHASE
     assert attempt.failure.error_type == "SourceLockedError"
+    for key in ("pid", "hostname", "run_id", "acquired_at"):
+        assert str(holder[key]) in attempt.failure.reason
     assert dict(attempt.evidence) == {}
+    assert provider.was_started is False
 
 
-@pytest.mark.xfail(strict=True, reason="batch lock evidence and skip causes absent")
+def test_shared_attempt_seam_classifies_unsupported_locking(tmp_path, monkeypatch):
+    root, _registry, plan, config, paths = planned_project(tmp_path)
+    provider = SparkSessionProvider(
+        config, paths, session_factory=lambda: pytest.fail("unsupported locking started Spark")
+    )
+    service = SourceExecutionService(provider_factory=lambda *args: provider)
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    before = file_snapshot(root / "data")
+
+    attempt = execute_source_attempt(plan.source("A"), config, paths, source_execution=service)
+
+    assert attempt.status == "failed"
+    assert attempt.failure.phase == LOCK_FAILURE_PHASE
+    assert attempt.failure.error_type == "LockUnsupportedError"
+    assert "requires POSIX fcntl" in attempt.failure.reason
+    assert dict(attempt.evidence) == {}
+    assert provider.was_started is False
+    assert file_snapshot(root / "data") == before
+
+
 def test_locked_batch_source_skips_dependents_and_peer_succeeds(tmp_path, monkeypatch, capsys):
     from janus.cli import run_all
     from janus.main import main
@@ -167,15 +193,22 @@ def test_locked_batch_source_skips_dependents_and_peer_succeeds(tmp_path, monkey
     monkeypatch.setattr(
         run_all,
         "_build_batch_executor",
-        lambda logger: BatchExecutor(source_execution=LockedExecution("chain")),
+        lambda logger: BatchExecutor(source_execution=LockedExecution("chain_and_peer")),
     )
-    with held_lock(root / "data/metadata/A/.lock"):
+    metadata = root / "data/metadata/A"
+    with held_lock(metadata / ".lock") as (_process, _release, holder):
+        before = file_snapshot(metadata)
         code = main(["run-all", "--project-root", str(root), "--pipeline-run-id", "locked"])
+        assert file_snapshot(metadata) == before
     sources = {
         source["source_id"]: source for source in json.loads(capsys.readouterr().out)["sources"]
     }
     assert code == 1
-    assert sources["A"]["failure"]["phase"] == "lock"
+    assert sources["A"]["status"] == "failed"
+    assert sources["A"]["failure"]["phase"] == LOCK_FAILURE_PHASE
+    assert sources["A"]["failure"]["error_type"] == "SourceLockedError"
+    for key in ("pid", "hostname", "run_id", "acquired_at"):
+        assert str(holder[key]) in sources["A"]["failure"]["reason"]
     assert sources["A"]["attempts"][0]["evidence"] == {}
     assert sources["B"]["status"] == "skipped"
     assert sources["B"]["skip"] == {
@@ -184,5 +217,6 @@ def test_locked_batch_source_skips_dependents_and_peer_succeeds(tmp_path, monkey
         "root_failed_source_ids": ["A"],
     }
     assert sources["C"]["status"] == "succeeded"
-    assert not list((root / "data/metadata/A/runs").glob("*.json"))
+    assert set(file_snapshot(metadata)) == {".lock"}
+    assert not any((metadata / name).exists() for name in ("runs", "lineage", "checkpoints"))
     assert plan.source_ids == ("A", "B", "C")

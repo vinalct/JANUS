@@ -225,8 +225,10 @@ and no second runs-table row or lineage event is emitted. Runs with `within` or
 `undeclared` outcomes are unaffected, and an already failed run retains its original
 failure phase. Single-source `janus run` rejects `--fail-on-budget-breach` by name.
 
-Failure phases include `planning`, `execution`, `cleanup`, `result_translation`, and
+Failure phases include `planning`, `lock`, `execution`, `cleanup`, `result_translation`, and
 `budget`; a budget phase means the data is fine and the schedule's assumption is not.
+A `lock` phase means another process held this source's state lock; nothing ran; the reason
+names the holder. An unsupported locking platform also reports `lock`, naming the requirement.
 The policy travels on `BatchPlanRequest.fail_on_budget_breach` (default `False`).
 Dagster uses that same request through the shared attempt seam; an injected
 `DagsterAdapterServices.batch_planner` can supply requests with the policy enabled.

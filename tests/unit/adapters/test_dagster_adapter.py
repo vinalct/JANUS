@@ -20,13 +20,18 @@ from janus.adapters.dagster import (  # noqa: E402
     source_op_name,
 )
 from janus.planner import Planner  # noqa: E402
-from janus.runtime import SourceExecutor  # noqa: E402
+from janus.runtime import (  # noqa: E402
+    LOCK_FAILURE_PHASE,
+    SourceExecutionService,
+    SourceExecutor,
+)
 from tests.support.orchestration import (  # noqa: E402
     SourceSpec,
     build_graph_project,
     source_payload,
     write_project,
 )
+from tests.support.parallel_execution import file_snapshot, held_lock  # noqa: E402
 
 
 def _environment_config() -> dict[str, Any]:
@@ -260,6 +265,41 @@ def test_failure_blocks_descendants_but_independent_peer_finishes_and_is_collect
 
     repeated = adapter.collect(instance, result.run_id)
     assert repeated.to_summary() == outcome.to_summary()
+    stored = json.loads(outcome.summary_persistence.path.read_text(encoding="utf-8"))
+    assert stored == outcome.to_summary()
+
+
+def test_in_process_lock_refusal_is_collected_with_holder_and_skip_causes(tmp_path):
+    root = build_graph_project(tmp_path, "chain_and_peer")
+    service = SourceExecutionService()
+
+    class LockedExecution(RecordingExecution):
+        def execute(self, planned_run, environment_config, resolved_paths):
+            if planned_run.plan.source.source_id == "A":
+                return service.execute(planned_run, environment_config, resolved_paths)
+            return super().execute(planned_run, environment_config, resolved_paths)
+
+    adapter = _adapter(root, LockedExecution())
+    metadata = root / "data/metadata/A"
+    with held_lock(metadata / ".lock") as (_process, _release, holder):
+        before = file_snapshot(metadata)
+        result, outcome = adapter.execute_in_process()
+        assert file_snapshot(metadata) == before
+
+    sources = _sources(outcome)
+    assert not result.success
+    assert outcome.status == "failed"
+    assert sources["A"].status == "failed"
+    assert sources["A"].failure.phase == LOCK_FAILURE_PHASE
+    assert sources["A"].failure.error_type == "SourceLockedError"
+    for key in ("pid", "hostname", "run_id", "acquired_at"):
+        assert str(holder[key]) in sources["A"].failure.reason
+    assert dict(sources["A"].attempts[0].evidence) == {}
+    assert sources["B"].status == "skipped"
+    assert sources["B"].skip.direct_blocking_upstream_ids == ("A",)
+    assert sources["B"].skip.root_failed_source_ids == ("A",)
+    assert sources["D"].skip.root_failed_source_ids == ("A",)
+    assert sources["C"].status == "succeeded"
     stored = json.loads(outcome.summary_persistence.path.read_text(encoding="utf-8"))
     assert stored == outcome.to_summary()
 

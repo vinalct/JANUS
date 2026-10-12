@@ -26,10 +26,13 @@ from janus.orchestration.timing import ExecutionTiming, PipelineClock
 from janus.planner import PlannedRun
 from janus.registry import SourceRegistry
 from janus.runtime.executor import ExecutedRun, SourceExecutor
+from janus.runtime.locking import LockUnsupportedError, SourceLockedError
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.utils.environment import RuntimeLocation
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout
+
+LOCK_FAILURE_PHASE = "lock"
 
 
 class SparkProviderFactory(Protocol):
@@ -423,6 +426,16 @@ def _attempt_from_exception(
     timing: ExecutionTiming,
     error: Exception,
 ) -> SourceAttempt:
+    if isinstance(error, SourceLockedError | LockUnsupportedError):
+        # Lock refusal precedes execution: there is no run evidence to translate.
+        return SourceAttempt.failed_from_exception(
+            source_id=planned_source.source_id,
+            run_id=planned_source.run_id,
+            attempt=planned_source.attempt,
+            timing=timing,
+            error=error,
+            phase=LOCK_FAILURE_PHASE,
+        )
     if not isinstance(error, SourceCleanupError):
         return SourceAttempt.failed_from_exception(
             source_id=planned_source.source_id,
