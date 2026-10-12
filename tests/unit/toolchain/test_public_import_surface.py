@@ -71,6 +71,22 @@ MODELS_ALL: tuple[str, ...] = (
 
 #: Import paths that exist today and must keep working.
 PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
+    "janus.runtime": (
+        "LockHolder",
+        "LockUnsupportedError",
+        "SourceLockedError",
+        "SourceStateLock",
+        "hold_source_state_lock",
+        "source_state_lock_path",
+    ),
+    "janus.runtime.locking": (
+        "LockHolder",
+        "LockUnsupportedError",
+        "SourceLockedError",
+        "SourceStateLock",
+        "hold_source_state_lock",
+        "source_state_lock_path",
+    ),
     "janus.maintenance": (
         "MaintenancePolicy",
         "MaintenanceProfileError",

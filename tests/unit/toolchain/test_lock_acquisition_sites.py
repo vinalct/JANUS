@@ -22,7 +22,7 @@ PRIMITIVES = {
     "release",
 }
 HELPERS = {"hold_source_state_lock", "hold_operator_source_lock", "source_lock"}
-pytestmark = pytest.mark.xfail(
+needs_lock_sites = pytest.mark.xfail(
     strict=True,
     reason="locked entry-point registry and acquisition sites absent",
 )
@@ -163,6 +163,7 @@ def resolve_function(reference):
     return value
 
 
+@needs_lock_sites
 def test_registered_entry_points_resolve_and_acquire_before_mutation():
     entries, reached = registry()
     assert entries
@@ -191,6 +192,7 @@ def functions_with_scopes(tree, prefix=""):
             yield f"{prefix}{node.name}", node
 
 
+@needs_lock_sites
 def test_package_primitive_callers_are_registered_or_reached_through():
     entries, reached = registry()
     allowed = {entry.qualified_name for entry in entries} | reached.keys()
@@ -216,6 +218,7 @@ def test_package_primitive_callers_are_registered_or_reached_through():
     assert [(name, line) for name, line in sites if name not in allowed] == []
 
 
+@needs_lock_sites
 def test_exactly_one_lock_implementation_and_no_replaced_inode():
     registry()
     paths = sorted(PACKAGE.rglob("*.py"))
@@ -227,6 +230,7 @@ def test_exactly_one_lock_implementation_and_no_replaced_inode():
     assert replaces_lock((PACKAGE / "runtime/locking.py").read_text()) is False
 
 
+@needs_lock_sites
 def test_read_only_operator_entry_points_do_not_acquire_locks():
     registry()
     references = (
@@ -244,6 +248,7 @@ def test_read_only_operator_entry_points_do_not_acquire_locks():
         )
 
 
+@needs_lock_sites
 @pytest.mark.parametrize(
     "detector,bad,clean",
     [
@@ -297,6 +302,7 @@ def test_detector_flags_violation_and_accepts_clean_form(detector, bad, clean):
     registry()
 
 
+@needs_lock_sites
 def test_backward_detector_flags_new_caller_and_accepts_registered_caller():
     snippet = "def release_source():\n DeadLetterStore().release(plan)"
     assert unregistered_mutations(snippet, set()) == ["release_source"]

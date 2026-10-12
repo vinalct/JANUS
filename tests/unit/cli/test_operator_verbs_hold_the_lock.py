@@ -11,7 +11,7 @@ from tests.unit.cli.test_checkpoint_cli import _seed as seed_checkpoint
 from tests.unit.cli.test_dead_letters_cli import _ExecutedRun
 from tests.unit.cli.test_dead_letters_cli import _seed as seed_dead_letters
 
-pytestmark = pytest.mark.xfail(
+needs_operator_lock = pytest.mark.xfail(
     strict=True,
     reason="operator verbs do not hold the source-state lock",
 )
@@ -30,6 +30,7 @@ def invoke(root, *argv):
     return run_janus((*argv, "--project-root", str(root), "--source-id", CLEAN_PRODUCER))
 
 
+@needs_operator_lock
 @pytest.mark.parametrize(
     "argv",
     [
@@ -71,6 +72,7 @@ def test_read_only_verb_succeeds_while_source_locked(seeded, monkeypatch, argv):
         assert file_snapshot(metadata) == before
 
 
+@needs_operator_lock
 def test_replay_holds_one_lock_across_release_and_execution(seeded, monkeypatch):
     from janus.runtime import SourceExecutor
     from janus.runtime.locking import SourceStateLock  # noqa: F401

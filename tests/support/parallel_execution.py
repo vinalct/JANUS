@@ -124,7 +124,10 @@ def held_lock(path):
         assert "helper_error" not in holder, holder
         yield process, release, holder
     finally:
-        release.set()
+        # A killed Event waiter leaves notify's acknowledgement semaphore orphaned.
+        # Do not notify a holder that is already dead: Event.set() can block forever.
+        if process.is_alive():
+            release.set()
         process.join(5)
         if process.is_alive():
             process.kill()
@@ -176,6 +179,9 @@ def exec_lock_holder(path, ready, proceed, connection):
     """exec bypasses Python cleanup; CLOEXEC must release the live descriptor."""
     lock = lock_at(path)
     lock.acquire()
+    # multiprocessing makes its passed pipe inheritable during spawn. EOF is the
+    # exec handshake, so only that diagnostic descriptor needs its default restored.
+    os.set_inheritable(connection.fileno(), False)
     connection.send(os.getpid())
     ready.set()
     assert proceed.wait(15)
