@@ -159,11 +159,31 @@ def test_state_paths_are_protected_even_when_absent(planted):
             "extraction_progress.json",
         )
     }
+    expected.update(planted.root / source / ".lock" for source in SOURCES)
     for path in expected:
-        path.unlink()
+        path.unlink(missing_ok=True)
     _, inventory = _collect(planted)
     assert inventory.protected_paths == expected
     assert inventory.live_raw_run_segments == {}
+
+
+def test_executor_rechecks_lock_path_from_inventory_protected_set(planted, policy_config):
+    path = planted.root / SOURCES[0] / ".lock"
+    path.write_text("holder diagnostics\n")
+    inode = path.stat().st_ino
+    plan = _plan(planted, policy_config)
+    assert str(path) in {item.target for item in plan.protected}
+    planning = import_module("janus.maintenance.planning")
+    forged = replace(
+        plan, items=(planning.PlannedItem("metadata", str(path), "delete_file", {}),)
+    )
+    policy = import_module("janus.maintenance.settings").resolve_maintenance_settings(policy_config)
+    (outcome,) = import_module("janus.maintenance.execute").execute_retention(
+        forged, policy=policy, session=None, catalog_name="unused"
+    )
+    assert outcome.status == "failed"
+    assert outcome.failure_type == "MaintenanceInvariantError"
+    assert path.read_text() == "holder diagnostics\n" and path.stat().st_ino == inode
 
 
 @pytest.mark.parametrize("family", FAMILIES)
@@ -310,7 +330,7 @@ def test_source_filter_keeps_other_sources_and_shared_summaries(planted, policy_
         zone_plans(planted), zone_layout(planted), source_ids=selected
     )
     assert {entry.source_id for entry in inventory.artifacts} == {SOURCES[0], None}
-    assert len(inventory.protected_paths) == 3
+    assert len(inventory.protected_paths) == 4
     policy = import_module("janus.maintenance.settings").resolve_maintenance_settings(policy_config)
     plan = import_module("janus.maintenance.planning").plan_retention(
         api.MaintenanceInventory(metadata=inventory),

@@ -26,11 +26,21 @@ COMMAND_DEAD_LETTERS_RELEASE = "dead-letters release"
 COMMAND_DEAD_LETTERS_REPLAY = "dead-letters replay --execute"
 COMMAND_CHECKPOINT_SET = "checkpoint set"
 COMMAND_CHECKPOINT_CLEAR = "checkpoint clear"
+COMMAND_MAINTAIN = "maintain"
 _HOLDER_READ_LIMIT = 64 * 1024
 
 
 class LockUnsupportedError(RuntimeError):
     """Source-state locking cannot work here; refuse to run unprotected."""
+
+
+def source_state_lock_supported() -> bool:
+    """Probe platform support without creating a lock file or acquiring a lock."""
+    try:
+        import fcntl  # noqa: F401
+    except ImportError:
+        return False
+    return os.name == "posix"
 
 
 def source_state_lock_path(plan: ExecutionPlan, storage_layout: StorageLayout) -> Path:

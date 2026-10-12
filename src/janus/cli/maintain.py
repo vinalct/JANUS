@@ -15,11 +15,15 @@ import yaml
 
 from janus.cli.common import format_runtime_permission_error
 from janus.maintenance.execute import execute_retention
-from janus.maintenance.inventory import MaintenanceInventory, collect_inventory
+from janus.maintenance.inventory import (
+    MaintenanceInventory,
+    collect_inventory,
+    plan_maintenance_sources,
+)
 from janus.maintenance.locking import (
     LOCKED_SOURCE_REASON,
     MaintenanceLock,
-    NullMaintenanceLock,
+    SourceStateMaintenanceLock,
     source_lock,
 )
 from janus.maintenance.planning import PlannedItem, RetentionPlan, plan_retention
@@ -31,6 +35,7 @@ from janus.maintenance.records import (
 )
 from janus.maintenance.settings import MaintenancePolicy, resolve_maintenance_settings
 from janus.registry import SourceNotFoundError, SourceRegistry, load_registry
+from janus.runtime.locking import LockUnsupportedError, source_state_lock_supported
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.utils.catalog_properties import derive_pyiceberg_catalog_name
 from janus.utils.environment import RuntimeLocation, load_environment_config, prepare_runtime
@@ -116,6 +121,7 @@ class _PreparedMaintenance:
     source_ids: frozenset[str] | None
     store: MaintenanceRecordStore
     logger: StructuredLogger
+    lock: MaintenanceLock
 
 
 @dataclass(slots=True)
@@ -146,22 +152,25 @@ class _Compute:
 def maintain_command(
     args: argparse.Namespace,
     *,
-    lock: MaintenanceLock = NullMaintenanceLock(),
+    lock: MaintenanceLock | None = None,
 ) -> int:
     """Exit 2 before an attempt, 1 for operational failures, or 0 including empty plans."""
     now = datetime.now(tz=UTC)
     started = perf_counter()
     try:
         _reject_other_options(args)
-        prepared = _prepare(args)
+        prepared = _prepare(args, now=now, lock=lock)
     except PermissionError as exc:
         return _refuse(format_runtime_permission_error(exc))
-    except (OSError, KeyError, TypeError, ValueError, SourceNotFoundError, yaml.YAMLError) as exc:
+    except (
+        OSError, KeyError, TypeError, ValueError, SourceNotFoundError, yaml.YAMLError,
+        LockUnsupportedError,
+    ) as exc:
         return _refuse(str(exc))
 
     try:
-        plan, record = _run(prepared, args, now, started, lock)
-    except ValueError as exc:
+        plan, record = _run(prepared, args, now, started, prepared.lock)
+    except (ValueError, LockUnsupportedError) as exc:
         return _refuse(str(exc))
     except Exception as exc:
         print(f"janus maintain: maintenance failed: {exc}", file=sys.stderr)
@@ -198,7 +207,9 @@ def _reject_other_options(args: argparse.Namespace) -> None:
             raise ValueError(f"--{option} is not a maintain option")
 
 
-def _prepare(args: argparse.Namespace) -> _PreparedMaintenance:
+def _prepare(
+    args: argparse.Namespace, *, now: datetime, lock: MaintenanceLock | None
+) -> _PreparedMaintenance:
     project_root = args.project_root.resolve()
     config = load_environment_config(args.environment, project_root)
     paths = prepare_runtime(config, project_root)
@@ -209,6 +220,19 @@ def _prepare(args: argparse.Namespace) -> _PreparedMaintenance:
         "janus.maintenance",
         level=config.get("runtime", {}).get("log_level", "INFO"),
     ).bind(environment=args.environment, project_root=str(project_root))
+    storage_layout = StorageLayout.from_environment_config(config, project_root)
+    if lock is None:
+        plans = {}
+        if zones & SOURCE_SCOPED_ZONES:
+            if not source_state_lock_supported():
+                raise LockUnsupportedError("source-state locking requires POSIX fcntl")
+            plans = plan_maintenance_sources(registry, config, now=now, source_ids=source_ids)
+        lock = SourceStateMaintenanceLock(
+            plans=plans,
+            storage_layout=storage_layout,
+            wait_seconds=0.0,
+            logger=logger,
+        )
     return _PreparedMaintenance(
         config,
         paths,
@@ -216,8 +240,9 @@ def _prepare(args: argparse.Namespace) -> _PreparedMaintenance:
         policy,
         zones,
         source_ids,
-        MaintenanceRecordStore(StorageLayout.from_environment_config(config, project_root)),
+        MaintenanceRecordStore(storage_layout),
         logger,
+        lock,
     )
 
 
@@ -286,7 +311,7 @@ def _run(
         interruption = exc
         items = tuple(pending)
         failures.append(RecordFailure("interrupted", type(exc).__name__, str(exc)))
-    except ValueError:
+    except (ValueError, LockUnsupportedError):
         raise
     except Exception as exc:
         failures.append(RecordFailure("maintenance", type(exc).__name__, str(exc)))

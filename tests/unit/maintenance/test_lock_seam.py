@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import io
 import json
+import sys
 from copy import deepcopy
 from datetime import timedelta
 from pathlib import Path
@@ -18,7 +19,9 @@ from janus.maintenance.locking import (
     LOCKED_SOURCE_REASON,
     MaintenanceLock,
     NullMaintenanceLock,
+    SourceStateMaintenanceLock,
 )
+from janus.runtime.locking import LockUnsupportedError, source_state_lock_supported
 from tests.support.operator_cli import CliResult, arm_spark_tripwire
 from tests.support.semantics_fixtures import CLEAN, install_profile, materialize
 
@@ -287,7 +290,10 @@ def test_null_lock_is_recorded_and_warning_tracks_selected_zones(
     session = MagicMock()
     session.sql.return_value.collect.return_value = []
     monkeypatch.setattr(maintain._Compute, "get_session", lambda self: session)
-    result = _invoke(project, "--zone", zone, "--format", format, *(("--apply",) if apply else ()))
+    result = _invoke(
+        project, "--zone", zone, "--format", format, *(("--apply",) if apply else ()),
+        lock=NullMaintenanceLock(),
+    )
     assert result.exit_code == 0, result.output
     assert _record(project)["lock"] == "none"
     stream = result.stderr if format == "json" else result.stdout
@@ -306,9 +312,9 @@ def test_injected_lock_does_not_leak_into_next_invocation(project):
     assert result.exit_code == 0, result.output
     result = _invoke(project, "--zone", "metadata", "--format", "json")
     assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["lock"] == "none"
+    assert json.loads(result.stdout)["lock"] == "flock"
     assert all(item["status"] == "planned" for item in json.loads(result.stdout)["items"])
-    assert WARNING in result.stderr
+    assert WARNING not in result.stderr
 
 
 def test_locked_source_preserves_shared_pipeline_summary(project, now):
@@ -363,12 +369,13 @@ def test_contention_does_not_filter_bronze_sources_or_shared_zones(project, monk
 def test_documentation_states_no_overlap_requirement_and_cron_caveat():
     docs = Path(__file__).resolve().parents[3] / "docs/maintenance.md"
     text = docs.read_text()
-    assert "Do not run `janus maintain` while a run of the same source is in flight" in text
-    assert "Cron" in text and "serialise" in text
-    assert 'lock: "none"' in text
+    assert "holds each source's state lock" in text
+    assert "source_locked" in text
+    assert "Cron" in text and "needs no external serialisation" in text
+    assert 'lock: "flock"' in text
     assert WARNING in text
 
-@pytest.mark.xfail(strict=True, reason="maintain still defaults to a null lock")
+
 def test_production_maintain_records_flock_without_warning(project):
     result = _invoke(project, "--zone", "metadata", "--format", "json")
     assert result.exit_code == 0, result.output
@@ -377,7 +384,6 @@ def test_production_maintain_records_flock_without_warning(project):
     assert "LOCK_WARNING" not in result.output
 
 
-@pytest.mark.xfail(strict=True, reason="maintain does not refuse held source locks")
 def test_real_contention_skips_one_source_and_peers_proceed(project):
     from janus.runtime.locking import SourceStateLock  # noqa: F401
     from tests.support.parallel_execution import file_snapshot, held_lock
@@ -397,7 +403,6 @@ def test_real_contention_skips_one_source_and_peers_proceed(project):
     assert sum(item["status"] == "applied" for item in items) == 2
 
 
-@pytest.mark.xfail(strict=True, reason="maintain has no reentrant flock adapter")
 def test_shared_metadata_sources_are_both_acquired(project, monkeypatch):
     from janus.runtime.locking import SourceStateLock  # noqa: F401
     from tests.support.parallel_execution import probe_lock
@@ -418,21 +423,113 @@ def test_shared_metadata_sources_are_both_acquired(project, monkeypatch):
         return collect(*args, **kwargs)
 
     monkeypatch.setattr(maintain, "collect_inventory", checking)
-    result = _invoke(project, "--zone", "metadata", "--format", "json")
+    options = [option for source_id in SOURCE_IDS for option in ("--source-id", source_id)]
+    result = _invoke(project, "--zone", "metadata", "--format", "json", *options)
     assert result.exit_code == 0, result.output
     assert seen and _record(project)["lock"] == "flock"
     assert not any(item["status"] == "skipped" for item in _record(project)["items"])
     assert probe_lock(project / "data/metadata/shared/.lock")["acquired"] is True
 
 
-@pytest.mark.xfail(strict=True, reason="lock files are not protected retention paths")
-def test_lock_inode_is_protected_and_never_a_retention_candidate(project):
+@pytest.mark.parametrize("apply", [False, True])
+def test_lock_inode_is_protected_and_never_a_retention_candidate(project, apply):
     path = project / "data/metadata/source_a/.lock"
     path.touch()
     inode = path.stat().st_ino
-    result = _invoke(project, "--zone", "metadata", "--apply", "--format", "json")
+    result = _invoke(
+        project, "--zone", "metadata", "--format", "json", *(("--apply",) if apply else ())
+    )
     assert result.exit_code == 0, result.output
     record = _record(project)
     assert any(item["target"] == str(path) for item in record["protected"])
     assert not any(item["target"] == str(path) for item in record["items"])
     assert path.stat().st_ino == inode
+
+
+@pytest.mark.parametrize("zone", ["metadata", "raw"])
+def test_unsupported_platform_refuses_before_inventory_or_record(project, monkeypatch, zone):
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    assert source_state_lock_supported() is False
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("unsupported locking reached source planning or retention")
+
+    monkeypatch.setattr(maintain, "plan_maintenance_sources", forbidden)
+    monkeypatch.setattr(maintain, "_run", forbidden)
+    result = _invoke(project, "--zone", zone, "--apply", "--format", "json")
+    assert result.exit_code == 2
+    assert "fcntl" in result.stderr and result.stdout == ""
+    assert not list((project / "data/metadata/maintenance").glob("*.json"))
+    assert not list((project / "data/metadata").rglob(".lock"))
+
+
+@pytest.mark.parametrize("zone", ["bronze", "runs-table", "lineage"])
+def test_default_unscoped_zones_never_plan_or_acquire_source_locks(project, monkeypatch, zone):
+    from janus.maintenance import inventory
+
+    session = MagicMock()
+    session.sql.return_value.collect.return_value = []
+    monkeypatch.setattr(maintain._Compute, "get_session", lambda self: session)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("unscoped maintenance planned or locked a source")
+
+    monkeypatch.setattr(maintain, "plan_maintenance_sources", forbidden)
+    monkeypatch.setattr(inventory, "plan_maintenance_sources", forbidden)
+    monkeypatch.setattr(SourceStateMaintenanceLock, "acquire", forbidden)
+    result = _invoke(project, "--zone", zone, "--format", "json")
+    assert result.exit_code == 0, result.output
+    assert _record(project)["lock"] == "flock"
+    assert WARNING not in result.output
+    assert not list((project / "data/metadata").rglob(".lock"))
+
+
+def test_adapter_propagates_unsupported_locking(project, monkeypatch, now):
+    from janus.maintenance.inventory import plan_maintenance_sources
+    from janus.registry import load_registry
+    from janus.utils.environment import load_environment_config
+    from janus.utils.storage import StorageLayout
+
+    registry = load_registry(project)
+    config = load_environment_config("local", project)
+    lock = SourceStateMaintenanceLock(
+        plan_maintenance_sources(registry, config, now=now, source_ids=None),
+        StorageLayout.from_environment_config(config, project),
+    )
+    assert isinstance(lock, MaintenanceLock)
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    with pytest.raises(LockUnsupportedError, match="fcntl"):
+        lock.acquire("source_a")
+    assert lock._held == {}
+    # A support failure discovered after the preparation probe is still a refusal.
+    monkeypatch.setattr(maintain, "source_state_lock_supported", lambda: True)
+    result = _invoke(project, "--zone", "metadata", "--apply")
+    assert result.exit_code == 2 and result.stdout == ""
+    assert "fcntl" in result.stderr
+    assert not list((project / "data/metadata/maintenance").glob("*.json"))
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, KeyboardInterrupt])
+def test_real_locks_release_after_failed_or_interrupted_inventory(project, monkeypatch, failure):
+    from tests.support.parallel_execution import probe_lock
+
+    path = project / "data/metadata/source_a/.lock"
+
+    def fail(*args, **kwargs):
+        refused = probe_lock(path)
+        assert refused["acquired"] is False
+        assert refused["holder"]["command"] == "maintain"
+        assert refused["holder"]["run_id"] is None
+        assert refused["holder"]["pipeline_run_id"] is None
+        raise failure("scripted inventory failure")
+
+    monkeypatch.setattr(maintain, "collect_inventory", fail)
+    if failure is KeyboardInterrupt:
+        with pytest.raises(KeyboardInterrupt, match="scripted inventory failure"):
+            _invoke(project, "--zone", "metadata", "--apply")
+    else:
+        result = _invoke(project, "--zone", "metadata", "--apply")
+        assert result.exit_code == 1
+    assert _record(project)["lock"] == "flock"
+    for source_id in SOURCE_IDS:
+        assert probe_lock(project / f"data/metadata/{source_id}/.lock")["acquired"] is True

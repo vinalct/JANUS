@@ -21,6 +21,7 @@ from janus.maintenance.inventory import (
     RunArtifactEntry,
     SnapshotEntry,
 )
+from janus.maintenance.locking import NullMaintenanceLock
 from janus.maintenance.planning import PlannedItem, ProtectedItem, RetentionPlan
 from janus.maintenance.records import ItemOutcome, MaintenanceRecordStore
 from tests.support.operator_cli import arm_spark_tripwire, run_janus
@@ -82,7 +83,16 @@ def _change_profile(project: Path, update):
     path.write_text(yaml.safe_dump(profile))
 
 
-def test_no_flags_default_to_dry_run_and_persist_evidence(project, monkeypatch):
+@pytest.fixture
+def null_lock(monkeypatch):
+    """Keep legacy no-lock rendering assertions scoped to an explicit null lock."""
+    command = maintain.maintain_command
+    monkeypatch.setattr(
+        maintain, "maintain_command", lambda args: command(args, lock=NullMaintenanceLock())
+    )
+
+
+def test_no_flags_default_to_dry_run_and_persist_evidence(project, monkeypatch, null_lock):
     monkeypatch.chdir(project)
 
     result = run_janus(["maintain"])
@@ -102,7 +112,7 @@ def test_no_flags_default_to_dry_run_and_persist_evidence(project, monkeypatch):
 
 
 @pytest.mark.parametrize("mode", [(), ("--dry-run",), ("--apply",)])
-def test_json_is_byte_identical_to_persisted_record(project, mode):
+def test_json_is_byte_identical_to_persisted_record(project, mode, null_lock):
     result = _invoke(project, *mode, "--format", "json")
 
     assert result.exit_code == 0, result.output
@@ -580,7 +590,7 @@ def test_default_inventory_changes_no_history_or_warehouse_file(project):
         return {
             str(path.relative_to(project)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in (project / "data").rglob("*")
-            if path.is_file() and "maintenance" not in path.parts
+            if path.is_file() and "maintenance" not in path.parts and path.name != ".lock"
         }
 
     before = digest()
@@ -651,7 +661,9 @@ def test_source_filter_does_not_filter_shared_lineage_events(project, monkeypatc
     assert json.loads(result.stdout)["items"][0]["target"] == "/metadata/events-old.ndjson"
 
 
-def test_text_apply_renders_failed_items_and_zero_empty_zones(project, monkeypatch, fake_compute):
+def test_text_apply_renders_failed_items_and_zero_empty_zones(
+    project, monkeypatch, fake_compute, null_lock
+):
     fake_compute.sql.side_effect = RuntimeError("catalog unavailable")
     monkeypatch.setattr(maintain, "collect_inventory", lambda *a, **kw: _bronze_inventory(a[4]))
     result = _invoke(project, "--apply")
