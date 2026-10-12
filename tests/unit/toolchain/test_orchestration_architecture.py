@@ -65,6 +65,7 @@ ADAPTER_IMPLEMENTATION_IMPORTS = (
 PURE_GRAPH_ANCHORS = {
     "models/dependencies.py",
     "orchestration/planning.py",
+    "orchestration/result_validation.py",
     "orchestration/scheduling.py",
     "orchestration/selection.py",
     "registry/dependencies.py",
