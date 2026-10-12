@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
@@ -26,9 +27,6 @@ from tests.support.parallel_execution import (
     worker_request,
 )
 
-WORKER_RED = pytest.mark.xfail(
-    strict=True, reason="worker bootstrap and snapshot verification are absent"
-)
 RUNNER_RED = pytest.mark.xfail(strict=True, reason="spawned parallel batch runner is absent")
 INTERRUPT_RED = pytest.mark.xfail(
     strict=True,
@@ -36,7 +34,6 @@ INTERRUPT_RED = pytest.mark.xfail(
 )
 
 
-@WORKER_RED
 def test_worker_json_envelope_round_trips_without_starting_spark(tmp_path):
     _root, _registry, plan, config, paths = planned_project(tmp_path)
     envelope = call_worker(worker_request(plan, config, paths))
@@ -48,11 +45,10 @@ def test_worker_json_envelope_round_trips_without_starting_spark(tmp_path):
     assert envelope["worker"]["spark_application_id"] is None
 
 
-@WORKER_RED
 def test_bootstrap_tripwire_proves_itself_then_reaches_shared_attempt_seam(tmp_path, monkeypatch):
     _root, _registry, plan, config, paths = planned_project(tmp_path)
     arm_spark_tripwire(monkeypatch)
-    # This positive meta-test runs before importing the currently missing worker module.
+    # Prove the tripwire catches an eager bootstrap before checking the real worker.
     with pytest.raises(pytest.fail.Exception, match="Spark session"):
         eager_bootstrap_stub(config, paths)
     import janus.runtime.parallel as parallel
@@ -83,10 +79,10 @@ def test_bootstrap_tripwire_proves_itself_then_reaches_shared_attempt_seam(tmp_p
     assert envelope["worker"]["spark_started"] is False
 
 
-@WORKER_RED
 @pytest.mark.parametrize("mutate", [rewrite_yaml, rewrite_contract, break_registry])
 def test_snapshot_drift_refuses_before_lock_or_run_evidence(tmp_path, mutate):
     from janus.lineage import compute_config_version
+    from janus.models.source_config import SourceConfigValidationError
     from janus.registry import load_registry
 
     root, _registry, plan, config, paths = planned_project(tmp_path)
@@ -110,9 +106,12 @@ def test_snapshot_drift_refuses_before_lock_or_run_evidence(tmp_path, mutate):
         assert new_contract.schema_version[:12] in attempt.failure.reason
     else:
         assert "invalid" in attempt.failure.reason.lower()
+        with pytest.raises(SourceConfigValidationError) as invalid:
+            load_registry(root)
+        assert str(invalid.value).splitlines()[0] in attempt.failure.reason
+        assert str(invalid.value).splitlines()[1] in attempt.failure.reason
 
 
-@WORKER_RED
 def test_unrelated_yaml_comment_does_not_refuse_node(tmp_path):
     root, _registry, plan, config, paths = planned_project(tmp_path)
     request = worker_request(plan, config, paths)
@@ -233,7 +232,6 @@ def test_interrupt_signals_all_workers_then_kills_after_fake_clock_grace(tmp_pat
     assert not list((plan.request.project_root / "data/metadata/pipelines").rglob("summary.json"))
 
 
-@pytest.mark.xfail(strict=True, reason="spawned worker bootstrap tripwire absent")
 @pytest.mark.parametrize("armed", [False, True])
 def test_worker_bootstrap_is_spawn_safe_and_stdout_is_empty(tmp_path, capfd, armed):
     import multiprocessing
@@ -256,9 +254,155 @@ def test_worker_bootstrap_is_spawn_safe_and_stdout_is_empty(tmp_path, capfd, arm
         assert process.exitcode == 0
         assert envelope["attempt"]["status"] == "succeeded"
         assert envelope["worker"]["spark_started"] is False
-        assert capfd.readouterr().out == ""
+        captured = capfd.readouterr()
+        assert captured.out == ""
+        records = [json.loads(line) for line in captured.err.splitlines()]
+        assert [record["event"] for record in records] == ["parallel_worker_started"]
+        fields = records[0]["fields"]
+        assert fields["worker_pid"] == process.pid
+        assert fields["source_id"] == "A"
+        assert fields["run_id"] == plan.source("A").run_id
+        assert fields["pipeline_run_id"] == plan.request.pipeline_run_id
     finally:
         if process.is_alive():
             process.kill()
             process.join(5)
         reader.close()
+
+
+@pytest.mark.parametrize(
+    "changes,field",
+    [
+        ({"run_id": "different-run"}, "run_id"),
+        ({"attempt": 2}, "attempt"),
+        ({"expected_upstream_ids": ("C",)}, "upstream_ids"),
+        ({"expected_schema_version": None}, "schema_version"),
+    ],
+)
+def test_worker_refuses_identity_and_contract_presence_mismatches(tmp_path, changes, field):
+    root, _registry, plan, config, paths = planned_project(tmp_path)
+    task = replace(worker_request(plan, config, paths), **changes)
+    envelope = call_worker(task)
+    failure = envelope["attempt"]["failure"]
+    assert failure["phase"] == "snapshot_drift"
+    assert field in failure["reason"]
+    assert envelope["attempt"]["run_id"] == task.run_id
+    assert envelope["attempt"]["attempt"] == task.attempt
+    assert file_snapshot(root / "data/metadata") == {}
+
+
+@pytest.mark.parametrize("error", [LookupError("source vanished"), OSError("file unreadable")])
+@pytest.mark.parametrize("stage", ["load", "plan"])
+def test_worker_translates_registry_and_planning_errors_before_factory(
+    tmp_path, monkeypatch, error, stage
+):
+    import janus.runtime.parallel as parallel
+
+    _root, _registry, plan, config, paths = planned_project(tmp_path)
+    factory = Mock(side_effect=AssertionError("execution constructed before verification"))
+    if stage == "load":
+        monkeypatch.setattr(parallel, "load_registry", Mock(side_effect=error))
+    else:
+        monkeypatch.setattr(parallel.BatchPlanner, "plan", Mock(side_effect=error))
+    monkeypatch.setattr(parallel, "_resolve_execution_factory", factory)
+    attempt = call_worker(worker_request(plan, config, paths))["attempt"]
+    assert attempt["failure"]["phase"] == "snapshot_drift"
+    assert str(error) in attempt["failure"]["reason"]
+    factory.assert_not_called()
+
+
+def test_worker_refuses_new_node_planning_failure(tmp_path, monkeypatch):
+    import janus.runtime.parallel as parallel
+    from janus.orchestration.plans import SourcePlanFailure
+
+    _root, _registry, plan, config, paths = planned_project(tmp_path)
+    failed = replace(
+        plan.source("A"),
+        planned_run=None,
+        failure=SourcePlanFailure(error_type="RuntimeError", reason="hook failed after planning"),
+    )
+    monkeypatch.setattr(
+        parallel.BatchPlanner, "plan", lambda *args, **kwargs: Mock(source=lambda _: failed)
+    )
+    attempt = call_worker(worker_request(plan, config, paths))["attempt"]
+    assert attempt["failure"]["phase"] == "snapshot_drift"
+    assert "disagreed" in attempt["failure"]["reason"]
+    assert "hook failed after planning" in attempt["failure"]["reason"]
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "os:system",
+        "janus_other.module:factory",
+        "tests_other.module:factory",
+        "janus.runtime.parallel",
+        "janus.runtime.parallel:factory.extra",
+        "janus..runtime:factory",
+    ],
+)
+def test_factory_resolver_rejects_unapproved_imports(reference, monkeypatch):
+    import janus.runtime.parallel as parallel
+
+    importer = Mock(side_effect=AssertionError("unapproved module imported"))
+    monkeypatch.setattr(parallel.importlib, "import_module", importer)
+    with pytest.raises(ValueError, match="Unsupported worker execution factory"):
+        parallel._resolve_execution_factory(reference)
+    importer.assert_not_called()
+
+
+def test_factory_resolver_requires_callable():
+    from janus.runtime.parallel import _resolve_execution_factory
+
+    with pytest.raises(TypeError, match="not callable"):
+        _resolve_execution_factory("janus.runtime.parallel:SNAPSHOT_DRIFT_PHASE")
+
+
+def test_default_factory_constructs_lazy_provider_and_passes_lock_wait(tmp_path, monkeypatch):
+    from janus.runtime.parallel import (
+        DEFAULT_EXECUTION_FACTORY,
+        _ProviderRecorder,
+        _resolve_execution_factory,
+        _worker_logger,
+    )
+
+    _root, _registry, plan, config, paths = planned_project(tmp_path)
+    arm_spark_tripwire(monkeypatch)
+    task = worker_request(plan, config, paths)
+    logger = _worker_logger(task)
+    recorder = _ProviderRecorder()
+    execution = _resolve_execution_factory(DEFAULT_EXECUTION_FACTORY)(logger, recorder, 1.5)
+    assert execution.executor.logger is logger
+    assert execution.executor.lock_wait_seconds == 1.5
+    assert recorder.provider is None
+    provider = execution.provider_factory(config, paths, logger)
+    assert recorder.provider is provider and recorder.was_started is False
+    assert recorder.application_id is None
+
+
+def test_worker_interrupt_sends_no_envelope_and_closes_pipe(tmp_path, monkeypatch, capfd):
+    import signal
+
+    import janus.runtime.parallel as parallel
+    from tests.support.parallel_execution import EnvelopeSink
+
+    _root, _registry, plan, config, paths = planned_project(tmp_path)
+
+    def terminate(*args, **kwargs):
+        assert signal.getsignal(signal.SIGINT) is signal.SIG_IGN
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(parallel, "execute_source_attempt", terminate)
+    sink = EnvelopeSink()
+    sink.close = Mock()
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        parallel.run_worker(worker_request(plan, config, paths), sink)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    assert sink.messages == []
+    sink.close.assert_called_once()
+    captured = capfd.readouterr()
+    assert captured.out == ""
+    assert "parallel_worker_interrupted" in captured.err

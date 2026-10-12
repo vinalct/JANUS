@@ -13,10 +13,6 @@ ATTEMPTS = {
     "SourceExecutionService.execute",
     "run_worker",
 }
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    reason="parallel runner sweep anchors do not exist yet",
-)
 
 
 def names(tree):

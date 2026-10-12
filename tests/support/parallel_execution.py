@@ -246,11 +246,11 @@ def file_snapshot(directory):
 
 
 def worker_request(plan, config, paths, *, source_id="A", factory=FAKE_FACTORY):
-    from types import SimpleNamespace
+    from janus.runtime.parallel import WorkerTask
 
     source = plan.source(source_id)
     contract = source.require_planned_run().plan.data_contract
-    return SimpleNamespace(
+    return WorkerTask(
         request=plan.request,
         source_id=source_id,
         run_id=source.run_id,
