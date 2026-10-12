@@ -8,6 +8,7 @@ import os
 import sys
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -73,3 +74,12 @@ def _hermetic_environment(overrides: Mapping[str, str]) -> Iterator[None]:
     finally:
         os.environ.clear()
         os.environ.update(saved)
+
+
+def operator_state_snapshot(root: Path) -> dict[str, bytes]:
+    """Compare state and configuration bytes, excluding kernel-lock diagnostics."""
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file() and path.name != ".lock"
+    }

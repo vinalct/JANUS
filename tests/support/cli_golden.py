@@ -53,6 +53,7 @@ class Invocation:
     environment: str = "local"
     requires_spark: bool = False
     documented_at: str = ""
+    held_source_lock: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +159,6 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "repository",
         documented_at="README.md:115-118",
     ),
-
     Invocation(
         "execute_disabled_source_refused",
         ("--environment", "local", "--source-id", "ibge_pib_brasil", "--execute"),
@@ -378,6 +378,29 @@ INVOCATIONS: tuple[Invocation, ...] = (
         "repository",
         documented_at="docs/reproducibility.md:547-548",
     ),
+    Invocation(
+        "checkpoint_set_locked_refused",
+        (
+            "checkpoint",
+            "set",
+            "--source-id",
+            "ibge_pib_brasil",
+            "--to",
+            "202608",
+            "--reason",
+            "retry",
+        ),
+        "repository",
+        held_source_lock=True,
+        documented_at="docs/tasks/order-24-source-locking-and-parallel-batches/TASK-06_lock_in_dead_letter_and_checkpoint_verbs.md",
+    ),
+    Invocation(
+        "dead_letters_release_locked_refused",
+        ("dead-letters", "release", "--source-id", "ibge_pib_brasil", "--all", "--reason", "retry"),
+        "repository",
+        held_source_lock=True,
+        documented_at="docs/tasks/order-24-source-locking-and-parallel-batches/TASK-06_lock_in_dead_letter_and_checkpoint_verbs.md",
+    ),
 )
 
 
@@ -424,7 +447,32 @@ def normalize(captured: CapturedInvocation, *, project_root: Path) -> CapturedIn
 def capture(invocation: Invocation, workspace: Path) -> CapturedInvocation:
     """Materialize the fixture in ``workspace``, run the invocation, and normalize it."""
     project_root = materialize_fixture(invocation.project_root_fixture, workspace)
-    captured = run_invocation(invocation, project_root=project_root)
+    if invocation.held_source_lock:
+        from janus.planner import Planner, PlanningRequest
+        from janus.runtime.locking import source_state_lock_path
+        from janus.utils.environment import load_environment_config
+        from janus.utils.storage import StorageLayout
+        from tests.support.parallel_execution import held_lock
+
+        source_id = invocation.argv[invocation.argv.index("--source-id") + 1]
+        plan = (
+            Planner()
+            .plan(
+                PlanningRequest.create(
+                    source_id=source_id,
+                    environment=invocation.environment,
+                    project_root=project_root,
+                    include_disabled=True,
+                )
+            )
+            .plan
+        )
+        config = load_environment_config(invocation.environment, project_root)
+        layout = StorageLayout.from_environment_config(config, project_root)
+        with held_lock(source_state_lock_path(plan, layout), source_id=source_id):
+            captured = run_invocation(invocation, project_root=project_root)
+    else:
+        captured = run_invocation(invocation, project_root=project_root)
     return normalize(captured, project_root=project_root)
 
 
@@ -536,6 +584,7 @@ def _normalize_text(
     text = _DATE.sub(day, _STAMP.sub(stamp, _INSTANT.sub(instant, text)))
     text = _CLOCK_DIGEST.sub(r"\1<digest>", text)
     text = _DURATION.sub(r"\1<duration>", text)
+    text = re.sub(r"held by pid \d+ on \S+ for", "held by pid <pid> on <hostname> for", text)
     lines = [line.rstrip() for line in text.splitlines()]
     return "\n".join(lines) + "\n" if lines else ""
 
@@ -560,9 +609,9 @@ def _argv_zero(value: str) -> Iterator[None]:
         sys.argv = saved
 
 
-def _write_all(output_dir: Path) -> int:
+def _write_all(output_dir: Path, invocations: Sequence[Invocation] = INVOCATIONS) -> int:
     with tempfile.TemporaryDirectory() as scratch:
-        for invocation in INVOCATIONS:
+        for invocation in invocations:
             captured = capture(invocation, Path(scratch) / invocation.name)
             write_golden(captured, output_dir)
             sizes = " ".join(
@@ -574,6 +623,9 @@ def _write_all(output_dir: Path) -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: python -m tests.support.cli_golden OUTPUT_DIR")
-    raise SystemExit(_write_all(Path(sys.argv[1])))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output_dir", type=Path)
+    parser.add_argument("--only", nargs="+", choices=[inv.name for inv in INVOCATIONS])
+    args = parser.parse_args()
+    selected = tuple(inv for inv in INVOCATIONS if args.only is None or inv.name in args.only)
+    raise SystemExit(_write_all(args.output_dir, selected))

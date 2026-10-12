@@ -22,6 +22,10 @@ from janus.utils.storage import StorageLayout
 LOCK_FILE_NAME = ".lock"
 COMMAND_RUN_EXECUTE = "run --execute"
 COMMAND_RUN_REPLAY = "run --ingest-raw-to-bronze"
+COMMAND_DEAD_LETTERS_RELEASE = "dead-letters release"
+COMMAND_DEAD_LETTERS_REPLAY = "dead-letters replay --execute"
+COMMAND_CHECKPOINT_SET = "checkpoint set"
+COMMAND_CHECKPOINT_CLEAR = "checkpoint clear"
 _HOLDER_READ_LIMIT = 64 * 1024
 
 

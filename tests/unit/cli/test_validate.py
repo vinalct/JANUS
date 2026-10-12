@@ -351,6 +351,9 @@ def test_unverified_required_fields_are_notes_that_never_change_the_exit_code(
 def test_the_registry_half_reads_no_profile_and_writes_nothing(tmp_path: Path) -> None:
     """It is about conf/sources: a checkout with no conf/environments validates."""
     root = _project(tmp_path)
+    # Exercise a registry-only checkout without the shared operator fixture's profile.
+    (root / "conf" / "environments" / "local.yaml").unlink()
+    (root / "conf" / "environments").rmdir()
     assert not (root / "conf" / "environments").exists()
     before = tree_snapshot(root)
 

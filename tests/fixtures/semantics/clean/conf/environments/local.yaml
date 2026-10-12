@@ -1,0 +1,6 @@
+name: local
+storage:
+  root_dir: data
+  raw_dir: data/raw
+  bronze_dir: data/bronze
+  metadata_dir: data/metadata

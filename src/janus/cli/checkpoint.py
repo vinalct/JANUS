@@ -3,8 +3,8 @@
 A checkpoint is the one value, `<metadata>/checkpoints/current.json`, that an incremental
 source's next run starts from; every write of it leaves a file under
 `checkpoints/history/`. The metadata zone is found by planning the source (D-10), disabled
-sources included (D-9), as `janus dead-letters` finds it. No action reads an environment
-profile, starts Spark or runs a source.
+sources included (D-9), as `janus dead-letters` finds it. Inspection reads no environment
+profile; mutations read it only to resolve the lock. No action starts Spark.
 
 - `show` prints the stored state and the last N history entries, newest first. A source
   that declares no checkpoint, and one with nothing stored, are healthy answers. A stored
@@ -51,12 +51,13 @@ from janus.checkpoints import (
     compare_checkpoint_values,
     normalize_checkpoint_value,
 )
-from janus.cli.common import build_parent_parser
+from janus.cli.common import build_parent_parser, hold_operator_source_lock
 from janus.cli.operator import require_reason, resolve_operator
 from janus.lineage import MetadataZonePaths, read_json_mapping
 from janus.models import ExecutionPlan
 from janus.planner import Planner, PlannerError, PlanningRequest
 from janus.registry import SourceNotFoundError
+from janus.runtime.locking import COMMAND_CHECKPOINT_CLEAR, COMMAND_CHECKPOINT_SET
 
 ARGUMENT_ERROR = 2
 PLAN_ATTRIBUTES = {"trigger": "checkpoint"}
@@ -241,12 +242,16 @@ def _set(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             f"{plan.checkpoint_strategy}); no run would read a value set here"
         )
 
-    current = _load(plan)
-    _require_comparable(plan, value, current)
-    direction = _direction(value, current)
-    _announce(args, _transition_line(plan, current, value, direction))
-    operator = resolve_operator()
-    result = _record(CheckpointStore().reset, plan, value, operator=operator, reason=reason)
+    with hold_operator_source_lock(
+        plan, environment=args.environment, project_root=project_root,
+        command=COMMAND_CHECKPOINT_SET, refusal=_Refusal,
+    ):
+        current = _load(plan)
+        _require_comparable(plan, value, current)
+        direction = _direction(value, current)
+        _announce(args, _transition_line(plan, current, value, direction))
+        operator = resolve_operator()
+        result = _record(CheckpointStore().reset, plan, value, operator=operator, reason=reason)
 
     document = _change_document(
         plan, project_root, result, current, direction=direction, operator=operator, reason=reason
@@ -259,7 +264,21 @@ def _clear(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     reason = require_reason(parser, args.reason)
     project_root = args.project_root.resolve()
     plan = _plan(args, project_root)
-    current = _load(plan) if _declares_checkpoint(plan) else None
+    with hold_operator_source_lock(
+        plan, environment=args.environment, project_root=project_root,
+        command=COMMAND_CHECKPOINT_CLEAR, refusal=_Refusal,
+    ):
+        current = _load(plan) if _declares_checkpoint(plan) else None
+        if current is not None:
+            _announce(
+                args,
+                f"{plan.source.source_id}: clearing {plan.checkpoint_field} "
+                f"{current.checkpoint_value} "
+                f"({plan.checkpoint_strategy}; the next run starts without a checkpoint)",
+            )
+            operator = resolve_operator()
+            result = _record(CheckpointStore().clear_state, plan, operator=operator, reason=reason)
+
     if current is None:
         document = _document(plan, project_root, decision="skipped")
         if args.format == "json":
@@ -269,14 +288,6 @@ def _clear(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         else:
             print(f"no checkpoint recorded for {plan.source.source_id}; nothing was cleared")
         return 0
-
-    _announce(
-        args,
-        f"{plan.source.source_id}: clearing {plan.checkpoint_field} {current.checkpoint_value} "
-        f"({plan.checkpoint_strategy}; the next run starts without a checkpoint)",
-    )
-    operator = resolve_operator()
-    result = _record(CheckpointStore().clear_state, plan, operator=operator, reason=reason)
 
     document = _change_document(
         plan, project_root, result, current, direction=None, operator=operator, reason=reason

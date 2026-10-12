@@ -93,10 +93,10 @@ def lock_at(path, *, source_id="A", run_id="holder-run", wait_seconds=0, **kwarg
     return SourceStateLock(Path(path), holder, wait_seconds=wait_seconds, **kwargs)
 
 
-def hold_lock(path, ready, release, connection):
+def hold_lock(path, ready, release, connection, source_id="A"):
     """Signal only after the kernel lock and holder record have been acquired."""
     try:
-        with lock_at(path) as lock:
+        with lock_at(path, source_id=source_id) as lock:
             connection.send(json.loads(lock.holder.to_json()))
             ready.set()
             if not release.wait(30):
@@ -110,11 +110,11 @@ def hold_lock(path, ready, release, connection):
 
 
 @contextlib.contextmanager
-def held_lock(path):
+def held_lock(path, *, source_id="A"):
     context = multiprocessing.get_context("spawn")
     ready, release = context.Event(), context.Event()
     reader, writer = context.Pipe(duplex=False)
-    process = context.Process(target=hold_lock, args=(str(path), ready, release, writer))
+    process = context.Process(target=hold_lock, args=(str(path), ready, release, writer, source_id))
     process.start()
     writer.close()
     try:

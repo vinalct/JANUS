@@ -12,7 +12,12 @@ from janus.checkpoints import DeadLetterStore, ExtractionProgressStore
 from janus.lineage import MetadataZonePaths
 from janus.planner import PlannedRun, Planner, PlanningRequest
 from janus.runtime.executor import SourceExecutor
-from tests.support.operator_cli import OPERATOR_ENV, arm_spark_tripwire, run_janus
+from tests.support.operator_cli import (
+    OPERATOR_ENV,
+    arm_spark_tripwire,
+    operator_state_snapshot,
+    run_janus,
+)
 from tests.support.semantics_fixtures import (
     CLEAN,
     CLEAN_CONSUMER,
@@ -234,7 +239,7 @@ def test_release_argument_errors_exit_2_and_touch_nothing(
 
 def test_releasing_an_unknown_key_names_the_available_ones_and_changes_nothing(root: Path) -> None:
     plan, store = _seed(root)
-    before = tree_snapshot(root)
+    before = operator_state_snapshot(root)
 
     result = _dead_letters(
         root, "release", "--item-key", "window_start=1999-01-01", "--reason", "typo"
@@ -243,7 +248,7 @@ def test_releasing_an_unknown_key_names_the_available_ones_and_changes_nothing(r
     assert result.exit_code == 2
     assert "window_start=1999-01-01" in result.stderr
     assert all(key in result.stderr for key in KEYS)
-    assert tree_snapshot(root) == before
+    assert operator_state_snapshot(root) == before
 
 
 def test_release_with_no_state_exits_2(root: Path) -> None:
@@ -513,7 +518,7 @@ def test_replay_execute_runs_a_disabled_source_with_include_disabled(
 
 
 # ---------------------------------------------------------------------------------------
-# operator identity 
+# operator identity
 
 
 @pytest.mark.parametrize(
