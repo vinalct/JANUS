@@ -35,6 +35,7 @@ class SparkSessionProvider:
         self._session: SparkSession | None = None
         self._owns_session = True
         self._session_info: dict[str, Any] | None = None
+        self._application_id: str | None = None
         self._was_started = False
         self._cleanup_failures: list[Exception] = []
 
@@ -73,6 +74,15 @@ class SparkSessionProvider:
         return dict(self._resolved_paths)
 
     @property
+    def application_id(self) -> str | None:
+        """The id of the most recent session started here, else ``None``.
+
+        Retained after stop; an ``iceberg_rows`` attempt starts two sessions and
+        reports the second id. Wrapping an externally owned session reports None.
+        """
+        return self._application_id
+
+    @property
     def was_started(self) -> bool:
         """Return whether this provider has ever started a session of its own."""
 
@@ -94,6 +104,7 @@ class SparkSessionProvider:
         self._session = session
         self._owns_session = True
         self._session_info = _describe_session(session)
+        self._application_id = _application_id(session)
         self._was_started = True
         self._log("spark_session_started", **self._session_info)
         return session
@@ -199,3 +210,9 @@ def _reject_rebuild() -> SparkSession:
         "SparkSessionProvider.wrapping() cannot build a session: the wrapped "
         "session is owned externally and was already released"
     )
+
+
+def _application_id(session: SparkSession) -> str | None:
+    context = getattr(session, "sparkContext", None)
+    value = getattr(context, "applicationId", None)
+    return str(value) if value else None

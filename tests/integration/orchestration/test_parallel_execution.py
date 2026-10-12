@@ -24,11 +24,18 @@ from tests.support.parallel_execution import (
     normalized_terminal_contract,
     spark_project,
 )
+from tests.support.parallel_order24 import (
+    assert_lazy_worker_events,
+    lifecycle_spark_project,
+    parse_log_events,
+    source_events,
+    spark_project_with_empty_source,
+    write_lifecycle_evidence,
+)
 
 PARITY_RED = pytest.mark.xfail(
     strict=True, reason="parallel CLI execution and sequential parity are absent"
 )
-LIFECYCLE_RED = pytest.mark.xfail(strict=True, reason="worker Spark lifecycle evidence is absent")
 INTERRUPT_RED = pytest.mark.xfail(strict=True, reason="parallel CLI interrupt cleanup is absent")
 
 
@@ -40,9 +47,8 @@ def finish(process):
         process.communicate(timeout=10)
         pytest.fail("parallel CLI exceeded bounded integration timeout")
     assert process.returncode in {0, 1}, stderr
-    return json.loads(stdout), [
-        json.loads(line) for line in stderr.splitlines() if line.startswith("{")
-    ]
+    assert stdout.strip(), stderr
+    return json.loads(stdout), parse_log_events(stderr)
 
 
 @PARITY_RED
@@ -135,12 +141,17 @@ def test_failed_a_skips_b_without_fabricating_evidence_and_c_completes(tmp_path)
     assert not list((root / "data/metadata/B/runs").glob("*.json"))
 
 
-@LIFECYCLE_RED
+@pytest.mark.spark
 def test_worker_downloads_precede_spark_and_application_ids_are_distinct(tmp_path):
     pytest.importorskip("pyspark")
     from janus.runtime.parallel import ParallelBatchExecutor  # noqa: F401
 
-    _summary, events = finish(cli_process(spark_project(tmp_path)))
+    process = cli_process(
+        lifecycle_spark_project(tmp_path), extra_env={"JANUS_TEST_CAPTURE_LIFECYCLE": "1"}
+    )
+    summary, events = finish(process)
+    assert process.returncode == 0, summary
+    assert all(source["status"] == "succeeded" for source in summary["sources"])
     workers = [event for event in events if event["event"] == "parallel_worker_finished"]
     assert len(workers) == 3
     assert len({event["worker_pid"] for event in workers}) == 3
@@ -148,38 +159,69 @@ def test_worker_downloads_precede_spark_and_application_ids_are_distinct(tmp_pat
     application_ids = [event["spark_application_id"] for event in workers]
     assert all(application_ids) and len(set(application_ids)) == 3
     for source in ("A", "C"):
-        sequence = [event["event"] for event in events if event.get("source_id") == source]
-        assert "parallel_worker_started" in sequence and "source_extraction_finished" in sequence
-        assert sequence.index("source_extraction_finished") < sequence.index(
-            "spark_session_starting"
-        )
-    b_events = [event["event"] for event in events if event.get("source_id") == "B"]
-    extraction_end = b_events.index("source_extraction_finished")
-    starts = [index for index, name in enumerate(b_events) if name == "spark_session_starting"]
-    stops = [index for index, name in enumerate(b_events) if name == "spark_session_stopped"]
-    assert len(starts) == 2 and len(stops) == 2
-    first_request = b_events.index("fixture_http_request")
-    assert starts[0] < stops[0] < first_request < extraction_end < starts[1] < stops[1]
+        assert_lazy_worker_events(events, source)
+    assert_lazy_worker_events(events, "B", scoped_lookup=True)
+    spark_events = [event for event in events if event["event"].startswith("spark_session_")]
+    assert spark_events
+    assert all(
+        event.get("worker_pid") is not None and event["worker_pid"] != process.pid
+        for event in spark_events
+    )
+    assert {event["worker_pid"] for event in spark_events} == {
+        event["worker_pid"] for event in workers
+    }
+    write_lifecycle_evidence(tmp_path / "lifecycle-evidence.json", process, summary, events)
 
 
-@LIFECYCLE_RED
+@pytest.mark.spark
 def test_empty_handoff_worker_stays_jvm_free(tmp_path):
     pytest.importorskip("pyspark")
     from janus.runtime.parallel import ParallelBatchExecutor  # noqa: F401
 
-    summary, events = finish(
-        cli_process(
-            spark_project(tmp_path, "independent_three"), extra_env={"JANUS_TEST_EMPTY": "1"}
-        )
+    process = cli_process(
+        spark_project_with_empty_source(tmp_path),
+        extra_env={"JANUS_TEST_EMPTY_SOURCE": "D", "JANUS_TEST_CAPTURE_LIFECYCLE": "1"},
     )
+    summary, events = finish(process)
+    assert process.returncode == 0, summary
     assert all(source["status"] == "succeeded" for source in summary["sources"])
+    d = next(source for source in summary["sources"] if source["source_id"] == "D")
+    assert d["attempts"][0]["status"] == "succeeded"
     workers = [event for event in events if event["event"] == "parallel_worker_finished"]
-    assert len(workers) == 3
-    assert all(
-        event["spark_started"] is False and event["spark_application_id"] is None
-        for event in workers
+    assert len(workers) == 4
+    d_events = source_events(events, "D")
+    finished = next(event for event in d_events if event["event"] == "parallel_worker_finished")
+    assert finished["spark_started"] is False and finished["spark_application_id"] is None
+    envelope = next(
+        event["envelope"] for event in d_events if event["event"] == "fixture_worker_envelope"
     )
-    assert not any(event["event"] == "spark_session_starting" for event in events)
+    assert envelope["worker"] == {
+        "pid": finished["worker_pid"],
+        "spark_started": False,
+        "spark_application_id": None,
+    }
+    assert envelope["attempt"]["status"] == "succeeded"
+    handoff = next(
+        event for event in d_events if event["event"] == "normalization_handoff_prepared"
+    )
+    assert handoff["is_empty"] is True
+    # The established materializer emits this diagnostic without acquiring Spark.
+    session_events = [
+        event["event"] for event in d_events if event["event"].startswith("spark_session_")
+    ]
+    assert session_events == ["spark_session_skipped"]
+    sample = next(event for event in d_events if event["event"] == "fixture_worker_process_sample")
+    assert sample["cli_pid"] == process.pid and sample["worker_pid"] == finished["worker_pid"]
+    assert not any(child["command"] == "java" for child in sample["children"])
+    live_sample = next(
+        event for event in d_events if event["event"] == "fixture_empty_worker_process_sample"
+    )
+    assert live_sample["worker_alive"] is True
+    assert live_sample["worker_pid"] == finished["worker_pid"]
+    assert not any(child["command"] == "java" for child in live_sample["children"])
+    # Ordinary producers still use Spark in the same batch as empty D.
+    assert all(event["spark_started"] for event in workers if event["source_id"] != "D")
+    write_lifecycle_evidence(tmp_path / "lifecycle-evidence.json", process, summary, events)
 
 
 @INTERRUPT_RED

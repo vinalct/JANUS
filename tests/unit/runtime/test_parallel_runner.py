@@ -193,6 +193,120 @@ def test_crashed_worker_returns_failure_and_skips_consumer(tmp_path):
     assert sources["B"].skip.root_failed_source_ids == ("A",)
 
 
+def test_parent_tripwire_catches_planted_preflight_acquisition(tmp_path, monkeypatch):
+    import janus.runtime.parallel as parallel
+    from janus.runtime import SparkSessionProvider
+
+    _root, registry, plan, config, paths = planned_project(tmp_path)
+    arm_spark_tripwire(monkeypatch)
+    preflight = parallel._preflight
+
+    class EagerParent(parallel.ParallelBatchExecutor):
+        def execute(self, *args, **kwargs):
+            def eager_preflight(*args, **kwargs):
+                SparkSessionProvider(config, paths).get()
+                preflight(*args, **kwargs)
+
+            monkeypatch.setattr(parallel, "_preflight", eager_preflight)
+            return super().execute(*args, **kwargs)
+
+    with pytest.raises(pytest.fail.Exception, match="Spark session"):
+        EagerParent(max_parallel=3, execution_factory=FAKE_FACTORY).execute(
+            plan, registry, config, paths
+        )
+    assert not list((_root / "data/metadata").rglob("summary.json"))
+
+
+def test_parent_tripwire_covers_three_spawned_workers_and_summary_persistence(
+    tmp_path, monkeypatch
+):
+    from janus.runtime.parallel import ParallelBatchExecutor
+    from tests.support.parallel_order24 import BOOTSTRAP_FACTORY
+
+    root, registry, plan, config, paths = planned_project(tmp_path, "independent_three")
+    report_dir = tmp_path / "reports"
+    monkeypatch.setenv("JANUS_TEST_WORKER_REPORT_DIR", str(report_dir))
+    arm_spark_tripwire(monkeypatch)
+    outcome = ParallelBatchExecutor(max_parallel=3, execution_factory=BOOTSTRAP_FACTORY).execute(
+        plan, registry, config, paths
+    )
+    assert outcome.is_successful
+    stored = root / "data/metadata/pipelines" / plan.request.pipeline_run_id / "summary.json"
+    assert json.loads(stored.read_text()) == outcome.to_summary()
+    reports = [
+        json.loads((report_dir / f"{source}.json").read_text()) for source in ("A", "B", "C")
+    ]
+    assert len({report["pid"] for report in reports}) == 3
+    assert all(report["pid"] != os.getpid() for report in reports)
+    assert all(report["pyspark_imported"] is False for report in reports)
+    assert all(report["providers_started"] == [False] for report in reports)
+    assert all(report["started_after_lock"] is False for report in reports)
+
+
+@pytest.mark.parametrize("guarded,eager", [(False, False), (True, False), (True, True)])
+def test_spawned_bootstrap_reports_no_import_or_session_and_detects_violation(
+    tmp_path, monkeypatch, guarded, eager
+):
+    import multiprocessing
+
+    from janus.runtime.parallel import run_worker
+    from tests.support.parallel_order24 import BOOTSTRAP_FACTORY, bootstrap_tripwire_worker
+
+    _root, _registry, plan, config, paths = planned_project(tmp_path)
+    report_dir = tmp_path / "reports"
+    monkeypatch.setenv("JANUS_TEST_WORKER_REPORT_DIR", str(report_dir))
+    task = worker_request(plan, config, paths, factory=BOOTSTRAP_FACTORY)
+    context = multiprocessing.get_context("spawn")
+    reader, writer = context.Pipe(duplex=False)
+    target = bootstrap_tripwire_worker if guarded else run_worker
+    args = (task, writer, eager) if guarded else (task, writer)
+    child = context.Process(target=target, args=args)
+    child.start()
+    writer.close()
+    try:
+        assert reader.poll(15), "bootstrap child did not return or close its pipe"
+        if eager:
+            with pytest.raises(EOFError):
+                reader.recv_bytes()
+        else:
+            envelope = json.loads(reader.recv_bytes())
+            assert envelope["attempt"]["status"] == "succeeded"
+            assert envelope["worker"] == {
+                "pid": child.pid,
+                "spark_started": False,
+                "spark_application_id": None,
+            }
+        child.join(timeout=5)
+        assert child.exitcode == 0
+        report = json.loads((report_dir / "A.json").read_text())
+        assert report["pid"] == child.pid != os.getpid()
+        assert report["pyspark_imported"] is False
+        assert report["providers_started"] == [False]
+        if eager:
+            assert "Spark session" in report["tripwire"]
+            assert "registry_loaded" not in report["events"]
+        else:
+            assert report["started_after_lock"] is False
+            assert report["application_id"] is None
+            if guarded:
+                assert report["tripwire"] is None
+                milestones = [
+                    "parallel_worker_started",
+                    "registry_loaded",
+                    "planning_completed",
+                    "snapshot_verified",
+                    "provider_constructed",
+                    "source_lock_acquired",
+                ]
+                assert [event for event in report["events"] if event in milestones] == milestones
+    finally:
+        if child.is_alive():
+            child.kill()
+            child.join(timeout=5)
+        child.close()
+        reader.close()
+
+
 def test_interrupt_signals_all_workers_then_kills_after_fake_clock_grace(tmp_path, monkeypatch):
     import janus.runtime.parallel as parallel
 

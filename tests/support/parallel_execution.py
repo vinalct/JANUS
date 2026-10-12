@@ -372,7 +372,9 @@ class FixtureTransport:
         return ApiResponse(
             request=request,
             status_code=200,
-            body=json.dumps([{"id": "1"}]).encode(),
+            body=json.dumps(
+                [] if os.environ.get("JANUS_TEST_EMPTY_SOURCE") == self.source_id else [{"id": "1"}]
+            ).encode(),
             received_at=STARTED_AT,
         )
 
@@ -394,9 +396,23 @@ def spark_execution_factory(logger, recorder, lock_wait_seconds):
                 strategy=ApiStrategy(
                     transport_factory=lambda **kwargs: FixtureTransport(source_id, recorder, logger)
                 ),
-                hook=EmptyHandoffHook() if os.environ.get("JANUS_TEST_EMPTY") else None,
+                hook=(
+                    EmptyHandoffHook()
+                    if os.environ.get("JANUS_TEST_EMPTY")
+                    or os.environ.get("JANUS_TEST_EMPTY_SOURCE") == source_id
+                    else None
+                ),
             )
-            return service.execute(offline, config, paths)
+            result = service.execute(offline, config, paths)
+            if os.environ.get("JANUS_TEST_CAPTURE_LIFECYCLE") and source_id == "D":
+                from tests.support.parallel_order24 import process_children
+
+                logger.info(
+                    "fixture_empty_worker_process_sample",
+                    children=process_children(os.getpid()),
+                    worker_alive=True,
+                )
+            return result
 
     return OfflineExecution()
 
@@ -421,6 +437,10 @@ def run_parallel_cli(case, argv):
             return BatchExecutor(
                 source_execution=spark_execution_factory(logger, Recorder(), 0), logger=logger
             )
+        if os.environ.get("JANUS_TEST_CAPTURE_LIFECYCLE"):
+            from tests.support.parallel_order24 import install_worker_evidence_capture
+
+            install_worker_evidence_capture(logger)
         return ParallelBatchExecutor(
             max_parallel=3,
             execution_factory=SPARK_FACTORY,
@@ -429,7 +449,14 @@ def run_parallel_cli(case, argv):
         )
 
     run_all._build_batch_executor = executor
-    return main(argv)
+    cli_argv = list(argv)
+    if (
+        os.environ.get("JANUS_TEST_CAPTURE_LIFECYCLE")
+        and "--max-parallel" not in run_all.build_parser()._option_string_actions
+    ):
+        index = cli_argv.index("--max-parallel")
+        del cli_argv[index : index + 2]
+    return main(cli_argv)
 
 
 def cli_process(root, *, max_parallel=3, extra_env=None):

@@ -11,7 +11,7 @@ WORKDIR /workspace
 COPY conf/certs/rnpicpedugr46ovtlsca2025.pem /usr/local/share/ca-certificates/rnpicpedugr46ovtlsca2025.crt
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates make openssl openjdk-17-jre-headless libnss-wrapper \
+    && apt-get install -y --no-install-recommends ca-certificates make openssl openjdk-17-jre-headless libnss-wrapper procps \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 1000 janus \
