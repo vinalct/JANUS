@@ -7,17 +7,27 @@ import sys
 
 import pytest
 
-from janus.runtime import BatchExecutor, execute_source_attempt
+from janus.lineage import MetadataZonePaths, RunObserver
+from janus.runtime import (
+    BatchExecutor,
+    SourceExecutor,
+    SparkSessionProvider,
+    execute_source_attempt,
+)
+from janus.runtime.locking import SourceLockedError, source_state_lock_path
+from janus.scripts.raw_to_bronze import RawToBronzeLoader
+from janus.utils.storage import StorageLayout
+from tests.support.orchestration_capture import capture_case
 from tests.support.parallel_execution import (
     REPO_ROOT,
     file_snapshot,
     held_lock,
     lock_at,
     planned_project,
+    probe_lock,
 )
 
 
-@pytest.mark.xfail(strict=True, reason="single-source lock refusal is absent")
 @pytest.mark.parametrize("flag", ["--execute", "--ingest-raw-to-bronze"])
 def test_single_source_refusal_exits_two_and_writes_nothing(tmp_path, flag):
     from janus.runtime.locking import source_state_lock_path
@@ -28,6 +38,9 @@ def test_single_source_refusal_exits_two_and_writes_nothing(tmp_path, flag):
     path = source_state_lock_path(plan, StorageLayout.from_environment_config(config, root))
     with held_lock(path) as (_process, _release, record):
         before = file_snapshot(path.parent)
+        replay_args = (
+            ["--bronze-table", "bronze.replayed"] if flag == "--ingest-raw-to-bronze" else []
+        )
         result = subprocess.run(
             [
                 sys.executable,
@@ -38,6 +51,7 @@ def test_single_source_refusal_exits_two_and_writes_nothing(tmp_path, flag):
                 "--source-id",
                 "A",
                 flag,
+                *replay_args,
             ],
             capture_output=True,
             text=True,
@@ -49,6 +63,66 @@ def test_single_source_refusal_exits_two_and_writes_nothing(tmp_path, flag):
         for key in ("pid", "hostname", "run_id", "acquired_at"):
             assert str(record[key]) in result.stderr
         assert file_snapshot(path.parent) == before
+
+
+@pytest.mark.parametrize("replay", [False, True], ids=["execute", "replay"])
+def test_refusal_precedes_observer_wiring_and_spark(tmp_path, monkeypatch, replay):
+    root, _registry, batch, config, paths = planned_project(tmp_path)
+    planned_run = batch.source("A").require_planned_run()
+    path = source_state_lock_path(
+        planned_run.plan, StorageLayout.from_environment_config(config, root)
+    )
+
+    def reject_side_effect(*args, **kwargs):
+        pytest.fail("a refused run must not wire its observer or start Spark")
+
+    monkeypatch.setattr("janus.runtime.executor.wire_run_event_emitter", reject_side_effect)
+    monkeypatch.setattr("janus.scripts.raw_to_bronze.wire_run_event_emitter", reject_side_effect)
+    provider = SparkSessionProvider(config, paths, session_factory=reject_side_effect)
+    with held_lock(path):
+        before = file_snapshot(root / "data")
+        with pytest.raises(SourceLockedError):
+            if replay:
+                RawToBronzeLoader().ingest(
+                    planned_run, provider, config, bronze_table="bronze.replayed"
+                )
+            else:
+                SourceExecutor().execute(planned_run, provider, config)
+        assert provider.was_started is False
+        assert file_snapshot(root / "data") == before
+
+
+@pytest.mark.parametrize("case", ["independent", "failed", "empty", "replay"])
+def test_lock_spans_observation_and_terminal_persistence(tmp_path, monkeypatch, case):
+    checked_paths = []
+
+    def guarded(method):
+        def call(observer, plan, *args, **kwargs):
+            path = MetadataZonePaths.from_plan(plan).base_dir / ".lock"
+            before = probe_lock(path)
+            assert before["acquired"] is False
+            holder = before["holder"]
+            assert holder["run_id"] == plan.run_context.run_id
+            assert holder["pipeline_run_id"] == plan.run_context.attributes_as_dict().get(
+                "pipeline_run_id"
+            )
+            assert holder["command"] == (
+                "run --ingest-raw-to-bronze" if case == "replay" else "run --execute"
+            )
+            result = method(observer, plan, *args, **kwargs)
+            assert probe_lock(path)["acquired"] is False
+            checked_paths.append(path)
+            return result
+
+        return call
+
+    for name in ("start_run", "record_success", "record_failure"):
+        monkeypatch.setattr(RunObserver, name, guarded(getattr(RunObserver, name)))
+    capture_case(tmp_path / case, case)
+    assert len(checked_paths) == 2
+    path = checked_paths[0]
+    assert path.read_bytes() == b""
+    assert probe_lock(path)["acquired"] is True
 
 
 @pytest.mark.xfail(strict=True, reason="attempts do not classify lock refusal")

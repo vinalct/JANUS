@@ -20,6 +20,8 @@ from janus.utils.logging import StructuredLogger, sanitize_log_payload
 from janus.utils.storage import StorageLayout
 
 LOCK_FILE_NAME = ".lock"
+COMMAND_RUN_EXECUTE = "run --execute"
+COMMAND_RUN_REPLAY = "run --ingest-raw-to-bronze"
 _HOLDER_READ_LIMIT = 64 * 1024
 
 

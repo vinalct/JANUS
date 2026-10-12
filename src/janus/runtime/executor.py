@@ -28,6 +28,7 @@ from janus.runtime.contract_preflight import (
     load_live_table,
     start_observed_preflight,
 )
+from janus.runtime.locking import COMMAND_RUN_EXECUTE, hold_source_state_lock
 from janus.runtime.materialize import (
     BronzeMaterializer,
     _bind_execution_logger,
@@ -153,6 +154,7 @@ class SourceExecutor:
     )
 
     preflight_loader: Callable[..., LiveTable | None] = load_live_table
+    lock_wait_seconds: float = 0.0
 
     def execute( 
         self,
@@ -162,6 +164,29 @@ class SourceExecutor:
     ) -> ExecutedRun:
         storage_layout = self.storage_layout_resolver(planned_run.plan, environment_config)
         plan = _plan_with_storage_layout_outputs(planned_run.plan, storage_layout)
+        attributes = plan.run_context.attributes_as_dict()
+        # Lock before observation: a refused run must leave no run metadata.
+        with hold_source_state_lock(
+            plan,
+            storage_layout,
+            command=COMMAND_RUN_EXECUTE,
+            run_id=plan.run_context.run_id,
+            pipeline_run_id=attributes.get("pipeline_run_id"),
+            wait_seconds=self.lock_wait_seconds,
+            logger=_bind_execution_logger(self.logger, plan),
+        ):
+            return self._execute_locked(
+                planned_run, plan, storage_layout, spark_provider, environment_config
+            )
+
+    def _execute_locked(
+        self,
+        planned_run: PlannedRun,
+        plan: ExecutionPlan,
+        storage_layout: StorageLayout,
+        spark_provider: SparkSessionProvider,
+        environment_config: Mapping[str, Any],
+    ) -> ExecutedRun:
         runtime_planned_run = replace(planned_run, plan=plan)
         logger = _bind_execution_logger(self.logger, plan)
 

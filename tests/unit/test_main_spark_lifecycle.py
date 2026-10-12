@@ -27,6 +27,7 @@ import janus.runtime.spark_lifecycle as spark_lifecycle
 from janus.main import main
 from janus.models import SparkWriteDefaults
 from janus.runtime import SparkSessionProvider
+from janus.runtime.locking import LockHolder, LockUnsupportedError, SourceLockedError
 
 SOURCE_ID = "federal_open_data_example"
 ENVIRONMENT_CONFIG: dict[str, Any] = {
@@ -315,6 +316,39 @@ def test_the_session_is_released_when_the_run_raises(cli):
         main(["--execute", "--source-id", SOURCE_ID])
 
     assert [session.stop_calls for session in cli.sessions] == [1]
+
+
+@pytest.mark.parametrize("replay", [False, True], ids=["execute", "replay"])
+@pytest.mark.parametrize("unsupported", [False, True], ids=["locked", "unsupported"])
+def test_lock_refusal_exits_two_without_starting_spark(
+    cli, capsys, monkeypatch, tmp_path, replay, unsupported
+):
+    holder = LockHolder.now(
+        source_id=SOURCE_ID, command="run --execute", run_id="holder-run", pipeline_run_id=None
+    )
+    cli.raises = (
+        LockUnsupportedError("source-state locking requires POSIX fcntl")
+        if unsupported
+        else SourceLockedError(tmp_path / ".lock", holder, wanted=holder)
+    )
+
+    def reject_summary(*args):
+        pytest.fail("a refused run must not record a Spark summary")
+
+    monkeypatch.setattr(main_module, "record_spark_session", reject_summary)
+    argv = ["--source-id", SOURCE_ID]
+    argv += (
+        ["--ingest-raw-to-bronze", "--bronze-table", "bronze.replayed"]
+        if replay
+        else ["--execute"]
+    )
+
+    assert main(argv) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert str(cli.raises) in captured.err
+    assert cli.seen_provider.was_started is False
+    assert cli.sessions == []
 
 
 # ── FR-3: both entry points converge on the same lifecycle ───────────────────

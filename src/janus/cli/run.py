@@ -20,6 +20,7 @@ from janus.observability.openlineage import resolve_openlineage_settings
 from janus.planner import Planner, PlannerError, PlanningRequest
 from janus.registry import SourceNotFoundError, load_registry
 from janus.runtime import SourceExecutor, SparkSessionProvider
+from janus.runtime.locking import LockUnsupportedError, SourceLockedError
 from janus.scripts import ingest_raw_to_bronze
 from janus.utils.environment import (
     build_spark_session,
@@ -146,11 +147,11 @@ def run_command(argv: Sequence[str] | None = None) -> int:
         resolved_paths = prepare_runtime(config, project_root)
         resolve_openlineage_settings(config)
         resolve_metrics_settings(config)
-    except (FileNotFoundError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    except PermissionError as exc:
-        print(format_runtime_permission_error(exc), file=sys.stderr)
+    except (FileNotFoundError, ValueError, PermissionError) as exc:
+        message = (
+            format_runtime_permission_error(exc) if isinstance(exc, PermissionError) else str(exc)
+        )
+        print(message, file=sys.stderr)
         return 2
 
     summary = {
@@ -220,6 +221,9 @@ def run_command(argv: Sequence[str] | None = None) -> int:
             )
             summary["executed_run"] = executed_run.to_summary()
             record_spark_session(summary, spark_provider)
+        except (SourceLockedError, LockUnsupportedError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         finally:
             # The executor already stops in its own finally; this is the backstop for
             # a session acquired outside that span.
@@ -257,6 +261,9 @@ def run_command(argv: Sequence[str] | None = None) -> int:
             )
             summary["raw_to_bronze_run"] = raw_to_bronze_run.to_summary()
             record_spark_session(summary, spark_provider)
+        except (SourceLockedError, LockUnsupportedError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         finally:
             # Same backstop as --execute: the loader stops in its own finally, this
             # covers a session acquired outside that span.
