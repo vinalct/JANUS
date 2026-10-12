@@ -27,12 +27,6 @@ from tests.support.parallel_execution import (
     worker_request,
 )
 
-RUNNER_RED = pytest.mark.xfail(strict=True, reason="spawned parallel batch runner is absent")
-INTERRUPT_RED = pytest.mark.xfail(
-    strict=True,
-    reason="parallel interruption and worker-crash handling are absent",
-)
-
 
 def test_worker_json_envelope_round_trips_without_starting_spark(tmp_path):
     _root, _registry, plan, config, paths = planned_project(tmp_path)
@@ -123,15 +117,33 @@ def test_unrelated_yaml_comment_does_not_refuse_node(tmp_path):
     assert root.exists()
 
 
-@RUNNER_RED
 def test_one_slot_constructs_existing_runner_without_importing_multiprocessing():
-    script = (
-        "import sys; from janus.runtime.parallel import build_batch_executor; "
-        "from janus.runtime import BatchExecutor; "
-        "assert 'multiprocessing' not in sys.modules; "
-        "runner=build_batch_executor(max_parallel=1,logger=None); "
-        "assert type(runner) is BatchExecutor; assert 'multiprocessing' not in sys.modules"
-    )
+    script = """
+import sys
+from tempfile import TemporaryDirectory
+from pathlib import Path
+from janus.orchestration import BatchPlanner, BatchPlanRequest
+from janus.registry import load_registry
+from janus.runtime import BatchExecutor
+from janus.runtime.parallel import build_batch_executor
+from janus.utils.environment import load_environment_config, materialize_runtime_paths
+from tests.support.parallel_baseline import CannedSourceExecution, write_capture_project, STARTED_AT
+assert 'multiprocessing' not in sys.modules
+with TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    write_capture_project('chain_and_peer', root)
+    registry = load_registry(root)
+    request = BatchPlanRequest.create(environment='local', project_root=root, planned_at=STARTED_AT)
+    plan = BatchPlanner().plan(request, registry=registry)
+    config = load_environment_config('local', root)
+    runner = build_batch_executor(max_parallel=1, logger=None)
+    assert type(runner) is BatchExecutor
+    runner.source_execution = CannedSourceExecution('chain_and_peer')
+    outcome = runner.execute(plan, registry, config, materialize_runtime_paths(config, root))
+    assert outcome.is_successful
+    assert 'max_parallel' not in outcome.to_summary()['pipeline']
+    assert 'multiprocessing' not in sys.modules
+"""
     completed = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
@@ -143,7 +155,6 @@ def test_one_slot_constructs_existing_runner_without_importing_multiprocessing()
     assert completed.returncode == 0, completed.stderr
 
 
-@RUNNER_RED
 def test_parent_never_starts_spark_and_spawned_fake_batch_matches_sequential(tmp_path, monkeypatch):
     from janus.runtime import BatchExecutor
     from janus.runtime.parallel import ParallelBatchExecutor
@@ -165,7 +176,6 @@ def test_parent_never_starts_spark_and_spawned_fake_batch_matches_sequential(tmp
     assert parallel.to_summary()["pipeline"]["max_parallel"] == 3
 
 
-@INTERRUPT_RED
 def test_crashed_worker_returns_failure_and_skips_consumer(tmp_path):
     from janus.runtime.parallel import ParallelBatchExecutor
 
@@ -183,7 +193,6 @@ def test_crashed_worker_returns_failure_and_skips_consumer(tmp_path):
     assert sources["B"].skip.root_failed_source_ids == ("A",)
 
 
-@INTERRUPT_RED
 def test_interrupt_signals_all_workers_then_kills_after_fake_clock_grace(tmp_path, monkeypatch):
     import janus.runtime.parallel as parallel
 
@@ -406,3 +415,308 @@ def test_worker_interrupt_sends_no_envelope_and_closes_pipe(tmp_path, monkeypatc
     captured = capfd.readouterr()
     assert captured.out == ""
     assert "parallel_worker_interrupted" in captured.err
+
+
+@pytest.mark.parametrize("capacity", [-1, 0, 1])
+def test_parallel_runner_requires_multiple_slots(capacity):
+    from janus.runtime.parallel import ParallelBatchExecutor
+
+    with pytest.raises(ValueError, match="use BatchExecutor for 1"):
+        ParallelBatchExecutor(max_parallel=capacity)
+
+
+def _contract_without_timings(value):
+    """Keep all evidence; remove only measured timestamps/durations and the additive key."""
+    if isinstance(value, dict):
+        return {
+            key: _contract_without_timings(item)
+            for key, item in value.items()
+            if key not in {"started_at", "ended_at", "duration_seconds", "max_parallel"}
+        }
+    if isinstance(value, list):
+        return [_contract_without_timings(item) for item in value]
+    return value
+
+
+@pytest.mark.parametrize("case", [
+    "independent_three", "chain_and_peer", "upstream_fails", "upstream_raises",
+    "planning_failure", "diamond", "diamond_one_arm_fails", "shared_metadata_dir",
+    "independent_seven",
+])
+def test_runner_uses_worker_results_with_bounded_deterministic_dispatch(
+    tmp_path, monkeypatch, case
+):
+    import janus.runtime.parallel as parallel
+    from janus.hooks import built_in_hooks
+    from tests.support.parallel_baseline import CannedSourceExecution, FailingPlanHook
+    from tests.unit.orchestration.test_ready_queue_scheduler import MemorySummaryStore
+
+    root, registry, plan, config, paths = planned_project(tmp_path, case)
+    monkeypatch.setenv("JANUS_TEST_SCENARIO", case)
+    hooks = (*built_in_hooks(), ("parallel_baseline.fail_plan", FailingPlanHook()))
+    monkeypatch.setattr("janus.hooks.built_in_hooks", lambda: hooks)
+    sequential = parallel.BatchExecutor(source_execution=CannedSourceExecution(case)).execute(
+        plan, registry, config, paths, summary_store=MemorySummaryStore()
+    )
+    active = []
+    dispatches = []
+    attempts = {}
+    peaks = []
+    events = []
+    real_preflight = parallel._preflight
+
+    def preflight(*args):
+        real_preflight(*args)
+        events.append("preflight")
+
+    store = MemorySummaryStore()
+    store.assert_available = lambda _: events.append("available")
+
+    def start(task):
+        assert events[:2] == ["preflight", "available"]
+        assert len(active) < 3
+        if case == "shared_metadata_dir":
+            assert active == []
+        handle = Mock(request=task, pid=os.getpid(), exitcode=0)
+        handle.envelope = call_worker(task)
+        attempts[task.source_id] = handle.envelope["attempt"]
+        handle.join.side_effect = lambda: active.remove(task.source_id)
+        active.append(task.source_id)
+        peaks.append(len(active))
+        dispatches.append(task.source_id)
+        return handle
+
+    monkeypatch.setattr(parallel, "_preflight", preflight)
+    # Complete in reverse order to prove that summaries keep the plan order.
+    monkeypatch.setattr(parallel, "_wait_any", lambda handles: list(reversed(handles)))
+    logger = Mock(context={})
+    outcome = parallel.ParallelBatchExecutor(
+        max_parallel=3, process_starter=start, execution_factory=FAKE_FACTORY, logger=logger
+    ).execute(plan, registry, config, paths, summary_store=store)
+    assert not active
+    assert max(peaks) <= 3
+    if case == "independent_seven":
+        assert max(peaks) == 3
+        assert dispatches == list(plan.source_ids)
+    if case == "chain_and_peer":
+        assert dispatches == ["A", "C", "B"]
+    assert tuple(source.source_id for source in outcome.sources) == plan.source_ids
+    assert outcome.to_summary()["pipeline"]["max_parallel"] == 3
+    assert outcome.schema_version == 1
+    assert _contract_without_timings(outcome.to_summary()) == _contract_without_timings(
+        sequential.to_summary()
+    )
+    for source in outcome.sources:
+        if source.attempts:
+            assert source.attempts[0].to_summary() == attempts[source.source_id]
+    assert len(logger.info.call_args_list) == 2 * len(dispatches)
+    assert root.exists()
+
+
+@pytest.mark.parametrize("failure", ["snapshot", "summary"])
+def test_parent_preflight_refuses_before_starting_workers(tmp_path, failure):
+    from janus.orchestration.errors import DuplicatePipelineRunError
+    from janus.runtime import BatchExecutionPreflightError
+    from janus.runtime.parallel import ParallelBatchExecutor
+    from tests.unit.orchestration.test_ready_queue_scheduler import MemorySummaryStore
+
+    root, registry, plan, config, paths = planned_project(tmp_path)
+    starter = Mock(side_effect=AssertionError("worker started before preflight"))
+    store = MemorySummaryStore()
+    if failure == "snapshot":
+        registry = replace(registry, project_root=root / "different-root")
+        expected = BatchExecutionPreflightError
+    else:
+        store.assert_available = Mock(side_effect=DuplicatePipelineRunError("already finalized"))
+        expected = DuplicatePipelineRunError
+    with pytest.raises(expected):
+        ParallelBatchExecutor(max_parallel=3, process_starter=starter).execute(
+            plan, registry, config, paths, summary_store=store
+        )
+    starter.assert_not_called()
+
+
+def _send_large_worker_result(task, connection):
+    try:
+        connection.send_bytes(b"x" * (17 * 1024 * 1024))
+    except BrokenPipeError:
+        pass
+    finally:
+        connection.close()
+
+
+def test_oversized_spawned_envelope_is_refused_without_pipe_deadlock(tmp_path):
+    import multiprocessing
+
+    from janus.runtime.parallel import ParallelBatchExecutor, _WorkerHandle
+    from tests.unit.orchestration.test_ready_queue_scheduler import MemorySummaryStore
+
+    _root, registry, plan, config, paths = planned_project(tmp_path)
+    handles = []
+
+    def start(task):
+        context = multiprocessing.get_context("spawn")
+        reader, writer = context.Pipe(duplex=False)
+        process = context.Process(target=_send_large_worker_result, args=(task, writer))
+        process.start()
+        writer.close()
+        handle = _WorkerHandle(task, process, reader)
+        handles.append(handle)
+        return handle
+
+    try:
+        outcome = ParallelBatchExecutor(max_parallel=3, process_starter=start).execute(
+            plan, registry, config, paths, summary_store=MemorySummaryStore()
+        )
+        sources = {source.source_id: source for source in outcome.sources}
+        for source_id in ("A", "C"):
+            failure = sources[source_id].failure
+            assert failure.phase == "worker_crash"
+            assert "16777216" in failure.reason and "16 MiB" in failure.reason
+            assert not sources[source_id].attempts[0].evidence
+        assert sources["B"].status == "skipped"
+    finally:
+        for handle in handles:
+            try:
+                if handle.is_alive():
+                    handle.kill()
+                    handle.join(timeout=5)
+                handle.close()
+            except ValueError:  # The runner already closed its completed process.
+                pass
+
+
+def _run_fixture_worker(task, connection):
+    """Make the fixture's custom planning hook available in a spawned interpreter."""
+    from unittest.mock import patch
+
+    from janus.hooks import built_in_hooks
+    from janus.runtime.parallel import run_worker
+    from tests.support.parallel_baseline import FailingPlanHook
+
+    hooks = (*built_in_hooks(), ("parallel_baseline.fail_plan", FailingPlanHook()))
+    with patch("janus.hooks.built_in_hooks", return_value=hooks):
+        run_worker(task, connection)
+
+
+@pytest.mark.parametrize("case", [
+    "independent_three", "chain_and_peer", "upstream_fails", "upstream_raises",
+    "planning_failure", "diamond", "diamond_one_arm_fails", "shared_metadata_dir",
+])
+def test_spawned_batches_preserve_every_baseline_case(tmp_path, monkeypatch, case):
+    import multiprocessing
+
+    from janus.runtime import BatchExecutor
+    from janus.runtime.parallel import ParallelBatchExecutor, _spawn_worker, _WorkerHandle
+    from tests.support.parallel_baseline import CannedSourceExecution
+    from tests.unit.orchestration.test_ready_queue_scheduler import MemorySummaryStore
+
+    _root, registry, plan, config, paths = planned_project(tmp_path, case)
+    monkeypatch.setenv("JANUS_TEST_SCENARIO", case)
+    sequential = BatchExecutor(source_execution=CannedSourceExecution(case)).execute(
+        plan, registry, config, paths, summary_store=MemorySummaryStore()
+    )
+
+    def fixture_starter(task):
+        if case != "planning_failure":
+            return _spawn_worker(task)
+        context = multiprocessing.get_context("spawn")
+        reader, writer = context.Pipe(duplex=False)
+        process = context.Process(target=_run_fixture_worker, args=(task, writer))
+        process.start()
+        writer.close()
+        return _WorkerHandle(task, process, reader)
+
+    outcome = ParallelBatchExecutor(
+        max_parallel=3, execution_factory=FAKE_FACTORY, process_starter=fixture_starter
+    ).execute(plan, registry, config, paths, summary_store=MemorySummaryStore())
+    assert _contract_without_timings(outcome.to_summary()) == _contract_without_timings(
+        sequential.to_summary()
+    )
+
+
+@pytest.mark.parametrize("fail_on_breach", [False, True])
+def test_parent_applies_budget_policy_once_after_worker_result(
+    tmp_path, monkeypatch, fail_on_breach
+):
+    import yaml
+
+    import janus.runtime.parallel as parallel
+    from janus.orchestration import BatchPlanner
+    from janus.registry import load_registry
+    from tests.unit.orchestration.test_ready_queue_scheduler import MemorySummaryStore
+
+    root, _registry, plan, config, paths = planned_project(tmp_path)
+    path = plan.source("A").config_path
+    document = yaml.safe_load(path.read_text())
+    document["operations"] = {"max_duration_seconds": 4}
+    path.write_text(yaml.safe_dump(document))
+    registry = load_registry(root)
+    plan = BatchPlanner().plan(
+        replace(plan.request, fail_on_budget_breach=fail_on_breach), registry=registry
+    )
+    received = []
+    policy_calls = []
+    original_policy = parallel._apply_budget_policy
+
+    def policy(attempt, source, request):
+        policy_calls.append(source.source_id)
+        return original_policy(attempt, source, request)
+
+    def start(task):
+        handle = Mock(request=task, pid=os.getpid(), exitcode=0)
+        handle.envelope = call_worker(task)
+        received.append(handle.envelope["attempt"])
+        return handle
+
+    monkeypatch.setattr(parallel, "_wait_any", lambda handles: handles)
+    monkeypatch.setattr(parallel, "_apply_budget_policy", policy)
+    outcome = parallel.ParallelBatchExecutor(
+        max_parallel=3, execution_factory=FAKE_FACTORY, process_starter=start
+    ).execute(plan, registry, config, paths, summary_store=MemorySummaryStore())
+    sources = {source.source_id: source for source in outcome.sources}
+    assert received[0]["status"] == "succeeded"
+    assert received[0]["evidence"]["duration_budget_outcome"] == "exceeded"
+    assert len(policy_calls) == len(set(policy_calls)) == len(received)
+    assert sources["A"].status == ("failed" if fail_on_breach else "succeeded")
+    assert sources["B"].status == ("skipped" if fail_on_breach else "succeeded")
+    if fail_on_breach:
+        assert sources["A"].failure.phase == "budget"
+        assert sources["B"].skip.root_failed_source_ids == ("A",)
+    assert sources["C"].status == "succeeded"
+    persisted = json.loads(next((root / "data/metadata/A/runs").glob("*.json")).read_text())
+    assert persisted["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("started", [False, True])
+@pytest.mark.parametrize("error", [RuntimeError("spawn failed"), KeyboardInterrupt()])
+def test_spawn_failure_closes_pipe_and_reaps_any_started_child(
+    tmp_path, monkeypatch, started, error
+):
+    import multiprocessing
+
+    from janus.runtime.parallel import _spawn_worker
+
+    _root, _registry, plan, config, paths = planned_project(tmp_path)
+    reader, writer = Mock(), Mock()
+    process = Mock(pid=123 if started else None)
+    process.start.side_effect = error
+    process.is_alive.return_value = True
+    context = Mock()
+    context.Pipe.return_value = reader, writer
+    context.Process.return_value = process
+    get_context = Mock(return_value=context)
+    monkeypatch.setattr(multiprocessing, "get_context", get_context)
+    with pytest.raises(type(error)) as raised:
+        _spawn_worker(worker_request(plan, config, paths))
+    assert raised.value is error
+    get_context.assert_called_once_with("spawn")
+    reader.close.assert_called_once()
+    writer.close.assert_called_once()
+    process.close.assert_called_once()
+    if started:
+        process.kill.assert_called_once()
+        process.join.assert_called_once()
+    else:
+        process.kill.assert_not_called()
+        process.join.assert_not_called()

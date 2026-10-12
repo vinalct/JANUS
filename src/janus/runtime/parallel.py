@@ -1,4 +1,4 @@
-"""Spawn-safe, session-free bootstrap for one source attempt per worker."""
+"""Spawned batch execution with a session-free bootstrap per source attempt."""
 
 from __future__ import annotations
 
@@ -6,24 +6,42 @@ import importlib
 import json
 import os
 import signal
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from time import monotonic
 from types import FrameType
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from janus.observability.metrics.pipeline import emit_pipeline_metrics
 from janus.orchestration import BatchPlanner
-from janus.orchestration.plans import BatchPlanRequest, PlannedSource
-from janus.orchestration.results import SourceAttempt
-from janus.orchestration.timing import PipelineClock
-from janus.registry import load_registry
-from janus.runtime.batch import SourceExecution, SourceExecutionService, execute_source_attempt
+from janus.orchestration.persistence import PipelineSummaryStore
+from janus.orchestration.plans import BatchPlan, BatchPlanRequest, PlannedSource
+from janus.orchestration.results import PipelineOutcome, SourceAttempt, SourceOutcome
+from janus.orchestration.scheduling import ReadyQueue
+from janus.orchestration.timing import ClockSample, ExecutionTiming, PipelineClock
+from janus.registry import SourceRegistry, load_registry
+from janus.runtime.batch import (
+    BatchExecutionInterrupted,
+    BatchExecutor,
+    SourceExecution,
+    SourceExecutionService,
+    _apply_budget_policy,
+    _completed_outcomes,
+    _partial_execution,
+    _preflight,
+    execute_source_attempt,
+)
 from janus.runtime.executor import SourceExecutor
+from janus.runtime.locking import source_state_lock_path
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.utils.environment import RuntimeLocation, read_spark_write_defaults
 from janus.utils.logging import StructuredLogger, build_structured_logger
+from janus.utils.storage import StorageLayout
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
+    from multiprocessing.process import BaseProcess
 
 SNAPSHOT_DRIFT_PHASE = "snapshot_drift"
 DEFAULT_EXECUTION_FACTORY = "janus.runtime.parallel:default_execution_factory"
@@ -193,7 +211,7 @@ def _attempt(
         task.environment_config,
         task.resolved_paths,
         source_execution=execution,
-        request=task.request,
+        # The parent applies batch budget policy after decoding the envelope.
     )
 
 
@@ -238,3 +256,326 @@ def _display_digest(version: str | None) -> str:
 
 def _raise_keyboard_interrupt(signum: int, frame: FrameType | None) -> None:
     raise KeyboardInterrupt
+
+
+MAX_ENVELOPE_BYTES = 16 * 1024 * 1024
+MIN_PARALLEL_WORKERS = 2
+
+
+@dataclass(slots=True)
+class _WorkerHandle:
+    request: WorkerTask
+    process: BaseProcess
+    reader: Connection
+    envelope: dict[str, Any] | None = None
+    transport_error: str | None = None
+
+    @property
+    def sentinel(self) -> int:
+        return self.process.sentinel
+
+    @property
+    def pid(self) -> int | None:
+        return self.process.pid
+
+    @property
+    def exitcode(self) -> int | None:
+        return self.process.exitcode
+
+    def is_alive(self) -> bool:
+        return self.process.is_alive()
+
+    def terminate(self) -> None:
+        self.process.terminate()
+
+    def kill(self) -> None:
+        self.process.kill()
+
+    def join(self, *, timeout: float | None = None) -> None:
+        self.process.join(timeout)
+
+    def close(self) -> None:
+        self.reader.close()
+        self.process.close()
+
+
+def _spawn_worker(task: WorkerTask) -> _WorkerHandle:
+    import multiprocessing
+
+    context = multiprocessing.get_context("spawn")
+    reader, writer = context.Pipe(duplex=False)
+    process = context.Process(target=run_worker, args=(task, writer))
+    try:
+        process.start()
+    except BaseException:
+        reader.close()
+        if process.pid is not None:
+            if process.is_alive():
+                process.kill()
+            process.join()
+        process.close()
+        raise
+    finally:
+        writer.close()
+    return _WorkerHandle(task, process, reader)
+
+
+def _wait_any(handles: list[_WorkerHandle], *, timeout: float | None = None) -> list[_WorkerHandle]:
+    from multiprocessing.connection import wait
+
+    ready = wait([item for h in handles for item in (h.sentinel, h.reader)], timeout)
+    return [h for h in handles if h.reader in ready or h.sentinel in ready]
+
+
+def _read_envelope(handle: _WorkerHandle) -> None:
+    """Read before joining so pipe-buffer-sized results cannot block the sender."""
+    try:
+        message = handle.reader.recv_bytes(MAX_ENVELOPE_BYTES)
+        envelope = json.loads(message)
+        if not isinstance(envelope, dict) or set(envelope) != {"attempt", "worker"}:
+            raise ValueError("invalid worker envelope")
+        worker = envelope["worker"]
+        if not isinstance(worker, dict) or set(worker) != {
+            "pid",
+            "spark_started",
+            "spark_application_id",
+        }:
+            raise ValueError("invalid worker diagnostics")
+        attempt = SourceAttempt.from_summary(envelope["attempt"])
+        task = handle.request
+        if (attempt.source_id, attempt.run_id, attempt.attempt) != (
+            task.source_id,
+            task.run_id,
+            task.attempt,
+        ):
+            raise ValueError("worker attempt identity differs from dispatched task")
+        handle.envelope = envelope
+    except EOFError:
+        pass
+    except (OSError, ValueError, TypeError) as error:
+        handle.transport_error = (
+            f"Worker envelope refused (cap {MAX_ENVELOPE_BYTES} bytes / 16 MiB): "
+            f"{type(error).__name__}: {error}"
+        )
+    finally:
+        handle.reader.close()
+
+
+class WorkerCrashed(RuntimeError):
+    """A spawned attempt exited without a valid result envelope."""
+
+
+def _attempt_from_worker(handle: _WorkerHandle, timing: ExecutionTiming) -> SourceAttempt:
+    if handle.envelope is not None:
+        return SourceAttempt.from_summary(handle.envelope["attempt"])
+    task = handle.request
+    reason = f"Worker for source {task.source_id!r} exited with code {handle.exitcode}"
+    if handle.transport_error:
+        reason += f"; {handle.transport_error}"
+    return SourceAttempt.failed_from_exception(
+        source_id=task.source_id,
+        run_id=task.run_id,
+        attempt=task.attempt,
+        timing=timing,
+        error=WorkerCrashed(reason),
+        phase="worker_crash",
+    )
+
+
+@dataclass(slots=True)
+class ParallelBatchExecutor:
+    """Run ready nodes in spawned processes through the shared attempt seam."""
+
+    max_parallel: int
+    clock: PipelineClock = field(default_factory=PipelineClock)
+    summary_store_factory: Callable[[StorageLayout], PipelineSummaryStore] = PipelineSummaryStore
+    execution_factory: str = DEFAULT_EXECUTION_FACTORY
+    lock_wait_seconds: float = 0.0
+    interrupt_grace_seconds: float = 30.0
+    logger: StructuredLogger | None = None
+    process_starter: Callable[[WorkerTask], _WorkerHandle] = _spawn_worker
+
+    def __post_init__(self) -> None:
+        if self.max_parallel < MIN_PARALLEL_WORKERS:
+            raise ValueError(
+                "ParallelBatchExecutor needs max_parallel >= 2; use BatchExecutor for 1"
+            )
+
+    def execute(
+        self,
+        plan: BatchPlan,
+        registry: SourceRegistry,
+        environment_config: Mapping[str, Any],
+        resolved_paths: Mapping[str, RuntimeLocation],
+        *,
+        summary_store: PipelineSummaryStore | None = None,
+    ) -> PipelineOutcome:
+        import multiprocessing  # noqa: F401 — never imported by sequential composition
+
+        layout = StorageLayout.from_environment_config(
+            environment_config, plan.request.project_root
+        )
+        store = summary_store or self.summary_store_factory(layout)
+        _preflight(plan, registry)
+        store.assert_available(plan.request.pipeline_run_id)
+        lock_keys = {
+            source.source_id: str(
+                Path(
+                    os.path.realpath(
+                        source_state_lock_path(source.require_planned_run().plan, layout)
+                    )
+                )
+            )
+            for source in plan.sources
+            if source.is_planned
+        }
+        queue = ReadyQueue(plan, self.max_parallel, lock_keys)
+        outcomes: dict[str, SourceOutcome | None] = dict.fromkeys(plan.source_ids)
+        running: dict[str, _WorkerHandle] = {}
+        started: dict[str, ClockSample] = {}
+        pipeline_started = self.clock.start()
+        try:
+            while not queue.is_finished(outcomes):
+                self._dispatch(
+                    queue, outcomes, running, started, environment_config, resolved_paths
+                )
+                if running:
+                    self._collect(plan, outcomes, running, started)
+                elif not queue.is_finished(outcomes):
+                    raise RuntimeError("Batch scheduler has unfinished nodes but no runnable work")
+        except KeyboardInterrupt as interruption:
+            self._stop_workers(list(running.values()))
+            partial = _partial_execution(plan, outcomes, self.clock.finish(pipeline_started))
+            raise BatchExecutionInterrupted(partial) from interruption
+        except BaseException:
+            self._stop_workers(list(running.values()))
+            raise
+        outcome = PipelineOutcome.from_plan(
+            plan,
+            timing=self.clock.finish(pipeline_started),
+            sources=_completed_outcomes(plan, outcomes),
+            max_parallel=self.max_parallel,
+        )
+        persisted = store.persist(outcome)
+        emit_pipeline_metrics(persisted, environment_config, resolved_paths, logger=self.logger)
+        return persisted
+
+    def _dispatch(
+        self,
+        queue: ReadyQueue,
+        outcomes: dict[str, SourceOutcome | None],
+        running: dict[str, _WorkerHandle],
+        started: dict[str, ClockSample],
+        config: Mapping[str, Any],
+        paths: Mapping[str, RuntimeLocation],
+    ) -> None:
+        while (decision := queue.next_decision(outcomes, running)) is not None:
+            source = decision.planned_source
+            if decision.kind == "skip":
+                outcomes[source.source_id] = SourceOutcome.skipped(
+                    source,
+                    direct_blocking_upstream_ids=decision.blockers,
+                    root_failed_source_ids=decision.roots,
+                )
+            elif decision.kind == "planning_failure":
+                outcomes[source.source_id] = SourceOutcome.from_planning_failure(source)
+            else:
+                task = self._task(queue.plan.request, source, config, paths)
+                started[source.source_id] = self.clock.start()
+                handle = self.process_starter(task)
+                running[source.source_id] = handle
+                self._log(
+                    "parallel_worker_dispatched",
+                    source_id=source.source_id,
+                    run_id=source.run_id,
+                    worker_pid=handle.pid,
+                    running=len(running),
+                )
+
+    def _task(
+        self,
+        request: BatchPlanRequest,
+        source: PlannedSource,
+        config: Mapping[str, Any],
+        paths: Mapping[str, RuntimeLocation],
+    ) -> WorkerTask:
+        contract = source.require_planned_run().plan.data_contract
+        bindings = self.logger.context if self.logger else {}
+        return WorkerTask(
+            request=request,
+            source_id=source.source_id,
+            run_id=source.run_id,
+            attempt=source.attempt,
+            expected_config_version=source.config_version,
+            expected_schema_version=contract.schema_version if contract else None,
+            expected_upstream_ids=source.upstream_ids,
+            environment_config=config,
+            resolved_paths=paths,
+            log_level=str(config.get("runtime", {}).get("log_level", "INFO")),
+            log_bindings=tuple((key, str(value)) for key, value in bindings.items()),
+            lock_wait_seconds=self.lock_wait_seconds,
+            execution_factory=self.execution_factory,
+        )
+
+    def _collect(
+        self,
+        plan: BatchPlan,
+        outcomes: dict[str, SourceOutcome | None],
+        running: dict[str, _WorkerHandle],
+        started: dict[str, ClockSample],
+    ) -> None:
+        for handle in _wait_any(list(running.values())):
+            if handle.envelope is None:
+                _read_envelope(handle)
+            handle.join()
+            source_id = handle.request.source_id
+            source = plan.source(source_id)
+            attempt = _attempt_from_worker(handle, self.clock.finish(started.pop(source_id)))
+            attempt = _apply_budget_policy(attempt, source, plan.request)
+            outcomes[source_id] = SourceOutcome.from_attempts(source, (attempt,))
+            worker = handle.envelope["worker"] if handle.envelope else {}
+            self._log(
+                "parallel_worker_finished",
+                source_id=source_id,
+                worker_pid=handle.pid,
+                exit_code=handle.exitcode,
+                spark_started=worker.get("spark_started"),
+                spark_application_id=worker.get("spark_application_id"),
+            )
+            handle.close()
+            del running[source_id]
+
+    def _stop_workers(self, handles: list[_WorkerHandle]) -> None:
+        for handle in handles:
+            if handle.is_alive():
+                handle.terminate()
+        deadline = monotonic() + self.interrupt_grace_seconds
+        for handle in handles:
+            handle.join(timeout=max(0.0, deadline - monotonic()))
+        for handle in handles:
+            if handle.is_alive():
+                handle.kill()
+            handle.join()
+            handle.close()
+
+    def _log(self, event: str, **fields: Any) -> None:
+        if self.logger:
+            self.logger.info(event, **fields)
+
+
+def build_batch_executor(
+    *,
+    max_parallel: int,
+    logger: StructuredLogger | None,
+    lock_wait_seconds: float = 0.0,
+) -> BatchExecutor | ParallelBatchExecutor:
+    """Choose the runner once; one slot preserves the established sequential path."""
+    if max_parallel == 1:
+        return BatchExecutor(
+            source_execution=SourceExecutionService(
+                executor=SourceExecutor(logger=logger, lock_wait_seconds=lock_wait_seconds)
+            )
+        )
+    return ParallelBatchExecutor(
+        max_parallel=max_parallel, logger=logger, lock_wait_seconds=lock_wait_seconds
+    )

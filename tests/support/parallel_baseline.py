@@ -164,12 +164,21 @@ def launch(case, argv):
         patch.object(
             run_all,
             "_build_batch_executor",
-            side_effect=lambda logger: BatchExecutor(
-                source_execution=CannedSourceExecution(case), clock=clock, logger=logger
-            ),
+            side_effect=lambda logger: sequential_launcher(case, clock, logger),
         ),
     ):
         return dispatch.main(argv)
+
+
+def sequential_launcher(case, clock, logger):
+    from janus.runtime.parallel import build_batch_executor
+
+    runner = build_batch_executor(max_parallel=1, logger=logger)
+    assert type(runner) is BatchExecutor
+    runner.source_execution = CannedSourceExecution(case)
+    runner.clock = clock
+    runner.logger = logger
+    return runner
 
 
 def metadata_digests(root):

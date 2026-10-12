@@ -88,6 +88,8 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
         "root_failures",
     ),
     "janus.runtime": (
+        "ParallelBatchExecutor",
+        "build_batch_executor",
         "LockHolder",
         "LockUnsupportedError",
         "SourceLockedError",

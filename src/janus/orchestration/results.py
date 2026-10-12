@@ -425,6 +425,7 @@ class PipelineOutcome:
     sources: tuple[SourceOutcome, ...]
     summary_persistence: SummaryPersistence = field(default_factory=SummaryPersistence)
     schema_version: int = PIPELINE_SUMMARY_SCHEMA_VERSION
+    max_parallel: int = 1
 
     def __post_init__(self) -> None:
         if self.schema_version != PIPELINE_SUMMARY_SCHEMA_VERSION:
@@ -441,6 +442,8 @@ class PipelineOutcome:
         _validate_aware("planned_at", self.planned_at)
         if not self.timing.executed:
             raise ValueError("a completed pipeline outcome must carry actual timestamps")
+        if self.max_parallel < 1:
+            raise ValueError("max_parallel must be 1 or greater")
         _validate_pipeline_membership(self)
 
     @classmethod
@@ -451,6 +454,7 @@ class PipelineOutcome:
         timing: ExecutionTiming,
         sources: Sequence[SourceOutcome],
         summary_persistence: SummaryPersistence | None = None,
+        max_parallel: int = 1,
     ) -> Self:
         return cls(
             pipeline_run_id=plan.request.pipeline_run_id,
@@ -468,6 +472,7 @@ class PipelineOutcome:
             timing=timing,
             sources=tuple(sources),
             summary_persistence=summary_persistence or SummaryPersistence(),
+            max_parallel=max_parallel,
         )
 
     @property
@@ -504,6 +509,7 @@ class PipelineOutcome:
         return {
             "schema_version": self.schema_version,
             "pipeline": {
+                **({"max_parallel": self.max_parallel} if self.max_parallel > 1 else {}),
                 "pipeline_run_id": self.pipeline_run_id,
                 "attempt": self.attempt,
                 "trigger": self.trigger,

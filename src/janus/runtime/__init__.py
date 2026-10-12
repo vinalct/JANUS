@@ -24,6 +24,7 @@ from janus.runtime.locking import (
     source_state_lock_path,
 )
 from janus.runtime.materialize import BronzeMaterializer
+from janus.runtime.parallel import ParallelBatchExecutor, build_batch_executor
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "ExecutedRun",
     "LockHolder",
     "LockUnsupportedError",
+    "ParallelBatchExecutor",
     "PartialBatchExecution",
     "SourceCleanupError",
     "SourceExecutionAndCleanupError",
@@ -45,6 +47,7 @@ __all__ = [
     "SourceLockedError",
     "SourceStateLock",
     "SparkSessionProvider",
+    "build_batch_executor",
     "execute_source_attempt",
     "hold_source_state_lock",
     "run_contract_preflight",
