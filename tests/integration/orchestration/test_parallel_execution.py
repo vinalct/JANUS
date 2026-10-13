@@ -5,9 +5,11 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 import pytest
 
+from tests.support.orchestration import normalized_terminal_contract
 from tests.support.parallel import (
     assert_lazy_worker_events,
     lifecycle_spark_project,
@@ -29,13 +31,19 @@ from tests.support.parallel_execution import (
     REPO_ROOT,
     cli_process,
     download_barrier,
-    normalized_terminal_contract,
+    file_snapshot,
     spark_project,
 )
-
-PARITY_RED = pytest.mark.xfail(
-    strict=True, reason="parallel CLI execution and sequential parity are absent"
+from tests.support.parallel_order24 import (
+    PAGE_DELAY_SECONDS,
+    SPAWN_COST_SECONDS,
+    bronze_rows,
+    example_project,
+    fixture_service,
+    run_example,
+    write_parity_evidence,
 )
+
 INTERRUPT_RED = pytest.mark.xfail(strict=True, reason="parallel CLI interrupt cleanup is absent")
 
 
@@ -51,7 +59,6 @@ def finish(process):
     return json.loads(stdout), parse_log_events(stderr)
 
 
-@PARITY_RED
 @pytest.mark.parametrize("case", CASES)
 def test_max_parallel_one_matches_verbatim_baseline_goldens(case):
     pytest.importorskip("pyspark")
@@ -98,47 +105,126 @@ def test_max_parallel_one_matches_verbatim_baseline_goldens(case):
         shutil.rmtree(root)  # Only this test's newly created scratch fixture.
 
 
-@PARITY_RED
-def test_parallel_a_and_c_overlap_b_waits_for_a_and_summary_matches_sequential(tmp_path):
-    pytest.importorskip("pyspark")
-    from janus.runtime.parallel import ParallelBatchExecutor  # noqa: F401
+@pytest.mark.spark
+def test_parallel_summary_equals_sequential_summary(tmp_path):
+    with fixture_service(page_delay_seconds=PAGE_DELAY_SECONDS) as server:
+        sequential_root = example_project(tmp_path / "sequential", server)
+        parallel_root = example_project(tmp_path / "parallel", server)
+        sequential, _, sequential_process = run_example(sequential_root, max_parallel=1)
+        parallel, events, parallel_process = run_example(parallel_root, max_parallel=3)
+        assert sequential_process.returncode == parallel_process.returncode == 0
+        assert normalized_terminal_contract(parallel) == normalized_terminal_contract(sequential)
+        sources = {source["source_id"]: source for source in parallel["sources"]}
+        a, b, c = (sources[source]["attempts"][0]["timing"] for source in ("A", "B", "C"))
+        assert a["started_at"] < c["ended_at"] and c["started_at"] < a["ended_at"]
+        assert b["started_at"] >= a["ended_at"]
+        assert parallel["pipeline"]["max_parallel"] == 3
+        assert "max_parallel" not in sequential["pipeline"]
+        for source_id in ("A", "C"):
+            source = next(s for s in sequential["sources"] if s["source_id"] == source_id)
+            timing = source["attempts"][0]["timing"]
+            assert _elapsed(timing) >= PAGE_DELAY_SECONDS >= 2 * SPAWN_COST_SECONDS
+            extraction = [
+                event
+                for event in events
+                if event.get("source_id") == source_id
+                and event["event"] in {"source_extraction_started", "source_extraction_finished"}
+            ]
+            assert len(extraction) == 2
+            assert (
+                _elapsed(
+                    {
+                        "started_at": extraction[0]["timestamp"],
+                        "ended_at": extraction[1]["timestamp"],
+                    }
+                )
+                >= PAGE_DELAY_SECONDS
+            )
+        sequential_rows, parallel_rows = bronze_rows(sequential_root), bronze_rows(parallel_root)
+        assert sequential_rows == parallel_rows
+        assert parallel_rows["A"] == [("north", "North region"), ("south", "South region")]
+        assert parallel_rows["B"] == [("north-001", "north", 10), ("south-001", "south", 20)]
+        assert len(parallel_rows["C"]) == 1
+        write_parity_evidence(tmp_path, sequential, parallel, bronze_rows=parallel_rows)
 
-    sequential_root = spark_project(tmp_path / "sequential")
-    sequential, _events = finish(cli_process(sequential_root, max_parallel=1))
-    root = spark_project(tmp_path / "concurrent")
-    barrier_dir = tmp_path / "barrier"
-    with download_barrier(barrier_dir) as (ready, release):
-        process = cli_process(root, extra_env={"JANUS_TEST_BARRIER_DIR": str(barrier_dir)})
-        try:
-            assert ready.wait(30), "independent downloads never overlapped"
-            release.set()
-            summary, _events = finish(process)
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.communicate(timeout=10)
+
+@pytest.mark.spark
+def test_failed_upstream_skips_dependent_and_peer_completes_in_parallel(tmp_path):
+    with fixture_service(fail_a=True) as server:
+        sequential_root = example_project(tmp_path / "sequential", server)
+        parallel_root = example_project(tmp_path / "parallel", server)
+        b_directory = parallel_root / "runtime/data/metadata/B"
+        # A pre-existing inode must survive unchanged; existence alone is not ownership.
+        b_directory.mkdir(parents=True)
+        (b_directory / ".lock").write_text("previous holder record\n")
+        before = file_snapshot(b_directory)
+        sequential, _, sequential_process = run_example(sequential_root, max_parallel=1)
+        parallel, _, parallel_process = run_example(parallel_root, max_parallel=3)
+        assert sequential_process.returncode == parallel_process.returncode == 1
+        sources = {source["source_id"]: source for source in parallel["sources"]}
+        assert sources["A"]["status"] == "failed"
+        assert sources["A"]["failure"]["phase"] == "execution"
+        assert sources["B"]["status"] == "skipped"
+        assert sources["B"]["skip"] == {
+            "reason_code": "upstream_failed",
+            "direct_blocking_upstream_ids": ["A"],
+            "root_failed_source_ids": ["A"],
+        }
+        assert sources["B"]["attempts"] == []
+        assert sources["B"]["timing"] == {
+            "started_at": None,
+            "ended_at": None,
+            "duration_seconds": 0.0,
+        }
+        assert sources["C"]["status"] == "succeeded"
+        assert file_snapshot(b_directory) == before
+        assert file_snapshot(sequential_root / "runtime/data/metadata/B") == {}
+        assert not any(request.startswith("/details") for request in server.requests)
+        assert sum(request.startswith("/reference") for request in server.requests) == 2
+        assert normalized_terminal_contract(parallel) == normalized_terminal_contract(sequential)
+        write_parity_evidence(
+            tmp_path,
+            sequential,
+            parallel,
+            b_directory_listing=sorted(before),
+            b_run_id=sources["B"]["run_id"],
+            b_directory_unchanged=True,
+        )
+
+
+@pytest.mark.spark
+def test_max_parallel_one_is_the_sequential_runner(tmp_path):
+    with fixture_service() as server:
+        root = example_project(tmp_path / "sequential", server)
+        summary, events, process = run_example(root, max_parallel=1)
+    assert process.returncode == 0
+    assert all(source["status"] == "succeeded" for source in summary["sources"])
+    assert not any(event["event"].startswith("parallel_worker_") for event in events)
+    starts = [event for event in events if event["event"] == "source_execution_started"]
+    assert len(starts) == 3
+    assert {event["pid"] for event in starts} == {process.pid}
+    assert "max_parallel" not in summary["pipeline"]
+    assert "max_parallel" not in summary
+
+
+@pytest.mark.spark
+def test_shared_metadata_directory_nodes_never_overlap(tmp_path):
+    with fixture_service(page_delay_seconds=PAGE_DELAY_SECONDS) as server:
+        root = example_project(tmp_path / "shared", server, shared_metadata=True)
+        summary, _, process = run_example(root, max_parallel=3)
+    assert process.returncode == 0
+    assert all(source["status"] == "succeeded" for source in summary["sources"])
+    assert all(source.get("failure") is None for source in summary["sources"])
     sources = {source["source_id"]: source for source in summary["sources"]}
-    a, b, c = (sources[source]["attempts"][0]["timing"] for source in ("A", "B", "C"))
-    assert max(a["started_at"], c["started_at"]) < min(a["ended_at"], c["ended_at"])
-    assert b["started_at"] >= a["ended_at"]
-    assert normalized_terminal_contract(summary) == normalized_terminal_contract(sequential)
+    a, c = (sources[source]["attempts"][0]["timing"] for source in ("A", "C"))
+    assert a["ended_at"] <= c["started_at"] or c["ended_at"] <= a["started_at"]
+    assert sources["B"]["attempts"][0]["timing"]["started_at"] >= a["ended_at"]
 
 
-@PARITY_RED
-def test_failed_a_skips_b_without_fabricating_evidence_and_c_completes(tmp_path):
-    pytest.importorskip("pyspark")
-    from janus.runtime.parallel import ParallelBatchExecutor  # noqa: F401
-
-    root = spark_project(tmp_path)
-    process = cli_process(root, extra_env={"JANUS_TEST_FAIL_SOURCE": "A"})
-    summary, _events = finish(process)
-    assert process.returncode == 1
-    sources = {source["source_id"]: source for source in summary["sources"]}
-    assert sources["A"]["status"] == "failed"
-    assert sources["B"]["status"] == "skipped" and sources["B"]["attempts"] == []
-    assert sources["B"]["skip"]["root_failed_source_ids"] == ["A"]
-    assert sources["C"]["status"] == "succeeded"
-    assert not list((root / "data/metadata/B/runs").glob("*.json"))
+def _elapsed(timing):
+    return (
+        datetime.fromisoformat(timing["ended_at"]) - datetime.fromisoformat(timing["started_at"])
+    ).total_seconds()
 
 
 @pytest.mark.spark

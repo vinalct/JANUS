@@ -31,7 +31,12 @@ from janus.runtime import (  # noqa: E402
 from janus.runtime.contract_preflight import LiveTable  # noqa: E402
 from janus.writers.evolution import LiveColumn  # noqa: E402
 from tests.support.contracts import DECLARED_CONTRACT_PATH  # noqa: E402
-from tests.support.orchestration import build_graph_project  # noqa: E402
+from tests.support.orchestration import (  # noqa: E402
+    build_graph_project,
+)
+from tests.support.orchestration import (  # noqa: E402
+    normalized_terminal_contract as _normalized_terminal_contract,
+)
 
 PLANNED_AT = "2026-09-15T12:00:00Z"
 
@@ -393,47 +398,6 @@ def _environment_config() -> dict[str, Any]:
         },
         "spark": {"warehouse_dir": "data/metadata/spark-warehouse"},
         "runtime": {"log_level": "ERROR"},
-    }
-
-
-def _normalized_terminal_contract(summary: Mapping[str, Any]) -> dict[str, Any]:
-    """Exclude only runtime identity/timing/trigger and persistence locations.
-
-    Dagster owns its run id, trigger, wall-clock timestamps, and retry attempt ids; the
-    CLI owns a caller-supplied pipeline id and its own timing. Attempt numbers/statuses,
-    graph selection, config versions, failures, and skip causes remain comparable.
-    """
-
-    return {
-        "schema_version": summary["schema_version"],
-        "environment": summary["pipeline"]["environment"],
-        "selection": summary["selection"],
-        "graph": summary["graph"],
-        "config_versions": summary["config_versions"],
-        "sources": [
-            {
-                "source_id": source["source_id"],
-                "selected_directly": source["selected_directly"],
-                "upstream_ids": source["upstream_ids"],
-                "config_version": source["config_version"],
-                "status": source["status"],
-                "attempted": source["attempted"],
-                "attempts": [
-                    {
-                        "attempt": attempt["attempt"],
-                        "status": attempt["status"],
-                        "failure": attempt.get("failure"),
-                    }
-                    for attempt in source["attempts"]
-                ],
-                "failure": source.get("failure"),
-                "skip": source.get("skip"),
-            }
-            for source in summary["sources"]
-        ],
-        "totals": {
-            key: value for key, value in summary["totals"].items() if key != "duration_seconds"
-        },
     }
 
 

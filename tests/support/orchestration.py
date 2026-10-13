@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import mkdtemp
@@ -189,3 +190,44 @@ def build_graph_project(
         source_documents(GRAPH_CASES[name], declare_upstreams=declare_upstreams),
         grouped=grouped,
     )
+
+
+def normalized_terminal_contract(summary: Mapping[str, Any]) -> dict[str, Any]:
+    """Exclude only runtime identity/timing/trigger and persistence locations.
+
+    Dagster owns its run id, trigger, wall-clock timestamps, and retry attempt ids; the
+    CLI owns a caller-supplied pipeline id and its own timing. Attempt numbers/statuses,
+    graph selection, config versions, failures, and skip causes remain comparable.
+    """
+
+    return {
+        "schema_version": summary["schema_version"],
+        "environment": summary["pipeline"]["environment"],
+        "selection": summary["selection"],
+        "graph": summary["graph"],
+        "config_versions": summary["config_versions"],
+        "sources": [
+            {
+                "source_id": source["source_id"],
+                "selected_directly": source["selected_directly"],
+                "upstream_ids": source["upstream_ids"],
+                "config_version": source["config_version"],
+                "status": source["status"],
+                "attempted": source["attempted"],
+                "attempts": [
+                    {
+                        "attempt": attempt["attempt"],
+                        "status": attempt["status"],
+                        "failure": attempt.get("failure"),
+                    }
+                    for attempt in source["attempts"]
+                ],
+                "failure": source.get("failure"),
+                "skip": source.get("skip"),
+            }
+            for source in summary["sources"]
+        ],
+        "totals": {
+            key: value for key, value in summary["totals"].items() if key != "duration_seconds"
+        },
+    }

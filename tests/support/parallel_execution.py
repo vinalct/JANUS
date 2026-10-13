@@ -18,7 +18,11 @@ from janus.orchestration import BatchPlanner, BatchPlanRequest
 from janus.registry import load_registry
 from janus.utils.environment import load_environment_config, materialize_runtime_paths
 from tests.support.contracts import DECLARED_CONTRACT_PATH
-from tests.support.orchestration import GraphCase, SourceSpec
+from tests.support.orchestration import (
+    GraphCase,
+    SourceSpec,
+    normalized_terminal_contract,  # noqa: F401 — shared public helper
+)
 from tests.support.parallel_baseline import CASES, STARTED_AT, CannedSourceExecution
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -309,38 +313,6 @@ def tripwire_worker(request, connection):
         run_worker(request, connection)
 
 
-def normalized_terminal_contract(summary):
-    """Use the CLI/adapter parity mask, preserving failures and graph identities."""
-    return {
-        key: value
-        for key, value in summary.items()
-        if key in {"schema_version", "selection", "graph", "config_versions"}
-    } | {
-        "environment": summary["pipeline"]["environment"],
-        "sources": [
-            {
-                key: value
-                for key, value in source.items()
-                if key not in {"run_id", "timing", "attempts"}
-            }
-            | {
-                "attempts": [
-                    {
-                        key: attempt[key]
-                        for key in ("attempt", "status", "failure")
-                        if key in attempt
-                    }
-                    for attempt in source["attempts"]
-                ]
-            }
-            for source in summary["sources"]
-        ],
-        "totals": {
-            key: value for key, value in summary["totals"].items() if key != "duration_seconds"
-        },
-    }
-
-
 class FixtureTransport:
     """Offline ordinary downloads; the executor still owns extraction and Spark."""
 
@@ -379,18 +351,50 @@ class FixtureTransport:
         )
 
 
+def _sequence_local_session_creation(provider, root, source_id):
+    """Keep real local app ids distinct: Spark derives them from epoch milliseconds.
+
+    Coordinate only this lifecycle fixture's lazy session construction. Extraction,
+    materialization, attempts and the HTTP example parity fixture remain concurrent.
+    """
+    ready = root / "fixture-a-session-started.json"
+    build = provider._session_factory
+
+    def session_factory():
+        if source_id == "C":
+            deadline = time.monotonic() + 30
+            while not ready.is_file():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("A did not initialize its fixture Spark session")
+                time.sleep(0.01)
+        session = build()
+        if source_id == "A":
+            ready.write_text(json.dumps({"application_id": session.sparkContext.applicationId}))
+        return session
+
+    provider._session_factory = session_factory
+
+
 def spark_execution_factory(logger, recorder, lock_wait_seconds):
     from janus.runtime import SourceExecutionService, SourceExecutor
     from janus.strategies.api import ApiStrategy
     from tests.support.orchestration_capture import EmptyHandoffHook
 
-    service = SourceExecutionService(
-        executor=SourceExecutor(logger=logger), provider_factory=recorder.factory
-    )
-
     class OfflineExecution:
         def execute(self, planned_run, config, paths):
             source_id = planned_run.plan.source.source_id
+
+            def provider_factory(config, paths, logger):
+                provider = recorder.factory(config, paths, logger)
+                if os.environ.get("JANUS_TEST_CAPTURE_LIFECYCLE") and source_id in {"A", "C"}:
+                    _sequence_local_session_creation(
+                        provider, planned_run.plan.run_context.project_root, source_id
+                    )
+                return provider
+
+            service = SourceExecutionService(
+                executor=SourceExecutor(logger=logger), provider_factory=provider_factory
+            )
             offline = replace(
                 planned_run,
                 strategy=ApiStrategy(
@@ -627,5 +631,12 @@ if __name__ == "__main__":
     if sys.argv[1] == "golden":
         from tests.support.parallel_baseline import launch
 
-        raise SystemExit(launch(sys.argv[2], sys.argv[3:]))
+        argv = sys.argv[3:]
+        from janus.cli.run_all import build_parser
+
+        if "--max-parallel" not in build_parser()._option_string_actions:
+            index = argv.index("--max-parallel")
+            assert argv[index + 1] == "1"
+            del argv[index : index + 2]
+        raise SystemExit(launch(sys.argv[2], argv))
     raise SystemExit(run_parallel_cli(sys.argv[1], sys.argv[2:]))
