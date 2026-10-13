@@ -445,7 +445,8 @@ def run_invocation(invocation: Invocation, *, project_root: Path) -> CapturedInv
 
 
 def normalize(captured: CapturedInvocation, *, project_root: Path) -> CapturedInvocation:
-    """Replace the workspace path, the derived program name and clock reads; nothing else."""
+    """Replace the workspace path, the derived program name, clock reads and the lock holder's
+    pid and hostname; nothing else."""
     pinned = _pinned_instants(captured.argv)
     texts = (captured.stdout, captured.stderr)
     clock_dates = {day for text in texts for day in _clock_dates(text, pinned)}
@@ -597,6 +598,8 @@ def _normalize_text(
     text = _CLOCK_DIGEST.sub(r"\1<digest>", text)
     text = _DURATION.sub(r"\1<duration>", text)
     text = re.sub(r"held by pid \d+ on \S+ for", "held by pid <pid> on <hostname> for", text)
+    text = re.sub(r'"holder_pid": \d+', '"holder_pid": "<pid>"', text)
+    text = re.sub(r'"holder_hostname": "[^"]*"', '"holder_hostname": "<hostname>"', text)
     lines = [line.rstrip() for line in text.splitlines()]
     return "\n".join(lines) + "\n" if lines else ""
 
