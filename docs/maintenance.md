@@ -232,7 +232,8 @@ rows; that stays the published queries' job. What retention does to query window
 
 A dry run with a candidate, from the fixture warehouse the CI smoke seeds
 (`make test-maintenance-smoke`), whose profile overrides the bronze policy to `retain_last: 1`,
-`older_than_days: 0`. Recorded on 2026-10-06:
+`older_than_days: 0`. Recorded on 2026-10-06, before order-24 changed the production
+record's lock name to `flock`; this historical capture retains `lock: none`:
 
 ```text
 $ make maintain-dry-run ENVIRONMENT=local \
@@ -351,6 +352,12 @@ unavailable, metadata/raw maintenance exits 2 before writing a maintenance recor
 
 Cron needs no external serialisation for source-scoped metadata/raw retention.
 The shared lineage and orphan-file scheduling requirements below still apply.
+The profile's `orchestration.lock_wait_seconds` bounds the wait before a busy source
+is skipped (default 0, fail fast). Locks use resolved local metadata directories;
+sources sharing one directory share a lock, and `.lock` is always protected from
+retention. NFS, cross-host locking and object-store metadata zones are unsupported.
+See [source-state locking](orchestration.md#source-state-locking) for holder diagnostics
+and the seven registered mutation entry points.
 
 The command still accepts an injected `MaintenanceLock` by argument and records
 its `name`. An explicitly injected `NullMaintenanceLock` acquires nothing and

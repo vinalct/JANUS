@@ -176,6 +176,17 @@ come along automatically. A failed source skips only its dependents; independent
 continue. The aggregate is printed as JSON and persisted under
 `<metadata>/pipelines/<pipeline_run_id>/summary.json`.
 
+Use `--max-parallel 3` to run independent nodes in spawned worker processes, one per
+attempt; the default comes from `orchestration.max_parallel_default` and ships as 1.
+Every mutating entry point holds a kernel-released source-state lock on its resolved
+metadata directory, so overlapping single-source execution refuses with holder diagnostics
+and exit 2. The batch waits for all upstreams and keeps shared-directory nodes apart.
+Each worker verifies the source/contract snapshot and keeps Spark lazy; N=1 preserves
+the existing output bytes, while N>1 adds `pipeline.max_parallel`. Pre-seed Ivy with
+`make seed-ivy`, budget memory for N Spark drivers, and keep the local SQLite profile
+at N ≤ 4; the [operating guide](docs/orchestration.md#operating-guidance) records the
+measurements and catalog guidance.
+
 The command runs one batch and exits. Scheduling stays outside JANUS core: use cron, or the
 optional Dagster adapter, which renders one task per source over the same graph and delegates
 to the same planner and executor.

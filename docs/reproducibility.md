@@ -504,7 +504,12 @@ The other eight verbs:
 | `janus status` | checking the latest successful run against each source's declared freshness window ([freshness status](queryable-observability.md#source-freshness-with-janus-status)) | no |
 
 Cross-source scheduling is `janus run-all`: it runs one batch in dependency order and
-exits. Inspecting and correcting what a run leaves behind is the operator verbs below.
+exits. `--max-parallel N` overrides `orchestration.max_parallel_default` (shipped as 1);
+N>1 uses spawned processes with verified source/contract snapshots and lazy Spark, while
+N=1 keeps its existing output bytes. Built-in source-state locks refuse overlapping
+single-source writers with exit 2 and holder diagnostics; batch contention is a failed
+`lock` attempt. See [parallel execution and capacity guidance](orchestration.md#parallel-batches).
+Inspecting and correcting what a run leaves behind is the operator verbs below.
 Calendars, triggers and whole-run retries stay outside JANUS: use cron, or the optional Dagster
 adapter.
 

@@ -105,6 +105,39 @@ The complete persisted document is:
 examples/orchestration/runtime/data/metadata/pipelines/cli-success-20260914-live/summary.json
 ```
 
+### Run independent sources in parallel
+
+With the healthy fixture still running, and after the batch above has provisioned the
+example's catalog and namespace, use a fresh pipeline id:
+
+```sh
+janus run-all \
+  --project-root examples/orchestration \
+  --environment example \
+  --max-parallel 3 \
+  --pipeline-run-id cli-parallel-20261012 \
+  --started-at 2026-10-12T12:00:00Z
+```
+
+Expect exit 0 and this stable portion, alongside the varying fields shown above:
+
+```json
+{
+  "pipeline": { "max_parallel": 3, "pipeline_run_id": "cli-parallel-20261012" },
+  "selection": { "source_ids": ["A", "B", "C"] },
+  "totals": { "failed": 0, "skipped": 0, "status": "succeeded", "succeeded": 3 }
+}
+```
+
+A and C are eligible together, so their `sources[].attempts[0].timing` intervals
+(`started_at`–`ended_at`) can overlap. B's `started_at` is at or after A's `ended_at`,
+because B starts only after A succeeds. The sources stay ordered A/B/C in the summary
+regardless of completion order. TASK-15's
+delayed fixture proves that overlap and equal normalized summaries/business rows; its
+small-batch N=3 run took 18.952177 s versus 13.794403 s at N=1, so concurrency is not a
+promise of speedup. At N=1 the summary omits `max_parallel` and uses the existing runner.
+See the [measured results and driver-memory guidance](../../docs/orchestration.md#operating-guidance).
+
 ### Selector expansion: select B as the root
 
 `consumer` belongs only to B. The dependency closure adds A, while unrelated C is excluded:
@@ -144,6 +177,24 @@ The command exits `0`; `totals.status` is `succeeded`, and the pipeline ID is Da
 The summary is also stored under
 `runtime/data/metadata/pipelines/<dagster-run-id>/summary.json`.
 
+The definitions default to in-process execution. To opt in for launches through Dagster's
+UI/daemon or `dagster.execute_job`, add these arguments to `build_dagster_adapter` in
+`definitions.py`:
+
+```python
+return build_dagster_adapter(
+    PROJECT_ROOT,
+    environment="example",
+    retry_policy=retry_policy,
+    # executor="multiprocess",
+    # max_concurrent=3,
+)
+```
+
+Uncomment both lines together. The adapter pins `spawn` and tags the job
+`janus/concurrency: multiprocess:3`; each running source may start its own driver.
+The `run_dagster.py` wrapper uses `execute_in_process`, so it still runs in one process.
+
 To inspect and launch the graph in Dagster's local UI:
 
 ```sh
@@ -167,8 +218,9 @@ ticks and the adapter's terminal-summary sensors.
 
 JANUS itself contains no polling loop. A host scheduler may instead call the one-shot
 `janus run-all ...` command; it executes one batch, emits one summary, and exits. When using
-cron, wrap it in the platform's exclusive-lock facility and generate a fresh pipeline ID per
-invocation.
+cron, generate a fresh pipeline ID per invocation. Built-in source locks handle overlapping
+writers; single-source contention exits 2, while batch contention records a failed node and
+the finished batch exits 1. See the [cron wrapper](../../docs/orchestration.md#cron-overlap).
 
 ## Deliberate A failure
 
@@ -243,16 +295,22 @@ catalog.
 
 ## Overlap and concurrency policy
 
-Two invocations must not race on source-scoped `extraction_progress.json`, checkpoints, raw
-paths, or other metadata. An atomic Iceberg catalog protects table commits; it does not make
-those other files safe for concurrent writers.
+Every live/replay attempt and mutating operator verb holds `SourceStateLock` on the resolved
+metadata directory's `.lock`. Two source ids sharing the directory share that lock. A
+competing invocation refuses with holder diagnostics before any run metadata is written;
+batch/Dagster attempts record `phase: "lock"` and skip dependents. The kernel releases the
+lock when a holder dies; the file stays, and deleting it would break mutual exclusion.
+Inside a parallel CLI batch the ready queue holds back shared-directory nodes. Read-only
+inspection and planning remain available while a writer holds the lock.
 
 The example's `conf/dagster/dagster.yaml`, copied into `DAGSTER_HOME` by the bootstrap, sets
 the adapter's shared `janus_source_execution` pool limit to one with `granularity: run`. Thus
 only one run containing those source ops holds the pool at a time, serializing conflicting
 scheduled/manual Dagster runs across the instance. The adapter also uses its conservative
-single-process executor. Run monitoring frees abandoned slots after a bounded delay. Keep an
-equivalent deployment-wide lock for cron or direct `run-all`; do not rely on the catalog lock.
+single-process executor by default. Run monitoring frees abandoned slots after a bounded
+delay. This pool is an optional admission policy; source-state safety for cron and direct
+`run-all` comes from the built-in lock. The multiprocess option above permits independent
+steps within the admitted run. Memory, Ivy pre-seeding and SQLite limits still apply.
 
 ## Retry and resume ownership
 
@@ -315,9 +373,9 @@ Do not combine `--resume` state produced for one window definition with a differ
 ## Deployment assumptions
 
 Every node/worker must load the same source registry snapshot and logical catalog/profile.
-Workers need the source configuration and any referenced hook code. Multi-worker deployments
-need genuinely shared raw and metadata paths; the local filesystem profile is intentionally a
-single-host example, not a distributed-storage promise. Supply credentials through environment
+Workers need the source configuration, contracts and any referenced hook code. Source locks
+cover one host's local metadata filesystem; NFS, cross-host locking and object-store metadata
+zones are unsupported. Supply credentials through environment
 variables, never YAML. Keep Spark/source concurrency conservative and configure the shared
 Dagster pool at the deployment level. Runtime behavior branches on the catalog/profile contract,
 not on vendor names.
@@ -386,6 +444,8 @@ The expected terminal status is the same successful A/B/C summary shown above.
 Full-refresh overwrite preserves Iceberg history under the order-09 contract. This example does
 not expire snapshots, compact files, or delete orphans: its `example` profile declares no
 `maintenance:` block, so `janus maintain` refuses on it. A deployment that wants retention
-declares the window in its profile and schedules `janus maintain`, dry run first, serialized with
-ingestion through the same `janus_source_execution` pool. That work stays separate from
+declares the window in its profile and schedules `janus maintain`, dry run first. Metadata/raw
+retention holds the same source locks and skips a busy source as `source_locked`; shared
+lineage/orphan maintenance still needs its scheduling policy, such as the same
+`janus_source_execution` pool. That work stays separate from
 ingestion and orchestration; see [retention and maintenance](../../docs/maintenance.md).
