@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import re
+import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.support.required_test_gate import (
     REQUIRED_SUITES,
@@ -265,3 +269,131 @@ def test_catalog_status_cases_are_required_by_local_and_hosted_spark_gates():
         and "--suite status_catalog" in step["run"]
         for step in workflow["jobs"]["spark"]["steps"]
     )
+
+
+LOCKING_PARALLEL_CLASSES = (
+    "tests.unit.runtime.test_source_state_lock",
+    "tests.unit.runtime.test_lock_refusal_evidence",
+    "tests.unit.cli.test_operator_verbs_hold_the_lock",
+    "tests.unit.toolchain.test_lock_acquisition_sites",
+    "tests.unit.orchestration.test_ready_queue_scheduler",
+    "tests.unit.orchestration.test_attempt_wire_format",
+    "tests.unit.runtime.test_parallel_runner",
+    "tests.unit.toolchain.test_no_threaded_source_execution",
+    "tests.unit.orchestration.test_orchestration_settings",
+)
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def _gate_configuration():
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    variables = dict(re.findall(
+        r"^(\w+) := (.*)$", makefile.replace("\\\n", " "), re.MULTILINE
+    ))
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    return makefile, variables, workflow["jobs"]
+
+
+def _recipe(makefile, target):
+    return makefile.split(f"\n{target}:\n", 1)[1].split("\n\n", 1)[0]
+
+
+def _report_gates(commands, variables):
+    """Compare selectors, counts, and report order after expanding Make's gate variables."""
+    gates = {}
+    for reported in re.findall(
+        r"tests\.support\.required_test_gate ([^\n]+)", commands.replace("\\\n", " ")
+    ):
+        command = reported
+        while re.search(r"\$\((\w+)\)", command):
+            command = re.sub(r"\$\((\w+)\)", lambda match: variables[match[1]], command)
+        tokens = shlex.split(command.removesuffix(")"))
+        reports, options = [tokens[0]], {}
+        for flag, value in zip(tokens[1::2], tokens[2::2], strict=True):
+            if flag == "--additional-report":
+                reports.append(value)
+            else:
+                options[flag] = value
+        key = tuple(options.get(flag) for flag in ("--class-name", "--test-name", "--suite"))
+        assert key not in gates, f"duplicate required gate: {key}"
+        gates[key] = (int(options.get("--minimum-passed", "0")), tuple(reports))
+    assert gates, "no required report gates found"
+    return gates
+
+
+def test_fast_requires_all_nine_locking_and_parallel_suites():
+    makefile, variables, jobs = _gate_configuration()
+    assert tuple(variables["LOCKING_PARALLEL_REQUIRED_CLASSES"].split()) == LOCKING_PARALLEL_CLASSES
+    recipe = _recipe(makefile, "test-fast")
+    assert "$(LOCKING_PARALLEL_REQUIRED_CLASSES)" in recipe
+    assert '--class-name "$$class_name" --minimum-passed 1 || exit $$?' in recipe
+    assert any(step.get("run") == "make test-fast PYTHON=python" for step in jobs["fast"]["steps"])
+
+
+@pytest.mark.parametrize(("class_name", "count"), [
+    ("tests.unit.toolchain.test_lock_acquisition_sites", 39),
+    ("tests.unit.runtime.test_source_state_lock", 34),
+])
+def test_fast_requires_every_lock_sweep_and_kernel_lock_case(class_name, count):
+    makefile, variables, _jobs = _gate_configuration()
+    # Counted commands follow the loops; the loop's shell variable is not a Make variable.
+    counted = _recipe(makefile, "test-fast").split("\tdone\n")[-1]
+    gates = _report_gates(counted, variables)
+    assert gates[(class_name, None, None)] == (count, (variables["FAST_TEST_REPORT"],))
+
+
+def test_local_and_hosted_spark_require_the_same_suites_counts_and_reports():
+    makefile, variables, jobs = _gate_configuration()
+    recipe = makefile.split("\nci: ensure-up\n", 1)[1].split("\n\n", 1)[0]
+    local = _report_gates(recipe, variables)
+    steps = jobs["spark"]["steps"]
+    first = next(index for index, step in enumerate(steps) if "--cov=janus" in step.get("run", ""))
+    hosted = _report_gates("\n".join(step.get("run", "") for step in steps[first:]), {})
+    assert local == hosted
+    reports = tuple(variables[name] for name in (
+        "CI_TEST_REPORT", "CI_UNIT_TEST_REPORT", "CI_LARGE_TEST_REPORT"
+    ))
+    for class_name, count in (
+        ("tests.integration.orchestration.test_dependency_execution", 8),
+        ("tests.integration.orchestration.test_parallel_execution", 18),
+        ("tests.integration.dagster.test_cli_adapter_parity", 15),
+    ):
+        assert local[(class_name, None, None)] == (count, reports)
+    classes = [key[0] for key in local]
+    orchestration = classes.index("tests.integration.orchestration.test_dependency_execution")
+    assert classes[orchestration + 1:orchestration + 3] == [
+        "tests.integration.orchestration.test_parallel_execution",
+        "tests.integration.dagster.test_cli_adapter_parity",
+    ]
+
+
+def test_adapter_requires_the_full_green_selection_in_both_python_jobs():
+    makefile, variables, jobs = _gate_configuration()
+    gates = _report_gates(_recipe(makefile, "test-adapter"), variables)
+    assert gates[(None, None, None)] == (40, (variables["DAGSTER_TEST_REPORT"],))
+    assert jobs["adapter"]["strategy"]["matrix"]["python-version"] == ["3.13", "3.14"]
+    assert any(
+        step.get("run") == "make test-adapter PYTHON=python" for step in jobs["adapter"]["steps"]
+    )
+
+
+def test_ci_executes_complete_spark_adapter_parity_in_the_optional_extra_venv():
+    makefile, _variables, jobs = _gate_configuration()
+    recipe = makefile.split("\nci: ensure-up\n", 1)[1].split("\n\n", 1)[0]
+    assert "$(JANUS_ENTRYPOINT) $(MAKE) test-ci-integration" in recipe
+    assert any(
+        "make test-ci-integration" in step.get("run", "") for step in jobs["spark"]["steps"]
+    )
+    result = subprocess.run(
+        ["make", "--no-print-directory", "--dry-run", "test-ci-integration"],
+        cwd=ROOT, capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    commands = result.stdout.splitlines()
+    assert '--system-site-packages "/tmp/janus-ci-dagster"' in commands[0]
+    assert 'pip install "dagster==1.13.22"' in commands[1]
+    assert "/tmp/janus-ci-dagster/bin/python -m pytest" in commands[2]
+    assert "tests/integration" in commands[2]
+    assert "--ignore=tests/integration/dagster" not in commands[2]
+    assert "not spark" not in commands[2]
+    assert "--junitxml=data/metadata/test-reports/ci.xml" in commands[2]
