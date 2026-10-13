@@ -405,7 +405,7 @@ def spark_execution_factory(logger, recorder, lock_wait_seconds):
             )
             result = service.execute(offline, config, paths)
             if os.environ.get("JANUS_TEST_CAPTURE_LIFECYCLE") and source_id == "D":
-                from tests.support.parallel_order24 import process_children
+                from tests.support.parallel import process_children
 
                 logger.info(
                     "fixture_empty_worker_process_sample",
@@ -438,7 +438,7 @@ def run_parallel_cli(case, argv):
                 source_execution=spark_execution_factory(logger, Recorder(), 0), logger=logger
             )
         if os.environ.get("JANUS_TEST_CAPTURE_LIFECYCLE"):
-            from tests.support.parallel_order24 import install_worker_evidence_capture
+            from tests.support.parallel import install_worker_evidence_capture
 
             install_worker_evidence_capture(logger)
         return ParallelBatchExecutor(

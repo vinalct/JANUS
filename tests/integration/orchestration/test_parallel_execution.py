@@ -8,6 +8,14 @@ import time
 
 import pytest
 
+from tests.support.parallel import (
+    assert_lazy_worker_events,
+    lifecycle_spark_project,
+    parse_log_events,
+    source_events,
+    spark_project_with_empty_source,
+    write_lifecycle_evidence,
+)
 from tests.support.parallel_baseline import (
     CAPTURE_ROOT,
     CASES,
@@ -23,14 +31,6 @@ from tests.support.parallel_execution import (
     download_barrier,
     normalized_terminal_contract,
     spark_project,
-)
-from tests.support.parallel_order24 import (
-    assert_lazy_worker_events,
-    lifecycle_spark_project,
-    parse_log_events,
-    source_events,
-    spark_project_with_empty_source,
-    write_lifecycle_evidence,
 )
 
 PARITY_RED = pytest.mark.xfail(

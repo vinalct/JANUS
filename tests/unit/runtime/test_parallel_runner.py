@@ -221,7 +221,7 @@ def test_parent_tripwire_covers_three_spawned_workers_and_summary_persistence(
     tmp_path, monkeypatch
 ):
     from janus.runtime.parallel import ParallelBatchExecutor
-    from tests.support.parallel_order24 import BOOTSTRAP_FACTORY
+    from tests.support.parallel import BOOTSTRAP_FACTORY
 
     root, registry, plan, config, paths = planned_project(tmp_path, "independent_three")
     report_dir = tmp_path / "reports"
@@ -250,7 +250,7 @@ def test_spawned_bootstrap_reports_no_import_or_session_and_detects_violation(
     import multiprocessing
 
     from janus.runtime.parallel import run_worker
-    from tests.support.parallel_order24 import BOOTSTRAP_FACTORY, bootstrap_tripwire_worker
+    from tests.support.parallel import BOOTSTRAP_FACTORY, bootstrap_tripwire_worker
 
     _root, _registry, plan, config, paths = planned_project(tmp_path)
     report_dir = tmp_path / "reports"
