@@ -368,3 +368,24 @@ def test_terminal_status_sensors_are_enabled_for_success_failure_and_cancel(tmp_
         sensor.default_status == dagster.DefaultSensorStatus.RUNNING
         for sensor in adapter.definitions.sensors
     )
+
+
+def test_default_adapter_uses_profile_lock_wait_without_changing_executor(
+    tmp_path, monkeypatch
+):
+    root = build_graph_project(tmp_path, "independent")
+    config = _environment_config()
+    config["orchestration"] = {"max_parallel_default": 7, "lock_wait_seconds": 3}
+    waits = []
+
+    def offline_execute(self, planned, *args):
+        waits.append(self.lock_wait_seconds)
+        return FakeExecutedRun(planned, succeeded=True)
+
+    monkeypatch.setattr(SourceExecutor, "_execute_locked", offline_execute)
+    adapter = build_dagster_adapter(root, environment_config=config)
+    result, outcome = adapter.execute_in_process()
+    assert result.success
+    assert outcome.is_successful
+    assert waits == [3, 3]
+    assert adapter.job.executor_def.name == "in_process"

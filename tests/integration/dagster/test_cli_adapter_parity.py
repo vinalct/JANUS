@@ -125,7 +125,7 @@ def test_cli_and_dagster_have_identical_graph_selection_and_terminal_contract(
     monkeypatch.setattr(
         run_all_module,
         "_build_batch_executor",
-        lambda _logger: BatchExecutor(source_execution=cli_execution),
+        lambda _logger, **_settings: BatchExecutor(source_execution=cli_execution),
     )
 
     cli_status = main(
@@ -212,7 +212,7 @@ def test_cli_and_dagster_normalize_strict_preflight_refusal_identically(
     monkeypatch.setattr(
         run_all_module,
         "_build_batch_executor",
-        lambda _logger: BatchExecutor(source_execution=cli_service),
+        lambda _logger, **_settings: BatchExecutor(source_execution=cli_service),
     )
     cli_status = main(
         [
@@ -281,7 +281,7 @@ def test_cli_and_adapter_emit_the_same_four_aggregate_samples_after_persistence(
     monkeypatch.setattr(
         run_all_module,
         "_build_batch_executor",
-        lambda _logger: BatchExecutor(source_execution=cli_execution),
+        lambda _logger, **_settings: BatchExecutor(source_execution=cli_execution),
     )
     exit_code = main(
         [
@@ -433,7 +433,9 @@ def test_multiprocess_matches_cli_and_in_process_terminal_contract(
     monkeypatch.setattr(
         run_all_module,
         "_build_batch_executor",
-        lambda logger: BatchExecutor(source_execution=adapter_execution_factory(logger)),
+        lambda logger, **_settings: BatchExecutor(
+            source_execution=adapter_execution_factory(logger)
+        ),
     )
     code = main(
         [

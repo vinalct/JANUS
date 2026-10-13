@@ -116,7 +116,9 @@ def _arguments(root: Path, *extra: str, pipeline_id: str = PIPELINE_ID) -> list[
 
 def _install_runner(monkeypatch, execution: ExecutionSpy, **kwargs: Any) -> CoreBatchExecutor:
     runner = CoreBatchExecutor(source_execution=execution, **kwargs)
-    monkeypatch.setattr(run_all_module, "_build_batch_executor", lambda _logger: runner)
+    monkeypatch.setattr(
+        run_all_module, "_build_batch_executor", lambda _logger, **_settings: runner
+    )
     return runner
 
 
@@ -287,7 +289,7 @@ def test_invalid_graphs_return_two_before_runner_construction(
 ):
     root = _project(tmp_path, graph)
 
-    def fail_if_built(_logger):
+    def fail_if_built(_logger, **_settings):
         raise AssertionError("the runner must not be constructed for an invalid graph")
 
     monkeypatch.setattr(run_all_module, "_build_batch_executor", fail_if_built)
@@ -304,7 +306,7 @@ def test_no_matching_selection_returns_two_without_execution(tmp_path, monkeypat
     root = _project(tmp_path)
     execution = ExecutionSpy()
 
-    def fail_if_built(_logger):
+    def fail_if_built(_logger, **_settings):
         raise AssertionError("the runner must not be constructed for an empty selection")
 
     monkeypatch.setattr(run_all_module, "_build_batch_executor", fail_if_built)
@@ -363,7 +365,9 @@ def test_unexpected_batch_operation_returns_one_without_claiming_completion(
         def execute(self, *_args):
             raise OSError("metadata storage unavailable")
 
-    monkeypatch.setattr(run_all_module, "_build_batch_executor", lambda _logger: BrokenRunner())
+    monkeypatch.setattr(
+        run_all_module, "_build_batch_executor", lambda _logger, **_settings: BrokenRunner()
+    )
 
     exit_code = main(_arguments(root))
     captured = capsys.readouterr()
@@ -496,7 +500,7 @@ def test_help_paths_do_not_load_configuration_or_compute(monkeypatch, capsys, ar
     monkeypatch.setattr(
         run_all_module,
         "_build_batch_executor",
-        lambda _logger: pytest.fail("help must not construct a runner"),
+        lambda _logger, **_settings: pytest.fail("help must not construct a runner"),
     )
 
     with pytest.raises(SystemExit) as exc_info:

@@ -87,6 +87,18 @@ INVOCATIONS: tuple[Invocation, ...] = (
         documented_at="docs/orchestration.md:58-66",
     ),
     Invocation(
+        "run_rejects_max_parallel",
+        ("--source-id", "federal_open_data_example", "--execute", "--max-parallel", "2"),
+        "repository",
+        documented_at="src/janus/cli/run.py::parse_run_args",
+    ),
+    Invocation(
+        "run_all_rejects_max_parallel_zero",
+        ("run-all", "--max-parallel", "0"),
+        "repository",
+        documented_at="src/janus/cli/run_all.py::_positive_int",
+    ),
+    Invocation(
         "maintain_help",
         ("maintain", "--help"),
         "repository",

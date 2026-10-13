@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import yaml
 
@@ -27,14 +28,14 @@ from janus.orchestration import (
     BatchSelection,
     PipelineSummaryPersistenceError,
 )
+from janus.orchestration.settings import resolve_orchestration_settings
 from janus.registry import SourceRegistry, load_registry
 from janus.runtime import (
     BatchExecutionInterrupted,
     BatchExecutionPreflightError,
     BatchExecutor,
-    SourceExecutionService,
-    SourceExecutor,
 )
+from janus.runtime.parallel import ParallelBatchExecutor, build_batch_executor
 from janus.utils.environment import (
     RuntimeLocation,
     load_environment_config,
@@ -58,9 +59,22 @@ _UNSUPPORTED_BATCH_OPTIONS = {
 }
 
 
+class _BatchArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        """Keep existing error usage byte-identical while documenting the new flag."""
+        parallel = self._option_string_actions["--max-parallel"]
+        help_text = parallel.help
+        if "--max-parallel" not in message:
+            parallel.help = argparse.SUPPRESS
+        try:
+            super().error(message)
+        finally:
+            parallel.help = help_text
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the batch-only parser; all options intentionally follow ``run-all``."""
-    parser = argparse.ArgumentParser(
+    parser = _BatchArgumentParser(
         prog="janus run-all",
         allow_abbrev=False,
         description=(
@@ -132,6 +146,18 @@ def build_parser() -> argparse.ArgumentParser:
             "correct data is a scheduling signal, not a data failure."
         ),
     )
+    parser.add_argument(
+        "--max-parallel",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help=(
+            "Run up to N independent sources at once, each in its own process with its own Spark "
+            "driver when it needs one. Defaults to the profile's "
+            "orchestration.max_parallel_default, else 1. Peak memory grows with "
+            "N \u00d7 spark.driver.memory."
+        ),
+    )
     _add_unsupported_legacy_options(parser)
     return parser
 
@@ -167,7 +193,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return ARGUMENT_ERROR
 
-    return _execute_batch(prepared, resume=args.resume)
+    logger = build_structured_logger(
+        "janus.batch", level=prepared.config.get("runtime", {}).get("log_level", "INFO")
+    ).bind(
+        environment=prepared.config.get("name", prepared.request.environment),
+        project_root=str(project_root),
+        pipeline_run_id=prepared.request.pipeline_run_id,
+    )
+    available = os.process_cpu_count() or os.cpu_count() or 1
+    if prepared.max_parallel > available:
+        logger.warning(
+            "max_parallel_exceeds_cpu_count",
+            max_parallel=prepared.max_parallel,
+            cpu_count=available,
+        )
+        print(
+            f"warning: --max-parallel {prepared.max_parallel} exceeds the {available} CPUs "
+            "available to this process; each worker may start its own Spark driver",
+            file=sys.stderr,
+        )
+    return _execute_batch(prepared, resume=args.resume, logger=logger)
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,10 +222,16 @@ class _PreparedBatch:
     request: BatchPlanRequest
     registry: SourceRegistry
     plan: BatchPlan
+    max_parallel: int
+    lock_wait_seconds: int
 
 
 def _prepare_batch(args: argparse.Namespace, project_root: Path) -> _PreparedBatch:
     config = load_environment_config(args.environment, project_root)
+    orchestration = resolve_orchestration_settings(config)
+    max_parallel = (
+        args.max_parallel if args.max_parallel is not None else orchestration.max_parallel_default
+    )
     # Fail closed before registry reads without creating paths for an invalid registry.
     resolve_metrics_settings(config)
     selection = BatchSelection.create(tags=args.tag, domains=args.domain)
@@ -198,24 +249,22 @@ def _prepare_batch(args: argparse.Namespace, project_root: Path) -> _PreparedBat
     resolved_paths = prepare_runtime(config, project_root)
     resolve_openlineage_settings(config)
     resolve_metrics_settings(config)
-    return _PreparedBatch(config, resolved_paths, request, registry, plan)
+    return _PreparedBatch(
+        config,
+        resolved_paths,
+        request,
+        registry,
+        plan,
+        max_parallel,
+        orchestration.lock_wait_seconds,
+    )
 
 
-def _execute_batch(prepared: _PreparedBatch, *, resume: bool) -> int:
+def _execute_batch(prepared: _PreparedBatch, *, resume: bool, logger: StructuredLogger) -> int:
     config = prepared.config
-    request = prepared.request
     plan = prepared.plan
-    project_root = request.project_root
 
     try:
-        logger = build_structured_logger(
-            "janus.batch",
-            level=config.get("runtime", {}).get("log_level", "INFO"),
-        ).bind(
-            environment=config.get("name", request.environment),
-            project_root=str(project_root),
-            pipeline_run_id=request.pipeline_run_id,
-        )
         log_source_config_deprecations(logger, prepared.registry.sources)
         logger.info(
             "cli_batch_execution_requested",
@@ -224,7 +273,11 @@ def _execute_batch(prepared: _PreparedBatch, *, resume: bool) -> int:
             source_order=plan.source_ids,
             resume=resume,
         )
-        runner = _build_batch_executor(logger)
+        runner = _build_batch_executor(
+            logger,
+            max_parallel=prepared.max_parallel,
+            lock_wait_seconds=prepared.lock_wait_seconds,
+        )
         outcome = runner.execute(
             plan,
             prepared.registry,
@@ -254,12 +307,23 @@ def _execute_batch(prepared: _PreparedBatch, *, resume: bool) -> int:
     return 0 if outcome.is_successful else OPERATIONAL_ERROR
 
 
-def _build_batch_executor(logger: StructuredLogger) -> BatchExecutor:
+def _build_batch_executor(
+    logger: StructuredLogger, *, max_parallel: int, lock_wait_seconds: int
+) -> BatchExecutor | ParallelBatchExecutor:
     """Construct the production runner behind an injectable CLI composition seam."""
-    return BatchExecutor(
-        source_execution=SourceExecutionService(executor=SourceExecutor(logger=logger)),
-        logger=logger,
+    return build_batch_executor(
+        max_parallel=max_parallel, logger=logger, lock_wait_seconds=lock_wait_seconds
     )
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer >= 1") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be an integer >= 1")
+    return parsed
 
 
 def _add_unsupported_legacy_options(parser: argparse.ArgumentParser) -> None:

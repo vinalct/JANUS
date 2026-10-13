@@ -11,6 +11,7 @@ from pathlib import Path
 
 from janus.models import ExecutionPlan
 from janus.models.source_config import SourceConfig
+from janus.orchestration.settings import resolve_orchestration_settings
 from janus.runtime.locking import LockUnsupportedError, SourceLockedError, hold_source_state_lock
 from janus.utils.environment import load_environment_config
 from janus.utils.logging import StructuredLogger
@@ -129,13 +130,18 @@ def hold_operator_source_lock(
     """
     try:
         config = load_environment_config(environment, project_root)
+        orchestration = resolve_orchestration_settings(config)
         layout = StorageLayout.from_environment_config(config, project_root)
     except (FileNotFoundError, ValueError) as exc:
         raise refusal(f"{exc}. Nothing was changed.") from exc
     try:
         with hold_source_state_lock(
-            plan, layout, command=command, run_id=None, pipeline_run_id=None,
-            wait_seconds=0.0,  
+            plan,
+            layout,
+            command=command,
+            run_id=None,
+            pipeline_run_id=None,
+            wait_seconds=orchestration.lock_wait_seconds,
         ):
             yield
     except (SourceLockedError, LockUnsupportedError) as exc:

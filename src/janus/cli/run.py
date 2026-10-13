@@ -17,6 +17,7 @@ from janus.cli.common import (
 )
 from janus.observability.metrics import resolve_metrics_settings
 from janus.observability.openlineage import resolve_openlineage_settings
+from janus.orchestration.settings import resolve_orchestration_settings
 from janus.planner import Planner, PlannerError, PlanningRequest
 from janus.registry import SourceNotFoundError, load_registry
 from janus.runtime import SourceExecutor, SparkSessionProvider
@@ -120,7 +121,11 @@ def parse_run_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "disagrees with the checksum sidecar written at extraction time."
         ),
     )
+    parser.add_argument("--max-parallel", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+
+    if hasattr(args, "max_parallel"):
+        parser.error("--max-parallel applies to run-all; a single source runs in this process")
 
     if args.execute and not args.source_id:
         parser.error("--execute requires --source-id")
@@ -144,6 +149,7 @@ def run_command(argv: Sequence[str] | None = None) -> int:
 
     try:
         config = load_environment_config(args.environment, project_root)
+        orchestration = resolve_orchestration_settings(config)
         resolved_paths = prepare_runtime(config, project_root)
         resolve_openlineage_settings(config)
         resolve_metrics_settings(config)
@@ -214,7 +220,9 @@ def run_command(argv: Sequence[str] | None = None) -> int:
 
         spark_provider = SparkSessionProvider(config, resolved_paths, execution_logger)
         try:
-            executed_run = SourceExecutor(logger=execution_logger).execute(
+            executed_run = SourceExecutor(
+                logger=execution_logger, lock_wait_seconds=orchestration.lock_wait_seconds
+            ).execute(
                 planned_run,
                 spark_provider,
                 config,

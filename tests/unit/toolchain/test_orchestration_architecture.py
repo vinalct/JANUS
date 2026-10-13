@@ -67,6 +67,7 @@ PURE_GRAPH_ANCHORS = {
     "orchestration/planning.py",
     "orchestration/result_validation.py",
     "orchestration/scheduling.py",
+    "orchestration/settings.py",
     "orchestration/selection.py",
     "registry/dependencies.py",
     "registry/loader.py",

@@ -132,6 +132,7 @@ def write_capture_project(case, root):
             {
                 "name": "local",
                 "runtime": {"log_level": "INFO"},
+                "orchestration": {"max_parallel_default": 1, "lock_wait_seconds": 0},
                 "spark": {
                     "app_name": "parallel-baseline",
                     "master": "local[1]",
@@ -164,16 +165,21 @@ def launch(case, argv):
         patch.object(
             run_all,
             "_build_batch_executor",
-            side_effect=lambda logger: sequential_launcher(case, clock, logger),
+            side_effect=lambda logger, **settings: sequential_launcher(
+                case, clock, logger, **settings
+            ),
         ),
     ):
         return dispatch.main(argv)
 
 
-def sequential_launcher(case, clock, logger):
+def sequential_launcher(case, clock, logger, *, max_parallel=1, lock_wait_seconds=0):
     from janus.runtime.parallel import build_batch_executor
 
-    runner = build_batch_executor(max_parallel=1, logger=logger)
+    assert max_parallel == 1
+    runner = build_batch_executor(
+        max_parallel=max_parallel, logger=logger, lock_wait_seconds=lock_wait_seconds
+    )
     assert type(runner) is BatchExecutor
     runner.source_execution = CannedSourceExecution(case)
     runner.clock = clock

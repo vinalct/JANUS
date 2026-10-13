@@ -509,6 +509,26 @@ def test_adapter_propagates_unsupported_locking(project, monkeypatch, now):
     assert not list((project / "data/metadata/maintenance").glob("*.json"))
 
 
+def test_profile_wait_reaches_every_maintenance_source_lock(project, monkeypatch):
+    from janus.runtime.locking import SourceStateLock
+
+    path = project / "conf/environments/local.yaml"
+    config = yaml.safe_load(path.read_text())
+    config["orchestration"] = {"lock_wait_seconds": 7}
+    path.write_text(yaml.safe_dump(config))
+    original_acquire = SourceStateLock.acquire
+    waits = []
+
+    def observed_acquire(self):
+        waits.append(self.wait_seconds)
+        return original_acquire(self)
+
+    monkeypatch.setattr(SourceStateLock, "acquire", observed_acquire)
+    result = _invoke(project, "--zone", "metadata", "--format", "json")
+    assert result.exit_code == 0, result.output
+    assert waits == [7] * len(SOURCE_IDS)
+
+
 @pytest.mark.parametrize("failure", [RuntimeError, KeyboardInterrupt])
 def test_real_locks_release_after_failed_or_interrupted_inventory(project, monkeypatch, failure):
     from tests.support.parallel_execution import probe_lock

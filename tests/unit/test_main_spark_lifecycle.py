@@ -138,8 +138,9 @@ def cli(monkeypatch, tmp_path):
     )
 
     class StubExecutor:
-        def __init__(self, logger=None):
+        def __init__(self, logger=None, *, lock_wait_seconds=0):
             del logger
+            assert lock_wait_seconds == 0
 
         def execute(self, planned_run, spark_provider, environment_config):
             del planned_run

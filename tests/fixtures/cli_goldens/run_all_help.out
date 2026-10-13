@@ -2,7 +2,7 @@ usage: janus run-all [-h] [--environment ENVIRONMENT]
                      [--project-root PROJECT_ROOT] [--tag TAG |
                      --domain DOMAIN] [--pipeline-run-id PIPELINE_RUN_ID]
                      [--started-at STARTED_AT] [--resume]
-                     [--fail-on-budget-breach]
+                     [--fail-on-budget-breach] [--max-parallel N]
 
 Run enabled sources once in deterministic dependency order. Filters select
 roots; required upstreams are included automatically and identified in the
@@ -40,3 +40,8 @@ options:
                         skipping its dependents. Off by default: a slow run
                         that produced correct data is a scheduling signal, not
                         a data failure.
+  --max-parallel N      Run up to N independent sources at once, each in its
+                        own process with its own Spark driver when it needs
+                        one. Defaults to the profile's
+                        orchestration.max_parallel_default, else 1. Peak
+                        memory grows with N × spark.driver.memory.

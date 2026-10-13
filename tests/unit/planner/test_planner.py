@@ -417,8 +417,9 @@ def test_main_executes_source_through_framework_runtime(tmp_path, capsys, monkey
             }
 
     class FakeSourceExecutor:
-        def __init__(self, logger=None):
+        def __init__(self, logger=None, *, lock_wait_seconds=0):
             self.logger = logger
+            assert lock_wait_seconds == 0
 
         def execute(self, planned_run, spark_provider, environment_config):
             assert planned_run.plan.source.source_id == "cli_source"
@@ -491,8 +492,9 @@ def test_main_execute_omits_the_spark_summary_when_no_session_was_started(
             return {"status": "succeeded", "artifact_count": 0}
 
     class FakeSourceExecutor:
-        def __init__(self, logger=None):
+        def __init__(self, logger=None, *, lock_wait_seconds=0):
             self.logger = logger
+            assert lock_wait_seconds == 0
 
         def execute(self, planned_run, spark_provider, environment_config):
             del planned_run, spark_provider, environment_config
@@ -548,8 +550,9 @@ def test_main_execute_reports_a_failed_run_without_bypassing_observability(
             }
 
     class FakeSourceExecutor:
-        def __init__(self, logger=None):
+        def __init__(self, logger=None, *, lock_wait_seconds=0):
             self.logger = logger
+            assert lock_wait_seconds == 0
 
         def execute(self, planned_run, spark_provider, environment_config):
             del planned_run, environment_config
@@ -600,8 +603,9 @@ def test_main_execute_stops_the_session_when_the_run_raises(tmp_path, monkeypatc
             stopped.append(True)
 
     class FakeSourceExecutor:
-        def __init__(self, logger=None):
+        def __init__(self, logger=None, *, lock_wait_seconds=0):
             self.logger = logger
+            assert lock_wait_seconds == 0
 
         def execute(self, planned_run, spark_provider, environment_config):
             del planned_run, environment_config

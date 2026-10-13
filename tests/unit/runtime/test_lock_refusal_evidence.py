@@ -193,7 +193,9 @@ def test_locked_batch_source_skips_dependents_and_peer_succeeds(tmp_path, monkey
     monkeypatch.setattr(
         run_all,
         "_build_batch_executor",
-        lambda logger: BatchExecutor(source_execution=LockedExecution("chain_and_peer")),
+        lambda logger, **_settings: BatchExecutor(
+            source_execution=LockedExecution("chain_and_peer")
+        ),
     )
     metadata = root / "data/metadata/A"
     with held_lock(metadata / ".lock") as (_process, _release, holder):

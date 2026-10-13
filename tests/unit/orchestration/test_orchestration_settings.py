@@ -8,11 +8,6 @@ import yaml
 from tests.support.operator_cli import run_janus
 from tests.support.parallel_execution import REPO_ROOT, graph_project
 
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    reason="orchestration settings and profile validation are absent",
-)
-
 
 def test_absent_block_uses_sequential_fail_fast_defaults():
     from janus.orchestration.settings import resolve_orchestration_settings
@@ -22,12 +17,43 @@ def test_absent_block_uses_sequential_fail_fast_defaults():
     assert settings.lock_wait_seconds == 0
 
 
+@pytest.mark.parametrize("block", [{}, {"max_parallel_default": 4}, {"lock_wait_seconds": 5}])
+def test_supported_partial_blocks_use_defaults_for_omitted_keys(block):
+    from janus.orchestration.settings import resolve_orchestration_settings
+
+    settings = resolve_orchestration_settings({"orchestration": block})
+    assert settings.max_parallel_default == block.get("max_parallel_default", 1)
+    assert settings.lock_wait_seconds == block.get("lock_wait_seconds", 0)
+
+
+@pytest.mark.parametrize("block", [None, False, 4, "private-value", []])
+def test_present_non_mapping_block_is_refused_without_echoing_value(block):
+    from janus.orchestration.settings import resolve_orchestration_settings
+
+    with pytest.raises(ValueError, match="^orchestration must be a mapping$"):
+        resolve_orchestration_settings({"orchestration": block})
+
+
 @pytest.mark.parametrize("value", [0, -1, "2", 2.0, True])
 def test_parallel_default_requires_positive_integer(value):
     from janus.orchestration.settings import resolve_orchestration_settings
 
-    with pytest.raises(ValueError, match=r"orchestration.max_parallel_default"):
+    with pytest.raises(ValueError) as error:
         resolve_orchestration_settings({"orchestration": {"max_parallel_default": value}})
+    assert str(error.value) == (
+        f"orchestration.max_parallel_default must be an integer >= 1, got {type(value).__name__}"
+    )
+
+
+@pytest.mark.parametrize("value", [-1, "2", 2.0, True, None])
+def test_lock_wait_requires_nonnegative_integer(value):
+    from janus.orchestration.settings import resolve_orchestration_settings
+
+    with pytest.raises(ValueError) as error:
+        resolve_orchestration_settings({"orchestration": {"lock_wait_seconds": value}})
+    assert str(error.value) == (
+        f"orchestration.lock_wait_seconds must be an integer >= 0, got {type(value).__name__}"
+    )
 
 
 def test_unknown_key_error_names_key_without_echoing_value():
@@ -48,21 +74,37 @@ def test_shipped_profile_explicitly_declares_defaults(profile):
     assert settings.max_parallel_default == 1 and settings.lock_wait_seconds == 0
 
 
-def test_invalid_profile_refuses_before_planning(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "block,key",
+    [
+        *[
+            ({"max_parallel_default": value}, "max_parallel_default")
+            for value in (0, -1, "2", 2.0, True)
+        ],
+        *[({"lock_wait_seconds": value}, "lock_wait_seconds") for value in (-1, "2", 2.0, True)],
+        ({"unknown_key": "private-value"}, "unknown_key"),
+        ("private-value", "orchestration"),
+        (None, "orchestration"),
+    ],
+)
+def test_invalid_profile_refuses_before_planning(tmp_path, monkeypatch, block, key):
     from janus.orchestration import BatchPlanner
 
     root = graph_project(tmp_path)
     profile = yaml.safe_load((root / "conf/environments/local.yaml").read_text())
-    profile["orchestration"] = {"max_parallel_default": True}
+    profile["orchestration"] = block
     (root / "conf/environments/broken.yaml").write_text(yaml.safe_dump(profile))
 
     def forbidden(*args, **kwargs):
         pytest.fail("broken profile reached planning")
 
     monkeypatch.setattr(BatchPlanner, "plan", forbidden)
-    result = run_janus(["run-all", "--environment", "broken", "--project-root", str(root)])
+    result = run_janus(
+        ["run-all", "--environment", "broken", "--project-root", str(root), "--max-parallel", "1"]
+    )
     assert result.exit_code == 2 and result.stdout == ""
-    assert "orchestration.max_parallel_default" in result.stderr
+    assert key in result.stderr
+    assert "private-value" not in result.stderr
 
 
 def test_other_shipped_profiles_are_unchanged():

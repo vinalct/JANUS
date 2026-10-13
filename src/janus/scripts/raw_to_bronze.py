@@ -27,6 +27,7 @@ from janus.observability import (
     latest_run_emission,
     wire_run_event_emitter,
 )
+from janus.orchestration.settings import resolve_orchestration_settings
 from janus.planner import PlannedRun
 from janus.quality import (
     ContractEnforcementError,
@@ -190,7 +191,7 @@ class RawToBronzeLoader:
     preflight_loader: Callable[..., LiveTable | None] = load_live_table
     lock_wait_seconds: float = 0.0
 
-    def ingest( 
+    def ingest(
         self,
         planned_run: PlannedRun,
         spark: SparkSessionProvider | SparkSession,
@@ -509,7 +510,8 @@ def ingest_raw_to_bronze(
     logger: StructuredLogger | None = None,
     verify_checksums: bool = False,
 ) -> RawToBronzeRun:
-    return RawToBronzeLoader(logger=logger).ingest(
+    settings = resolve_orchestration_settings(environment_config)
+    return RawToBronzeLoader(logger=logger, lock_wait_seconds=settings.lock_wait_seconds).ingest(
         planned_run,
         spark,
         environment_config,

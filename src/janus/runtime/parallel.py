@@ -543,7 +543,8 @@ def build_batch_executor(
         return BatchExecutor(
             source_execution=SourceExecutionService(
                 executor=SourceExecutor(logger=logger, lock_wait_seconds=lock_wait_seconds)
-            )
+            ),
+            logger=logger,
         )
     return ParallelBatchExecutor(
         max_parallel=max_parallel, logger=logger, lock_wait_seconds=lock_wait_seconds

@@ -34,6 +34,7 @@ from janus.maintenance.records import (
     RecordFailure,
 )
 from janus.maintenance.settings import MaintenancePolicy, resolve_maintenance_settings
+from janus.orchestration.settings import resolve_orchestration_settings
 from janus.registry import SourceNotFoundError, SourceRegistry, load_registry
 from janus.runtime.locking import LockUnsupportedError, source_state_lock_supported
 from janus.runtime.spark_lifecycle import SparkSessionProvider
@@ -212,6 +213,7 @@ def _prepare(
 ) -> _PreparedMaintenance:
     project_root = args.project_root.resolve()
     config = load_environment_config(args.environment, project_root)
+    orchestration = resolve_orchestration_settings(config)
     paths = prepare_runtime(config, project_root)
     policy = resolve_maintenance_settings(config)
     registry = load_registry(project_root)
@@ -230,7 +232,7 @@ def _prepare(
         lock = SourceStateMaintenanceLock(
             plans=plans,
             storage_layout=storage_layout,
-            wait_seconds=0.0,
+            wait_seconds=orchestration.lock_wait_seconds,
             logger=logger,
         )
     return _PreparedMaintenance(

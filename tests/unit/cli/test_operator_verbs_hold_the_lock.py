@@ -1,6 +1,7 @@
 """Mutations refuse overlap; inspection remains available while a source runs."""
 
 import pytest
+import yaml
 
 from janus.checkpoints import CheckpointStore, DeadLetterStore
 from janus.lineage import MetadataZonePaths
@@ -200,3 +201,42 @@ def test_unsupported_lock_refuses_without_mutation(seeded, monkeypatch, argv):
     assert result.stderr.rstrip().endswith("Nothing was changed.")
     assert "POSIX fcntl" in result.stderr
     assert file_snapshot(metadata) == before
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("checkpoint", "set", "--to", "2026-09-01T00:00:00Z", "--reason", "retry"),
+        ("checkpoint", "clear", "--reason", "retry"),
+        ("dead-letters", "release", "--all", "--reason", "retry"),
+        ("dead-letters", "replay", "--all", "--reason", "retry", "--execute"),
+    ],
+)
+def test_operator_profile_wait_reaches_the_shared_source_lock(seeded, monkeypatch, argv):
+    from contextlib import contextmanager
+
+    from janus.cli import common
+    from janus.runtime import SourceExecutor
+
+    root, _plan, _metadata = seeded
+    path = root / "conf/environments/local.yaml"
+    config = yaml.safe_load(path.read_text())
+    config["orchestration"] = {"lock_wait_seconds": 7}
+    path.write_text(yaml.safe_dump(config))
+    original_lock = common.hold_source_state_lock
+    waits = []
+
+    @contextmanager
+    def observed_lock(*args, **kwargs):
+        waits.append(kwargs["wait_seconds"])
+        with original_lock(*args, **kwargs):
+            yield
+
+    monkeypatch.setattr(common, "hold_source_state_lock", observed_lock)
+    monkeypatch.setattr(
+        SourceExecutor, "_execute_locked", lambda self, planned, *args: _ExecutedRun(planned)
+    )
+    arm_spark_tripwire(monkeypatch)
+    result = invoke(root, *argv)
+    assert result.exit_code == 0, result.output
+    assert waits == [7]

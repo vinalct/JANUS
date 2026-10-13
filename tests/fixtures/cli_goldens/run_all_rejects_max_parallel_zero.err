@@ -1,0 +1,6 @@
+usage: janus run-all [-h] [--environment ENVIRONMENT]
+                     [--project-root PROJECT_ROOT] [--tag TAG |
+                     --domain DOMAIN] [--pipeline-run-id PIPELINE_RUN_ID]
+                     [--started-at STARTED_AT] [--resume]
+                     [--fail-on-budget-breach] [--max-parallel N]
+janus run-all: error: argument --max-parallel: must be an integer >= 1
