@@ -1,0 +1,1 @@
+Source 'ibge_pib_brasil' is locked: held by pid <pid> on <hostname> for 'ibge_pib_brasil' (run holder-run, pipeline -, run --execute) since <timestamp>; nothing was executed. Lock: <project-root>/data/metadata/ibge/pib_brasil/.lock. Nothing was changed.

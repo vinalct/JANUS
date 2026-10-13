@@ -249,10 +249,16 @@ registry load ─→ validated graph ─→ selection ─→ batch plan ─→ p
   and hands the same object to every `Planner.plan(request, *, registry=…)` call, so no node
   is planned against configuration that changed mid-batch. There is no second planner:
   dispatch resolution, hook resolution, run context, and dispatch validation exist once.
-- `janus.runtime.batch.BatchExecutor` runs the plan sequentially through
-  `SourceExecutionService`, which delegates each source to the existing `SourceExecutor` with
-  its own lazy compute provider. Extraction, materialization, quality, checkpoints, and
-  lineage are untouched by this layer.
+- `janus.runtime.batch.BatchExecutor` is the default N=1 path through
+  `SourceExecutionService` and `execute_source_attempt`. At N>1,
+  `runtime/parallel.py::ParallelBatchExecutor` uses one spawned process per attempt and
+  `orchestration/scheduling.py` owns the pure ready queue and shared skip rules. Workers
+  reload the registry, plan through `BatchPlanner` and verify the source and contract
+  digests. `runtime/locking.py::SourceStateLock` protects every mutating entry point,
+  keyed by the resolved metadata directory; the queue holds back nodes sharing it.
+  Every worker has its own lazy provider: ordinary extraction precedes Spark, empty
+  handoffs remain JVM-free, and N=1 retains its existing summary bytes. Extraction,
+  materialization, quality, checkpoints and lineage still belong to `SourceExecutor`.
 - `janus.orchestration.results` and `persistence` aggregate per-source outcomes into one
   versioned summary, persisted atomically under `<metadata>/pipelines/<id>/summary.json`.
 
@@ -271,7 +277,9 @@ delegating to the same `SourceExecutionService` / `SourceExecutor` seam. It neve
 HTTP transport, the materializer, the normalizer, the writer, quality, or checkpoints
 directly. Core packages never import it: the arrow points one way, enforced by a
 package-scoped guardrail sweep. Scheduling, whole-run retries, and backfill windows belong to
-the orchestrator; JANUS core contains no scheduler.
+the orchestrator; the core ready queue schedules dependencies within one batch and owns
+no calendar, daemon or whole-run retry loop. Dagster defaults to `in_process`; its opt-in
+`multiprocess` executor requires an explicit `max_concurrent` and uses `spawn`.
 
 **Source hooks are unaffected.** A hook is still source-local behavior attached to one
 source's lifecycle, and it is resolved by the same planner whether that source runs alone or
@@ -289,8 +297,8 @@ The main implementation areas are:
 - `src/janus/registry/`: config loading, typed source discovery, and inter-source graph validation.
 - `src/janus/models/`: source contracts and runtime contracts.
 - `src/janus/planner/`: deterministic plan construction and dispatch resolution.
-- `src/janus/orchestration/`: orchestrator-neutral selection, batch planning, identity, pipeline results, and summary persistence.
-- `src/janus/runtime/`: single-source execution, bronze materialization, compute-session lifecycle, and the sequential batch executor.
+- `src/janus/orchestration/`: orchestrator-neutral selection, batch planning, the pure ready queue, identity, pipeline results, and summary persistence.
+- `src/janus/runtime/`: single-source execution, source-state locking, bronze materialization, compute-session lifecycle, and sequential/parallel batch executors.
 - `src/janus/adapters/dagster/`: the optional Dagster adapter, one op per source over the shared graph.
 - `src/janus/cli/`: the `run-all` batch command and shared CLI helpers.
 - `src/janus/scripts/`: operational helpers that still run through the planner and shared runtime contracts.

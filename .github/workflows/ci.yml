@@ -183,13 +183,7 @@ jobs:
             -e COVERAGE_FILE=data/.coverage \
             -e SPARK_DRIVER_MEMORY=2g \
             janus \
-            python -m pytest -ra -m 'not cluster and not large_handoff' tests/integration \
-              --ignore=tests/integration/dagster \
-              --cov=janus \
-              --cov-append \
-              --cov-report= \
-              --durations=20 \
-              --junitxml=data/metadata/test-reports/ci.xml \
+            make test-ci-integration \
             | tee -a data/pytest-output.txt
           JANUS_CONTAINER_USER="$(id -u):$(id -g)" \
           docker compose -f docker/docker-compose.yml run --rm -T \
@@ -329,6 +323,20 @@ jobs:
               data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml \
               --class-name tests.integration.orchestration.test_dependency_execution \
               --minimum-passed 8
+      - name: Assert every parallel execution and lazy Spark scenario executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate \
+              data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml \
+              --class-name tests.integration.orchestration.test_parallel_execution \
+              --minimum-passed 18
+      - name: Assert complete CLI and Dagster multiprocess parity executed
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm -T janus \
+            python -m tests.support.required_test_gate \
+              data/metadata/test-reports/ci.xml --additional-report data/metadata/test-reports/ci-unit.xml --additional-report data/metadata/test-reports/ci-large.xml \
+              --class-name tests.integration.dagster.test_cli_adapter_parity \
+              --minimum-passed 15
       - name: Assert the release-then-resume suite executed, bronze case included
         run: |
           docker compose -f docker/docker-compose.yml run --rm -T janus \

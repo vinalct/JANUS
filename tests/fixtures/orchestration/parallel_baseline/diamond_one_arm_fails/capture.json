@@ -1,0 +1,19 @@
+{
+  "exit_code": 1,
+  "metadata_zone": {
+    "A/checkpoints/current.json": "14203b2df0d1c7a3ce5ade4184cdd5b6b35a5834ebc05c59770bebf52554567f",
+    "A/checkpoints/history/parallel-baseline-a-a1-12b285aeeb.json": "319241f4e7f0e8f5325c3666745847b6ce958483d0b8443236b7342183cf626c",
+    "A/lineage/parallel-baseline-a-a1-12b285aeeb.json": "47d1da4a67490ed060eb15db154401f648526645e6ddb7c24baf486e62737942",
+    "A/runs/parallel-baseline-a-a1-12b285aeeb.json": "4889a4002bde6a7f09fb151e801662af11659a8f2e25d27b523c01e1401602cc",
+    "B/lineage/parallel-baseline-b-a1-dd27c9016a.json": "2165b2ff4393dde53882aebddd3175293ac782c0c8d6ddd593bd48981e4db6fa",
+    "B/runs/parallel-baseline-b-a1-dd27c9016a.json": "502849da3af8cf5542ada7fa734f7a97f6d2f463b596139022a98de8b742f3e4",
+    "C/checkpoints/current.json": "4856281dd8acc8544cff0fc596e10e23cc619e53c1848a78b901c612a7ba8972",
+    "C/checkpoints/history/parallel-baseline-c-a1-a4ef3a1295.json": "e836f06c95bdb08711bd6c776a9eeca0829c22a0ddead95f33289302695bad10",
+    "C/lineage/parallel-baseline-c-a1-a4ef3a1295.json": "ad31cee1b8f37fa69e109cd0fe4e1ef380bb4a85edffab039c34e3da6ce44800",
+    "C/runs/parallel-baseline-c-a1-a4ef3a1295.json": "43f13ab7df7393c157e50fcfcfdef161b1fd5ca8c0d2727826261e86701b9239",
+    "pipelines/parallel-baseline/summary.json": "52fedd912e5327cb6d134aed30bd6a6cd351c013f7ab06fae2225089a6b70d31"
+  },
+  "stderr_events": [
+    "cli_batch_execution_requested"
+  ]
+}

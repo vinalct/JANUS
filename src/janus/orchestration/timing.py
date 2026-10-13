@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+
+from janus.orchestration.summary_values import _require_keys
 
 
 def _utc_now() -> datetime:
@@ -52,6 +54,23 @@ class ExecutionTiming:
         """Return the only valid timing for a skipped or planning-failed source."""
         return cls(started_at=None, ended_at=None, duration_seconds=0.0)
 
+    @classmethod
+    def from_summary(cls, summary: Mapping[str, Any]) -> ExecutionTiming:
+        """Inverse of to_summary(); refuse naive timestamps and unknown fields."""
+        _require_keys(summary, {"started_at", "ended_at", "duration_seconds"})
+        duration = summary["duration_seconds"]
+        if isinstance(duration, bool) or not isinstance(duration, int | float):
+            raise ValueError("duration_seconds must be a number")
+        try:
+            float(duration)  # Check overflow while preserving the JSON number representation.
+        except OverflowError as exc:
+            raise ValueError("duration_seconds must be finite") from exc
+        started_at = _parse_aware(summary["started_at"], "started_at")
+        ended_at = _parse_aware(summary["ended_at"], "ended_at")
+        if started_at is None and ended_at is None and duration != 0:
+            raise ValueError("duration_seconds must be zero when timestamps are absent")
+        return cls(started_at=started_at, ended_at=ended_at, duration_seconds=duration)
+
     @property
     def executed(self) -> bool:
         return self.started_at is not None
@@ -94,3 +113,16 @@ class PipelineClock:
 def _validate_aware(field_name: str, value: datetime) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field_name} must be timezone-aware")
+
+
+def _parse_aware(value: Any, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be an ISO timestamp or null")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an ISO timestamp") from exc
+    _validate_aware(field_name, parsed)
+    return parsed

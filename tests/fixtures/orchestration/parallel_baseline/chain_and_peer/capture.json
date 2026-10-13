@@ -1,0 +1,21 @@
+{
+  "exit_code": 0,
+  "metadata_zone": {
+    "A/checkpoints/current.json": "14203b2df0d1c7a3ce5ade4184cdd5b6b35a5834ebc05c59770bebf52554567f",
+    "A/checkpoints/history/parallel-baseline-a-a1-12b285aeeb.json": "319241f4e7f0e8f5325c3666745847b6ce958483d0b8443236b7342183cf626c",
+    "A/lineage/parallel-baseline-a-a1-12b285aeeb.json": "7275493ee9acf8f69efe71b24529ff186f2254aab00b913f929d0081aa0ca71a",
+    "A/runs/parallel-baseline-a-a1-12b285aeeb.json": "e3806e8448d7fdb1b13ba8e91e7f2545753f40effde039172a913d2b59ca7958",
+    "B/checkpoints/current.json": "99e43c658be88e332e43f7b651ac7a61a98e5e51ec95760adfadbdd184b5b848",
+    "B/checkpoints/history/parallel-baseline-b-a1-dd27c9016a.json": "263723cd402664ba0563e357b16dabd244ae76e3bd7d2b3d5697acecdd1c4525",
+    "B/lineage/parallel-baseline-b-a1-dd27c9016a.json": "7f9a3181f99310f4691b71d956feae68a12d30c80d3f87f74677c3bd73b524fa",
+    "B/runs/parallel-baseline-b-a1-dd27c9016a.json": "946ad238bb39fe873c24f6df2f1727f461783da7b3f71f7b3cb1dd98f414d16b",
+    "C/checkpoints/current.json": "4856281dd8acc8544cff0fc596e10e23cc619e53c1848a78b901c612a7ba8972",
+    "C/checkpoints/history/parallel-baseline-c-a1-a4ef3a1295.json": "e836f06c95bdb08711bd6c776a9eeca0829c22a0ddead95f33289302695bad10",
+    "C/lineage/parallel-baseline-c-a1-a4ef3a1295.json": "463018c5adff5630205b8033ed1db0d4034a86560859280ec1cec173b7e9746e",
+    "C/runs/parallel-baseline-c-a1-a4ef3a1295.json": "ce44bbd2b20f5fc0eb5194554e2e651e2d2791399f2d4a6918e1a1c354f7a49e",
+    "pipelines/parallel-baseline/summary.json": "6ecb73e89e4dd882f9d2b0c101b004bdc9d188a14c2de1973d255e953a6ae664"
+  },
+  "stderr_events": [
+    "cli_batch_execution_requested"
+  ]
+}

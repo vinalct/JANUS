@@ -46,7 +46,8 @@ one session lazily and stops it in `finally`.
 
 Exit codes: `0` when everything planned succeeded, including an empty plan; `1` when any item
 failed or a record-level step failed (a Spark teardown failure included); `2` when nothing was
-attempted: an absent or invalid `maintenance:` block, an unknown source, `--zone raw` while raw is
+attempted: source-state locking unavailable for metadata/raw, an absent or invalid
+`maintenance:` block, an unknown source, `--zone raw` while raw is
 disabled, `--source-id` with `--zone runs-table`, or a flag that belongs to `run`.
 
 In the container, use the Makefile targets. Both refuse unless `ENVIRONMENT` is typed on the
@@ -151,7 +152,8 @@ checks it again before each deletion, so even a hand-built plan cannot remove a 
 reason shown in the plan and the record is in parentheses.
 
 - **State** (`state_file`): each planned source's `checkpoints/current.json`,
-  `dead_letters/current.json` and `extraction_progress.json`, whether or not the file exists yet.
+  `dead_letters/current.json`, `extraction_progress.json` and `.lock`, whether or not the file
+  exists yet. The lock inode stays in place after release; file existence never means it is held.
 - **Bronze**: the current snapshot of every table, read from its `main` ref, after a rollback too
   (`current_snapshot`); the newest `retain_last` snapshots (`retain_last`); snapshots inside the
   age window (`within_window`).
@@ -230,7 +232,8 @@ rows; that stays the published queries' job. What retention does to query window
 
 A dry run with a candidate, from the fixture warehouse the CI smoke seeds
 (`make test-maintenance-smoke`), whose profile overrides the bronze policy to `retain_last: 1`,
-`older_than_days: 0`. Recorded on 2026-10-06:
+`older_than_days: 0`. Recorded on 2026-10-06, before order-24 changed the production
+record's lock name to `flock`; this historical capture retains `lock: none`:
 
 ```text
 $ make maintain-dry-run ENVIRONMENT=local \
@@ -255,7 +258,7 @@ of them old enough:
 $ make maintain-dry-run ENVIRONMENT=local \
     MAINTAIN_ARGS="--zone bronze --source-id receita_federal__cnpj__cnaes_full_refresh"
 janus maintain — DRY RUN (nothing will be deleted)
-environment: local    policy: sha256:7312626fb3bd3cd825aff0e9c40f29ecb9c6cc21c8479c49a9719a73a05cbc4e    lock: none
+environment: local    policy: sha256:7312626fb3bd3cd825aff0e9c40f29ecb9c6cc21c8479c49a9719a73a05cbc4e    lock: flock
 zones: bronze
 
 nothing would be deleted in: bronze (no retention candidates)
@@ -302,7 +305,7 @@ Every invocation, dry run included, writes one record atomically to
 | `zones`, `source_ids` | the selection; `source_ids: []` means unrestricted |
 | `policy_digest` | SHA-256 of the resolved policy |
 | `plan_digest` | SHA-256 of the sorted actions and arguments; a dry run and an apply of the same inventory share it |
-| `lock` | the source lock in use; `"none"` until implement one |
+| `lock` | `"flock"` in production; `"none"` only when a null lock is explicitly injected |
 | `started_at`, `ended_at`, `duration_seconds` | timing |
 | `zone_summaries` | per zone: items planned, applied, skipped and failed, files removed, bytes removed |
 | `items` | per item: zone, target, action, `status` (`planned`, `applied`, `skipped`, `failed`), `detail` with the arguments and any `skipped_reason`, `removed_count`, `removed_bytes`, `expired_snapshot_ids`, `failure_type`, `failure_message`, `duration_seconds` |
@@ -336,31 +339,38 @@ bronze snapshot you retain; see
 
 ### Source locks and scheduling
 
-Do not run `janus maintain` while a run of the same source is in flight. This is
-an operational requirement until provides source-state locking. Cron
-and other schedulers must serialise maintenance with extraction and replay for
-the same sources; separate schedules alone do not prevent a long run from
-overlapping maintenance.
+For metadata and raw retention, `janus maintain` holds each source's state lock
+before collecting its inventory and through the whole invocation. Production
+records report `lock: "flock"` and print no no-lock warning. A source locked by a
+run is skipped as `source_locked`, remains unread and untouched, and its peers
+proceed; contention alone exits 0. Shared pipeline summaries are preserved when
+any source is locked. Sources sharing a metadata directory re-enter the same
+lock, so both are processed. Locks release in reverse acquisition order, including
+on failure or interruption. A run starting while maintenance holds its source's
+lock refuses with `command="maintain"` in the holder record. If POSIX `fcntl` is
+unavailable, metadata/raw maintenance exits 2 before writing a maintenance record.
 
-The current `NullMaintenanceLock` acquires nothing. Every maintenance record
-reports `lock: "none"`, and both dry-run and apply output show this warning when
+Cron needs no external serialisation for source-scoped metadata/raw retention.
+The shared lineage and orphan-file scheduling requirements below still apply.
+The profile's `orchestration.lock_wait_seconds` bounds the wait before a busy source
+is skipped (default 0, fail fast). Locks use resolved local metadata directories;
+sources sharing one directory share a lock, and `.lock` is always protected from
+retention. NFS, cross-host locking and object-store metadata zones are unsupported.
+See [source-state locking](orchestration.md#source-state-locking) for holder diagnostics
+and the seven registered mutation entry points.
+
+The command still accepts an injected `MaintenanceLock` by argument and records
+its `name`. An explicitly injected `NullMaintenanceLock` acquires nothing and
+reports `lock: "none"`. Its dry-run and apply output show this warning when
 `metadata` or `raw` is selected (on stderr for JSON output):
 
 ```text
 warning: no source lock is held — do not run maintain while a run of the same source is in flight
 ```
 
-The command accepts an injected `MaintenanceLock` by argument. It acquires each
-source before collecting metadata/raw inventory, holds acquired locks through
-execution, and releases them in `finally`. A refused acquisition leaves that
-source unread and untouched, with one skipped item per selected metadata/raw
-zone carrying `source_id` and `skipped_reason: "source_locked"`. Other sources
-proceed, and contention alone exits 0. Shared pipeline summaries are preserved
-when any source is locked. The record reports the injected lock's `name`.
-
 Bronze, shared lineage event files and the runs table do not acquire source
-locks. The scheduling requirement for concurrent back-dated lineage emission
-below still applies when a real source lock becomes available.
+locks or build source execution plans. A refused source has one skipped item per
+selected metadata/raw zone with `source_id` and `skipped_reason: "source_locked"`.
 
 ### Orphan files
 
@@ -392,8 +402,9 @@ Both examples write the plan first and apply it only when the plan step succeede
 re-reads the inventory at its own instant, so its record, not the dry run's, is the evidence of
 what was removed.
 
-**cron.** Share one lock file between the ingestion entries and the maintenance entry, so the two
-can never overlap:
+**cron.** Metadata/raw-only maintenance uses the built-in source locks and needs no external
+serialisation. For an all-zone invocation such as this example, share an external lock between
+ingestion and maintenance to cover shared lineage files and any enabled orphan removal:
 
 ```cron
 # Ingestion, as before, under the shared lock.

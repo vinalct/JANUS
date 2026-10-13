@@ -1,0 +1,25 @@
+{
+  "exit_code": 0,
+  "metadata_zone": {
+    "A/checkpoints/current.json": "14203b2df0d1c7a3ce5ade4184cdd5b6b35a5834ebc05c59770bebf52554567f",
+    "A/checkpoints/history/parallel-baseline-a-a1-12b285aeeb.json": "319241f4e7f0e8f5325c3666745847b6ce958483d0b8443236b7342183cf626c",
+    "A/lineage/parallel-baseline-a-a1-12b285aeeb.json": "307b6d5e2806664dd1a86bdc2106873d16bb389e1d2802ff9df30af1ce2140f8",
+    "A/runs/parallel-baseline-a-a1-12b285aeeb.json": "14980b904af4fe6d0cd2c3d8554f5f5a42780bb13051f310129c2e0fa01e63ef",
+    "B/checkpoints/current.json": "99e43c658be88e332e43f7b651ac7a61a98e5e51ec95760adfadbdd184b5b848",
+    "B/checkpoints/history/parallel-baseline-b-a1-dd27c9016a.json": "263723cd402664ba0563e357b16dabd244ae76e3bd7d2b3d5697acecdd1c4525",
+    "B/lineage/parallel-baseline-b-a1-dd27c9016a.json": "6d7741b70118b18160b7e31b2759d86bbe4fcae2c7cefd4b59c73b00ab5d3d67",
+    "B/runs/parallel-baseline-b-a1-dd27c9016a.json": "21cea9078631a83695ffad5917d9954f9362720261ca111544b040e93453368e",
+    "C/checkpoints/current.json": "4856281dd8acc8544cff0fc596e10e23cc619e53c1848a78b901c612a7ba8972",
+    "C/checkpoints/history/parallel-baseline-c-a1-a4ef3a1295.json": "e836f06c95bdb08711bd6c776a9eeca0829c22a0ddead95f33289302695bad10",
+    "C/lineage/parallel-baseline-c-a1-a4ef3a1295.json": "ad15e8fa47196ba5bc96a5f6119d58d37508a04bc11201e00605dc53b5119054",
+    "C/runs/parallel-baseline-c-a1-a4ef3a1295.json": "ca9e7e691dab820ce4c1d2832b4a9d20f4badbc5494c40e32ca64923f8b515a9",
+    "D/checkpoints/current.json": "44d069ae2340e90c298be2b2a7c9291e69769d65bff0846304ed45871d6753e5",
+    "D/checkpoints/history/parallel-baseline-d-a1-f65ae83026.json": "9a7f69142ab5af2ae792fe55e79ec778a656028f6c883a5c246bd3121b09efc7",
+    "D/lineage/parallel-baseline-d-a1-f65ae83026.json": "63b11af7f7f9dc327e13048131a5c8e97aba7d592aeb4dabeb385afc57a2a3d8",
+    "D/runs/parallel-baseline-d-a1-f65ae83026.json": "d6e3fe3666be9e2d879e9ebe0becb0caecdd249e14982786c8cc43a487bd35bc",
+    "pipelines/parallel-baseline/summary.json": "0aadb51f2a119df79155fb4afc702a92afd1309e13c114bb2c4c48aa2b1a3d03"
+  },
+  "stderr_events": [
+    "cli_batch_execution_requested"
+  ]
+}

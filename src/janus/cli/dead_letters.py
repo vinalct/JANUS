@@ -20,8 +20,8 @@ state outlives the enabled flag.
   `--execute --resume` to `run_command`, the body of `janus run`: one executor call site
   for both commands. Its stdout is that run's summary; the release report goes to stderr.
 
-Only `replay --execute` reads an environment profile or may start Spark, and it reads the
-profile and refuses a disabled source (without `--include-disabled`) before it releases.
+Mutations read an environment profile to resolve the source lock; only `replay --execute`
+may start Spark. It refuses a disabled source without `--include-disabled` before releasing.
 Markers are ASCII, as in `janus validate`: a glyph cannot be encoded on every stream.
 
 Exit codes: 0 success; 1 only when `replay --execute` ran and the source failed; 2 for
@@ -47,12 +47,13 @@ from janus.checkpoints import (
     ExtractionProgressStore,
 )
 from janus.cli import run
-from janus.cli.common import build_parent_parser
+from janus.cli.common import build_parent_parser, hold_operator_source_lock
 from janus.cli.operator import require_reason, resolve_operator
 from janus.models import ExecutionPlan, SourceConfig
 from janus.observability.openlineage import resolve_openlineage_settings
 from janus.planner import Planner, PlannerError, PlanningRequest
 from janus.registry import SourceNotFoundError
+from janus.runtime.locking import COMMAND_DEAD_LETTERS_RELEASE, COMMAND_DEAD_LETTERS_REPLAY
 from janus.utils.environment import load_environment_config
 
 ARGUMENT_ERROR = 2
@@ -263,7 +264,13 @@ def _release(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     item_keys = _selection(parser, args)
     project_root = args.project_root.resolve()
     plan = _plan(args, project_root)
-    record = _apply_release(DeadLetterStore().release, plan, item_keys, reason, RELEASE_METADATA)
+    with hold_operator_source_lock(
+        plan, environment=args.environment, project_root=project_root,
+        command=COMMAND_DEAD_LETTERS_RELEASE, refusal=_Refusal,
+    ):
+        record = _apply_release(
+            DeadLetterStore().release, plan, item_keys, reason, RELEASE_METADATA
+        )
 
     document = _release_document(plan, record, project_root)
     if args.format == "json":
@@ -340,10 +347,6 @@ def _replay_execute(
         resolve_openlineage_settings(load_environment_config(args.environment, project_root))
     except (FileNotFoundError, ValueError) as exc:
         raise _Refusal(str(exc)) from exc
-    record = _apply_release(DeadLetterStore().release, plan, item_keys, reason, REPLAY_METADATA)
-    report = _render_release(_release_document(plan, record, project_root), next_step=None)
-    print(report, file=sys.stderr)
-
     # Each value is bound to its flag with `=`, so one beginning with '-' stays a value.
     argv = [
         f"--environment={args.environment}",
@@ -354,7 +357,15 @@ def _replay_execute(
     ]
     if args.include_disabled:
         argv.append("--include-disabled")
-    return run.run_command(argv)
+    with hold_operator_source_lock(
+        plan, environment=args.environment, project_root=project_root,
+        command=COMMAND_DEAD_LETTERS_REPLAY, refusal=_Refusal,
+    ):
+        record = _apply_release(DeadLetterStore().release, plan, item_keys, reason, REPLAY_METADATA)
+        report = _render_release(_release_document(plan, record, project_root), next_step=None)
+        print(report, file=sys.stderr)
+
+        return run.run_command(argv)
 
 
 def _plan(args: argparse.Namespace, project_root: Path) -> ExecutionPlan:

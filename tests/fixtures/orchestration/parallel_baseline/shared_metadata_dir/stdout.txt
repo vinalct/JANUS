@@ -1,0 +1,168 @@
+{
+  "config_versions": {
+    "A": "3ac1999136e8ddb71c12b37f403bab5498fbcf1f11262b75cae938aa2b746988",
+    "C": "3ac1999136e8ddb71c12b37f403bab5498fbcf1f11262b75cae938aa2b746988"
+  },
+  "graph": {
+    "edges": []
+  },
+  "pipeline": {
+    "attempt": 1,
+    "ended_at": "2026-01-01T00:00:10+00:00",
+    "environment": "local",
+    "pipeline_run_id": "parallel-baseline",
+    "planned_at": "2026-01-01T00:00:00+00:00",
+    "started_at": "2026-01-01T00:00:00+00:00",
+    "trigger": "run-all"
+  },
+  "schema_version": 1,
+  "selection": {
+    "included_upstream_ids": [],
+    "requested": {
+      "domains": [],
+      "tags": []
+    },
+    "root_ids": [
+      "A",
+      "C"
+    ],
+    "source_ids": [
+      "A",
+      "C"
+    ]
+  },
+  "sources": [
+    {
+      "attempt": 1,
+      "attempted": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "attempted": true,
+          "evidence": {
+            "artifact_count": 0,
+            "artifacts": [],
+            "checkpoint_value": "1",
+            "duration_budget_outcome": "undeclared",
+            "extraction_metadata": {},
+            "materialized_outputs": [
+              {
+                "format": "iceberg",
+                "metadata": {},
+                "mode": "overwrite",
+                "partition_by": [
+                  "ingestion_date"
+                ],
+                "path": "bronze.a",
+                "records_written": 1,
+                "zone": "bronze"
+              }
+            ],
+            "metadata_outputs": {
+              "checkpoint_history_path": null,
+              "checkpoint_state_path": null,
+              "lineage_path": "/tmp/janus-parallel-baseline/shared_metadata_dir/data/metadata/shared/lineage/parallel-baseline-a-a1-12b285aeeb.json",
+              "run_metadata_path": "/tmp/janus-parallel-baseline/shared_metadata_dir/data/metadata/shared/runs/parallel-baseline-a-a1-12b285aeeb.json",
+              "validation_report_path": null
+            },
+            "records_extracted": 1,
+            "status": "succeeded",
+            "strategy_metadata": {}
+          },
+          "run_id": "parallel-baseline-a-a1-12b285aeeb",
+          "source_id": "A",
+          "status": "succeeded",
+          "timing": {
+            "duration_seconds": 2.0,
+            "ended_at": "2026-01-01T00:00:04+00:00",
+            "started_at": "2026-01-01T00:00:02+00:00"
+          }
+        }
+      ],
+      "config_version": "3ac1999136e8ddb71c12b37f403bab5498fbcf1f11262b75cae938aa2b746988",
+      "run_id": "parallel-baseline-a-a1-12b285aeeb",
+      "selected_directly": true,
+      "source_id": "A",
+      "status": "succeeded",
+      "timing": {
+        "duration_seconds": 2.0,
+        "ended_at": "2026-01-01T00:00:04+00:00",
+        "started_at": "2026-01-01T00:00:02+00:00"
+      },
+      "upstream_ids": []
+    },
+    {
+      "attempt": 1,
+      "attempted": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "attempted": true,
+          "evidence": {
+            "artifact_count": 0,
+            "artifacts": [],
+            "checkpoint_value": "1",
+            "duration_budget_outcome": "undeclared",
+            "extraction_metadata": {},
+            "materialized_outputs": [
+              {
+                "format": "iceberg",
+                "metadata": {},
+                "mode": "overwrite",
+                "partition_by": [
+                  "ingestion_date"
+                ],
+                "path": "bronze.c",
+                "records_written": 1,
+                "zone": "bronze"
+              }
+            ],
+            "metadata_outputs": {
+              "checkpoint_history_path": null,
+              "checkpoint_state_path": null,
+              "lineage_path": "/tmp/janus-parallel-baseline/shared_metadata_dir/data/metadata/shared/lineage/parallel-baseline-c-a1-a4ef3a1295.json",
+              "run_metadata_path": "/tmp/janus-parallel-baseline/shared_metadata_dir/data/metadata/shared/runs/parallel-baseline-c-a1-a4ef3a1295.json",
+              "validation_report_path": null
+            },
+            "records_extracted": 1,
+            "status": "succeeded",
+            "strategy_metadata": {}
+          },
+          "run_id": "parallel-baseline-c-a1-a4ef3a1295",
+          "source_id": "C",
+          "status": "succeeded",
+          "timing": {
+            "duration_seconds": 2.0,
+            "ended_at": "2026-01-01T00:00:08+00:00",
+            "started_at": "2026-01-01T00:00:06+00:00"
+          }
+        }
+      ],
+      "config_version": "3ac1999136e8ddb71c12b37f403bab5498fbcf1f11262b75cae938aa2b746988",
+      "run_id": "parallel-baseline-c-a1-a4ef3a1295",
+      "selected_directly": true,
+      "source_id": "C",
+      "status": "succeeded",
+      "timing": {
+        "duration_seconds": 2.0,
+        "ended_at": "2026-01-01T00:00:08+00:00",
+        "started_at": "2026-01-01T00:00:06+00:00"
+      },
+      "upstream_ids": []
+    }
+  ],
+  "summary_persistence": {
+    "path": "/tmp/janus-parallel-baseline/shared_metadata_dir/data/metadata/pipelines/parallel-baseline/summary.json",
+    "status": "succeeded"
+  },
+  "totals": {
+    "attempted": 2,
+    "duration_seconds": 10.0,
+    "expanded": 2,
+    "failed": 0,
+    "selected": 2,
+    "skipped": 0,
+    "status": "succeeded",
+    "succeeded": 2
+  }
+}

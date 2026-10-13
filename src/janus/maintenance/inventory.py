@@ -119,6 +119,34 @@ class MaintenanceInventory:
     raw: tuple[RawRunPrefixEntry, ...] = ()
 
 
+def plan_maintenance_sources(
+    registry: SourceRegistry,
+    config: Mapping[str, typing.Any],
+    *,
+    now: datetime,
+    source_ids: frozenset[str] | None,
+) -> dict[str, ExecutionPlan]:
+    """Plan the selected sources identically for inventory and lock path resolution."""
+    from janus.planner import Planner, PlanningRequest
+
+    planner = Planner()
+    return {
+        source.source_id: planner.plan(
+            PlanningRequest.create(
+                source_id=source.source_id,
+                environment=config["name"],
+                project_root=registry.project_root,
+                run_id="maintenance-inventory",
+                started_at=now,
+                include_disabled=True,
+            ),
+            registry=registry,
+        ).plan
+        for source in registry.list_sources(enabled_only=False)
+        if source_ids is None or source.source_id in source_ids
+    }
+
+
 def collect_inventory(
     registry: SourceRegistry,
     config: Mapping[str, typing.Any],
@@ -147,24 +175,10 @@ def collect_inventory(
     raw_enabled = "raw" in zones and policy.raw.enabled
     raw: tuple[RawRunPrefixEntry, ...] = ()
     if "metadata" in zones or raw_enabled:
-        from janus.planner import Planner, PlanningRequest
         from janus.utils.storage import StorageLayout
 
-        planner = Planner()
         plans = tuple(
-            planner.plan(
-                PlanningRequest.create(
-                    source_id=source.source_id,
-                    environment=config["name"],
-                    project_root=registry.project_root,
-                    run_id="maintenance-inventory",
-                    started_at=now,
-                    include_disabled=True,
-                ),
-                registry=registry,
-            ).plan
-            for source in registry.list_sources(enabled_only=False)
-            if source_ids is None or source.source_id in source_ids
+            plan_maintenance_sources(registry, config, now=now, source_ids=source_ids).values()
         )
         metadata = collect_metadata_inventory(
             plans,
@@ -315,6 +329,8 @@ def collect_metadata_inventory(
     Sources may declare one metadata directory together: it is read once, and a
     record belongs to the source it names, so keep_last_runs stays per source.
     """
+    from janus.runtime.locking import LOCK_FILE_NAME
+
     shared: dict[Path, tuple[MetadataZonePaths, list[str]]] = {}
     for plan in plans:
         paths = MetadataZonePaths.from_plan(plan)
@@ -332,6 +348,7 @@ def collect_metadata_inventory(
         protected_paths.update(
             (paths.checkpoint_state_path, paths.dead_letter_state_path, progress_path)
         )
+        protected_paths.add(paths.base_dir / LOCK_FILE_NAME)
 
         progress = read_json_mapping(progress_path)
         if progress is not None:

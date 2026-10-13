@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import argparse
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from janus.models import ExecutionPlan
 from janus.models.source_config import SourceConfig
+from janus.orchestration.settings import resolve_orchestration_settings
+from janus.runtime.locking import LockUnsupportedError, SourceLockedError, hold_source_state_lock
+from janus.utils.environment import load_environment_config
 from janus.utils.logging import StructuredLogger
+from janus.utils.storage import StorageLayout
 
 
 def log_source_config_deprecations(
@@ -107,3 +113,36 @@ def format_runtime_permission_error(exc: PermissionError) -> str:
             "JANUS_SPARK_IVY_DIR to select a writable location."
         )
     return message
+
+
+@contextmanager
+def hold_operator_source_lock(
+    plan: ExecutionPlan,
+    *,
+    environment: str,
+    project_root: Path,
+    command: str,
+    refusal: type[Exception],
+) -> Iterator[None]:
+    """Hold the executor's source lock, translating refusals into the verb's vocabulary.
+
+    Reading the profile resolves the storage layout without preparing runtime paths.
+    """
+    try:
+        config = load_environment_config(environment, project_root)
+        orchestration = resolve_orchestration_settings(config)
+        layout = StorageLayout.from_environment_config(config, project_root)
+    except (FileNotFoundError, ValueError) as exc:
+        raise refusal(f"{exc}. Nothing was changed.") from exc
+    try:
+        with hold_source_state_lock(
+            plan,
+            layout,
+            command=command,
+            run_id=None,
+            pipeline_run_id=None,
+            wait_seconds=orchestration.lock_wait_seconds,
+        ):
+            yield
+    except (SourceLockedError, LockUnsupportedError) as exc:
+        raise refusal(f"{exc}. Nothing was changed.") from exc

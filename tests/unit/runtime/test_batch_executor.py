@@ -462,6 +462,38 @@ def test_mismatched_registry_snapshot_is_refused_before_execution(tmp_path):
     assert providers.providers == []
 
 
+def test_scheduling_order_error_keeps_the_sequential_preflight_type_and_message(
+    tmp_path, monkeypatch
+):
+    from janus.orchestration import SchedulingOrderError
+
+    plan, registry, config, paths = _batch(tmp_path)
+    source_ids = ("B", "A", "C", "D")
+    out_of_order = replace(
+        plan,
+        selection=replace(plan.selection, source_ids=source_ids),
+        sources=tuple(plan.source(source_id) for source_id in source_ids),
+    )
+    # Isolate the loop's legacy refusal: normal snapshot preflight rejects this order earlier.
+    monkeypatch.setattr("janus.runtime.batch._preflight", lambda *_args: None)
+    executor = ExecutorSpy()
+    providers = ProviderFactorySpy()
+    runner = BatchExecutor(
+        source_execution=SourceExecutionService(executor=executor, provider_factory=providers)
+    )
+
+    with pytest.raises(BatchExecutionPreflightError) as exc_info:
+        runner.execute(out_of_order, registry, config, paths)
+
+    assert str(exc_info.value) == (
+        "Source 'B' was reached before upstream 'A'; nothing further was scheduled"
+    )
+    assert isinstance(exc_info.value.__cause__, SchedulingOrderError)
+    assert executor.calls == []
+    assert providers.providers == []
+    assert not (plan.request.project_root / "data/metadata/pipelines/batch/summary.json").exists()
+
+
 def test_keyboard_interrupt_stops_scheduling_and_exposes_partial_evidence(tmp_path):
     plan, registry, config, paths = _batch(tmp_path)
     executor = ExecutorSpy({"B": KeyboardInterrupt()})

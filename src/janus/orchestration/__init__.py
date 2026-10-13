@@ -7,6 +7,7 @@ from janus.orchestration.errors import (
     EmptySelectionError,
     GraphDriftError,
     PipelineIdentityError,
+    SchedulingOrderError,
     SelectionFilterError,
 )
 from janus.orchestration.identity import (
@@ -39,6 +40,13 @@ from janus.orchestration.results import (
     SourceResult,
     SummaryPersistence,
 )
+from janus.orchestration.scheduling import (
+    NodeDecision,
+    ReadyQueue,
+    blocking_upstreams,
+    decide,
+    root_failures,
+)
 from janus.orchestration.selection import (
     NO_SELECTION,
     BatchSelection,
@@ -64,6 +72,7 @@ __all__ = [
     "ExecutionTiming",
     "FailureDetails",
     "GraphDriftError",
+    "NodeDecision",
     "PipelineClock",
     "PipelineIdentityError",
     "PipelineOutcome",
@@ -71,6 +80,8 @@ __all__ = [
     "PipelineSummaryPersistenceError",
     "PipelineSummaryStore",
     "PlannedSource",
+    "ReadyQueue",
+    "SchedulingOrderError",
     "SelectionFilterError",
     "SkipExplanation",
     "SourceAttempt",
@@ -80,7 +91,10 @@ __all__ = [
     "SourceResult",
     "SourceSelection",
     "SummaryPersistence",
+    "blocking_upstreams",
+    "decide",
     "default_pipeline_run_id",
+    "root_failures",
     "select_sources",
     "source_attempt_run_id",
     "validate_pipeline_run_id",

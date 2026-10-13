@@ -6,12 +6,14 @@ import copy
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 
 from dagster import InitResourceContext
 
 from janus.lineage import compute_config_version
 from janus.orchestration import BatchPlan, BatchPlanner, BatchPlanRequest, SourceSelection
+from janus.orchestration.settings import resolve_orchestration_settings
 from janus.registry import SourceRegistry
 from janus.runtime import SourceExecutionService, SourceExecutor, execute_source_attempt
 from janus.runtime.batch import SourceExecution
@@ -116,6 +118,11 @@ class DagsterRunRuntime:
             )
         snapshot.assert_run_tags(dagster_run.tags)
         snapshot.assert_source_versions()
+        orchestration = resolve_orchestration_settings(snapshot.environment_config)
+        if source_execution_factory is default_source_execution_factory:
+            source_execution_factory = partial(
+                default_source_execution_factory, lock_wait_seconds=orchestration.lock_wait_seconds
+            )
 
         stats = instance.get_run_stats(run_id)
         if stats.start_time is None:
@@ -180,9 +187,13 @@ class DagsterRunRuntime:
         )
 
 
-def default_source_execution_factory(logger: StructuredLogger) -> SourceExecution:
+def default_source_execution_factory(
+    logger: StructuredLogger, *, lock_wait_seconds: int = 0
+) -> SourceExecution:
     """Build the established executor/provider service for one Dagster run."""
-    return SourceExecutionService(executor=SourceExecutor(logger=logger))
+    return SourceExecutionService(
+        executor=SourceExecutor(logger=logger, lock_wait_seconds=lock_wait_seconds)
+    )
 
 
 def _plan_attempt(

@@ -64,6 +64,7 @@ daemon and has no scheduler, calendar, or automatic retry loop.
 | `--pipeline-run-id ID` | Identity correlating every source in this batch. Must be new per standalone run. |
 | `--started-at TS` | Timezone-aware ISO-8601 *logical planning* instant, for reproducible ids. |
 | `--resume` | Let each source consume its own existing extraction progress. |
+| `--max-parallel N` | Run at most N source attempts at once. Positive integer; overrides `orchestration.max_parallel_default`, else defaults to 1. |
 | `--fail-on-budget-breach` | Treat a successful run with an exceeded duration budget as a failed batch attempt, skipping its dependents. Off by default. |
 
 `--tag` and `--domain` cannot be combined — that is an argument error, not a silent
@@ -137,7 +138,7 @@ spend an hour extracting only to find it cannot record the result.
 
 | Key | Contents |
 |---|---|
-| `pipeline` | `pipeline_run_id`, `attempt`, `environment`, `trigger`, `planned_at`, `started_at`, `ended_at` |
+| `pipeline` | `pipeline_run_id`, `attempt`, `environment`, `trigger`, `planned_at`, `started_at`, `ended_at`; `max_parallel` only when N > 1 |
 | `selection` | `requested` filters, `root_ids`, `included_upstream_ids`, ordered `source_ids` |
 | `graph` | the edges actually used: `consumer_id`, `producer_id`, `table`, `input_paths` |
 | `config_versions` | `compute_config_version` per source — the same lineage hash, hashed once per file |
@@ -156,12 +157,14 @@ timings.
 Terminal statuses are `succeeded`, `failed`, and `skipped`. Only a successful upstream
 releases a dependent.
 
-Queryable run observability follows attempts, not planned nodes. Every attempted source emits
-its own terminal row with `pipeline_run_id`, `pipeline_attempt`, and `trigger` copied from the
-run attributes. A skipped source never reaches `RunObserver`, so it emits neither a
+Queryable run observability follows executed sources, not planned nodes. Each source that
+reaches `RunObserver` projects its terminal row with `pipeline_run_id`, `pipeline_attempt`, and
+`trigger` copied from the run attributes. Lock and snapshot-drift refusals have empty attempt
+evidence and create no run metadata or terminal row. A skipped source never reaches `RunObserver`, so it emits neither a
 `metadata.runs` row nor an OpenLineage event. This is intentional: the pipeline summary is
 the authoritative record for skips. A batch with five planned sources and three attempts
-therefore produces three run rows, not five.
+therefore projects three run rows when all three attempts reach the observer. Delivery remains
+best-effort; the summary also records attempts refused before execution.
 
 ### Exit codes
 
@@ -169,7 +172,7 @@ therefore produces three run rows, not five.
 |---|---|
 | `0` | Every planned source succeeded and the summary was persisted. |
 | `1` | The batch ran and something failed: a source failed, or the summary could not be persisted. The aggregate is still printed. |
-| `2` | The batch never started: argument error, missing/unreadable config, invalid graph, empty selection, unusable pipeline id, or plan/snapshot mismatch. |
+| `2` | The batch never started: argument error, missing/unreadable config, invalid `orchestration` profile block, invalid graph, empty selection, unusable pipeline id, or plan/snapshot mismatch. |
 | `130` | Interrupted. Partial evidence is reported on stderr; no summary is finalized. |
 
 Exit `2` is the important one: it means **zero sources executed**. Graph validation runs
@@ -225,11 +228,29 @@ and no second runs-table row or lineage event is emitted. Runs with `within` or
 `undeclared` outcomes are unaffected, and an already failed run retains its original
 failure phase. Single-source `janus run` rejects `--fail-on-budget-breach` by name.
 
-Failure phases include `planning`, `execution`, `cleanup`, `result_translation`, and
-`budget`; a budget phase means the data is fine and the schedule's assumption is not.
 The policy travels on `BatchPlanRequest.fail_on_budget_breach` (default `False`).
 Dagster uses that same request through the shared attempt seam; an injected
 `DagsterAdapterServices.batch_planner` can supply requests with the policy enabled.
+
+### Failure phases
+
+A failed source's `failure.phase` identifies where the attempt stopped. Phases are
+documented strings, not a validated enum:
+
+| Phase | Meaning | First thing to check |
+|---|---|---|
+| `planning` | The source could not be planned. | Source configuration and hook binding. |
+| `lock` | Another process holds the resolved metadata directory's lock, or locking is unsupported; nothing ran. | Holder pid, hostname, run id and command in the reason; local POSIX filesystem support. |
+| `snapshot_drift` | A worker's fresh registry, source or contract no longer matches the parent's plan; nothing ran. | YAML/contract edits or graph/selection changes since planning; deploy one snapshot and start a fresh batch. |
+| `execution` | Source execution failed. | The source's failure reason and evidence paths. |
+| `cleanup` | Session cleanup failed after execution. | Spark shutdown diagnostics. |
+| `result_translation` | The executed result could not be converted into an attempt. | Result shape at the execution-service boundary. |
+| `worker_crash` | A worker exited without a valid result; dependents are skipped and attempt evidence is empty. | Exit code, signal or envelope error in the reason, worker logs and host memory. Partial source files may remain. |
+| `budget` | The data is fine and the schedule's duration assumption is not. | The declared duration budget and measured run duration. |
+
+`lock`, `snapshot_drift` and `worker_crash` come from
+[concurrency and overlap](#concurrency-and-overlap). An interrupted parallel batch records
+none of them: its unfinished nodes stay pending (see [parallel batches](#parallel-batches)).
 
 The runner cannot roll back a successful upstream write when a downstream source later
 fails. A partial pipeline is a real outcome: A's new bronze is committed, B never ran, and
@@ -287,13 +308,169 @@ planning instant only. The window is `access.request_inputs` (`date_window`, or 
 `date_window` member of a `combined` input). There is no partition or date-range CLI flag,
 and none is implied.
 
-### Concurrency and overlap
+## Concurrency and overlap
 
-The core runner is sequential. An atomic Iceberg catalog makes table commits safe, but it
-does not make every other runtime artifact safe for concurrent writers: checkpoint state and
-extraction progress are source-scoped files. Serialize conflicting runs — Dagster pools or
-concurrency limits, or an exclusive lock around a cron invocation. Do not rely on the catalog
-lock for this.
+There are two kinds of overlap, and each has one protection. Overlap nobody planned (a cron
+tick, a second operator, another Dagster run) meets the kernel-held source-state lock, which
+refuses after its configured wait. Overlap a parallel batch plans for itself is ordered by
+the batch's ready queue, so the batch does not contend with itself. An atomic Iceberg catalog still protects table
+commits only. It does not serialise the source-scoped state files.
+
+### Source-state locking
+
+`runtime/locking.py::SourceStateLock` holds an exclusive, advisory `flock` on
+`<resolved source metadata directory>/.lock`. The key is the resolved directory: two source
+ids sharing that directory share the lock; distinct nested directories have distinct locks.
+It protects checkpoint state/history, extraction progress, dead letters, and run evidence
+through the whole mutation. Live execution and replay acquire it before observer creation
+and retain it through terminal persistence and emission.
+
+The seven registered entry points in `LOCKED_ENTRY_POINTS` are live `run --execute`, raw
+replay `run --ingest-raw-to-bronze`, `dead-letters release`, `dead-letters replay --execute`,
+`checkpoint set`, `checkpoint clear`, and `maintain` for source-scoped metadata/raw retention.
+Replay holds one reentrant lock across release and resumed execution. Read-only `validate`,
+`list`, `status`, `checkpoint show`, `dead-letters list`, replay previews, and single-source
+planning/bootstrap do not acquire it: atomic state writes let readers see a complete version.
+
+| Entry point | Refused lock |
+|---|---|
+| Live execution or raw replay | Exit **2**, holder on stderr, no stdout summary or run metadata. |
+| Batch/adapter node | Failed attempt with `failure.phase = "lock"`, empty evidence; dependents skipped with their recorded causes. A finished failed batch exits **1**. |
+| Mutating operator verb | Exit **2**, holder on stderr and **"Nothing was changed."**; no state/history mutation. |
+| Metadata/raw maintenance | Skip the source as `source_locked`, leave it untouched, and continue its peers; contention alone exits **0**. |
+
+The holder record includes pid, hostname, source id, run id, pipeline run id, acquisition
+time and command. Logs use `source_lock_acquired`, `source_lock_refused`, and
+`source_lock_released`. The kernel releases the lock on process death, including `SIGKILL`.
+The file stays in place; normal release truncates its diagnostics, while a crash may leave
+old diagnostics. Its existence or contents never prove that the lock is held. Never delete,
+rename or replace it to clear contention.
+
+Profiles can set a bounded polling wait:
+
+```yaml
+orchestration:
+  max_parallel_default: 1
+  lock_wait_seconds: 0
+```
+
+Both are YAML integers (`max_parallel_default >= 1`, `lock_wait_seconds >= 0`); quoted
+strings, booleans, floats and unknown keys are refused. An absent block uses the values
+above. `lock_wait_seconds` reaches every mutating entry point, including adapter attempts;
+zero means fail fast, and a positive value waits at most that many seconds for external
+contention. This is a single-host, local-filesystem guarantee. NFS, cross-host locking and
+object-store metadata zones are unsupported; unavailable POSIX locking refuses execution.
+
+### Cron overlap
+
+Two single-source schedules that overlap no longer need an external lock for source state:
+the second invocation refuses and exits **2**, which cron can distinguish from **1** (ran
+and failed). A wrapper can treat **2** as "skip this tick", retaining stderr for diagnosis:
+
+```sh
+#!/bin/sh
+# Save as /srv/janus/run-source-tick.sh; pass an enabled source id as the first argument.
+cd /srv/janus || exit 1
+janus run --environment local --source-id "$1" --execute
+status=$?
+case "$status" in
+  2) printf '%s\n' 'JANUS did not start; skipping this tick (see stderr).' >&2; exit 0 ;;
+  *) exit "$status" ;;
+esac
+```
+
+```cron
+0 * * * * /srv/janus/run-source-tick.sh my_enabled_source >>/var/log/janus-source.log 2>&1
+```
+
+Exit 2 also covers configuration/argument refusals, so retain and inspect stderr. For
+`run-all`, contention is a node failure and the finished aggregate exits 1; it is not a
+whole-batch skip. Each invocation needs a fresh pipeline id. Maintenance of shared lineage
+files or orphan data has its separate [scheduling constraints](maintenance.md#scheduling-with-cron-or-dagster).
+
+### Parallel batches
+
+```bash
+janus run-all --environment local --max-parallel 3
+```
+
+The flag overrides `orchestration.max_parallel_default`; both supported profiles ship 1.
+At N=1 the command uses the existing `BatchExecutor`, with byte-identical stdout, summary
+and nonvolatile metadata goldens. At N>1, `runtime/parallel.py::ParallelBatchExecutor`
+uses one spawned process per attempt through `execute_source_attempt`, never threads or
+forked JVMs. The pure `orchestration/scheduling.py` ready queue dispatches eligible nodes
+in plan order. A node waits until **all** upstreams are terminal; any failed/skipped upstream
+then skips it with the same full blocker/root causes as N=1. Nodes sharing a resolved
+metadata directory never overlap inside this batch; independent lock domains can overlap.
+
+The parent starts no Spark session. Worker startup, registry loading, planning, locking and
+provider construction also start none. Ordinary extraction finishes before that source
+acquires Spark; empty handoffs stay JVM-free. The existing scoped `iceberg_rows` lookup is
+the only pre-download acquisition and stops before the first request. Workers reload the
+registry, plan through `BatchPlanner`, and verify their `config_version`, contract digest,
+run id and upstreams against the parent. Refusal is `snapshot_drift`, with no execution.
+
+Results return as JSON summaries and aggregate in plan order, independent of completion
+order. `schema_version` stays 1; `pipeline.max_parallel` appears only above 1. A worker
+that dies without a valid result becomes `worker_crash`, with its exit diagnostics and
+empty attempt evidence. On parent `SIGINT` or `SIGTERM`, dispatch stops, live workers get
+`SIGTERM`, and completed results are collected for a bounded grace (default 30 seconds).
+Survivors get `SIGKILL`; a second interrupt skips the grace. Exit is **130**, with completed
+and pending counts and no finalized summary. Interrupted attempts without results remain
+pending, along with undispatched nodes; they are not recorded as worker crashes. The runner
+restores its previous signal handlers after dispatch and shutdown. A caller embedding it
+outside the main thread keeps its own handlers and receives one
+`parallel_signal_handlers_not_installed` diagnostic.
+
+### Operating guidance
+
+Budget peak memory at approximately **N × `spark.driver.memory` plus the parent**, plus each
+driver's JVM native and Python overhead. More exactly, it follows the number of sources
+*running at once*: at most N, and never more than the graph's width at that moment. Each
+running source may start its own driver. The `local` profile's `spark.driver.memory` is
+8g (`JANUS_SPARK_DRIVER_MEMORY`), so choose N for the host's available memory. Parallel
+execution does not necessarily make a small batch faster.
+
+Recorded local measurements (2026-10-11/12, pinned Python 3.13.12 / Spark 4.0.1):
+
+| Measurement | Result |
+|---|---|
+| TASK-01 spawn + registry + ten-source batch planning, 20 samples | Median **0.298295 s**, p95 **0.312488 s** per worker. |
+| TASK-15 A → B plus C, 1g drivers, N=3 | A **16:37:54.675559–16:38:04.671807**, C **16:37:54.672859–16:38:04.567663**, B **16:38:05.080838–16:38:13.227238**, America/Sao_Paulo: A/C overlap, B follows A. |
+| Same TASK-15 success capture, N=1 / N=3 | **13.794403 s / 18.952177 s** total; normalized summaries and bronze business rows match. No `SQLITE_BUSY` observed. |
+| TASK-15's parity case re-run three times, peak PSS of the CLI process tree, sampled every 0.1 s | N=1: **959.6–1170.4 MiB**, one JVM, inside the CLI process (parent ≈ 241 MiB RSS). N=3: **1567.9–1851.1 MiB**, two concurrent JVMs (A and C; the graph is two wide), parent ≈ 44 MiB RSS. One driver JVM peaked at **707.0–979.5 MiB** RSS with a 1g heap. |
+| TASK-19 full local CI, sampled Python + Java RSS every 0.5 s | Peak aggregate **5712.9 MiB**, peak Java **4955.6 MiB**. This is CI-wide RSS, not a per-batch or hosted-runner measurement. |
+
+The parity-case memory row is a small fixture's per-driver floor, not a workload ceiling: a source that
+caches or shuffles large frames grows toward its heap. The full artifacts and measurement
+scope are in the order-24 evidence record: TASK-01's spawn-cost experiment, TASK-15's parity
+captures, TASK-20's peak-memory sampling and TASK-19's gate run.
+
+Pre-seed the shared Ivy cache before starting parallel workers:
+
+```bash
+make seed-ivy
+```
+
+TASK-01 ran **30 concurrent cache-hit trials** (20 with two JVMs, 10 with four), with
+**80 successful workers, zero failures and unchanged resolution reports**. The decision
+is to keep `spark.jars.packages`; no worker-only `spark.jars` override was needed. This
+proof depends on the pinned, pre-seeded jars: a cache miss would make concurrent drivers
+resolve over the network into one Ivy directory, which the experiment did not test.
+
+The `local` JDBC SQLite URI uses WAL and **`busy_timeout=30000`**. Keep **N ≤ 4** on
+that profile; this is operating guidance, not an enforced CLI cap or a throughput guarantee.
+For N > 4 use the `cluster` profile with Postgres and size that host's drivers deliberately.
+TASK-15 observed no `SQLITE_BUSY` at N=3; it does not establish a higher SQLite ceiling.
+Provision a new local catalog before its first parallel batch: run once at N=1, so the JDBC
+catalog tables and every bronze namespace exist. TASK-13's early captures let workers
+bootstrap a fresh SQLite catalog concurrently and hit `SQLITE_BUSY_SNAPSHOT` and
+namespace-creation races. Every parallel proof since then ran on a provisioned catalog, and
+JANUS does not serialise first-time catalog bootstrap.
+
+The CLI warns once when N exceeds **`os.process_cpu_count()`**, which respects CPU affinity
+(falling back to `os.cpu_count()`, then 1). It emits one structured warning and one stderr
+line, and leaves N unchanged.
 
 ## The Dagster adapter
 
@@ -318,6 +495,19 @@ from janus.adapters.dagster import build_definitions
 
 defs = build_definitions(Path("/srv/janus"), environment="local")
 ```
+
+The default executor runs in one process and keeps the `janus/concurrency: single-process`
+tag. Pass `executor="multiprocess", max_concurrent=3` to `build_definitions`, `build_job`,
+or `build_dagster_adapter` to run independent steps in spawned processes, tagged
+`janus/concurrency: multiprocess:3`. Multiprocess execution requires an explicit positive
+integer limit: each running source may start its own Spark driver. The adapter's
+`execute_in_process` convenience always runs in the calling process; use a reconstructable
+job and a persistent Dagster instance with `dagster.execute_job` for multiprocess execution.
+
+Each source holds its source-state lock through the shared executor. Overlap with another
+Dagster run or cron invocation records a failed attempt with `phase: "lock"` and skips its
+dependents. An opt-in Dagster `RetryPolicy` can retry that failure after its configured
+delay, allowing an operator to wait for the competing run to finish.
 
 A run is planned once, at definition time, and the selected graph travels with the run as an
 immutable manifest, so a code reload mid-run cannot silently change the batch. Terminal
@@ -565,5 +755,11 @@ Two intentional changes came with this work:
    declare it; see [migrating an existing consumer](source-onboarding.md#migrating-an-existing-consumer).
 2. Registry load now validates the **whole** graph, so a problem in one source's declaration
    fails the load for every entry point, including single-source runs.
+
+Order-24 adds one refusal to single-source execution. `--execute` and
+`--ingest-raw-to-bronze` exit `2`, with the holder on stderr, when another process holds the
+source's state lock. Nothing ran, so no run metadata exists. `run-all` at N=1, the shipped
+default, is the unchanged sequential runner and keeps its output bytes; see
+[concurrency and overlap](#concurrency-and-overlap).
 
 Config hashes change where YAML changed, which is expected and visible in `config_versions`.

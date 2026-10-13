@@ -71,6 +71,40 @@ MODELS_ALL: tuple[str, ...] = (
 
 #: Import paths that exist today and must keep working.
 PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
+    "janus.orchestration": (
+        "NodeDecision",
+        "ReadyQueue",
+        "SchedulingOrderError",
+        "blocking_upstreams",
+        "decide",
+        "root_failures",
+    ),
+    "janus.orchestration.errors": ("SchedulingOrderError",),
+    "janus.orchestration.scheduling": (
+        "NodeDecision",
+        "ReadyQueue",
+        "blocking_upstreams",
+        "decide",
+        "root_failures",
+    ),
+    "janus.runtime": (
+        "ParallelBatchExecutor",
+        "build_batch_executor",
+        "LockHolder",
+        "LockUnsupportedError",
+        "SourceLockedError",
+        "SourceStateLock",
+        "hold_source_state_lock",
+        "source_state_lock_path",
+    ),
+    "janus.runtime.locking": (
+        "LockHolder",
+        "LockUnsupportedError",
+        "SourceLockedError",
+        "SourceStateLock",
+        "hold_source_state_lock",
+        "source_state_lock_path",
+    ),
     "janus.maintenance": (
         "MaintenancePolicy",
         "MaintenanceProfileError",

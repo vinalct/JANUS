@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from janus.models.config.constants import DURATION_BUDGET_EXCEEDED
 from janus.observability.metrics.pipeline import emit_pipeline_metrics
+from janus.orchestration.errors import SchedulingOrderError
 from janus.orchestration.persistence import PipelineSummaryStore
 from janus.orchestration.plans import BatchPlan, BatchPlanRequest, PlannedSource
 from janus.orchestration.results import (
@@ -22,14 +23,18 @@ from janus.orchestration.results import (
     SourceAttempt,
     SourceOutcome,
 )
+from janus.orchestration.scheduling import decide
 from janus.orchestration.timing import ExecutionTiming, PipelineClock
 from janus.planner import PlannedRun
 from janus.registry import SourceRegistry
 from janus.runtime.executor import ExecutedRun, SourceExecutor
+from janus.runtime.locking import LockUnsupportedError, SourceLockedError
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.utils.environment import RuntimeLocation
 from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout
+
+LOCK_FAILURE_PHASE = "lock"
 
 
 class SparkProviderFactory(Protocol):
@@ -254,16 +259,19 @@ class BatchExecutor:
         pipeline_started = self.clock.start()
         try:
             for planned_source in plan.sources:
-                blockers = _blocking_upstreams(plan, planned_source, outcomes)
-                if blockers:
+                try:
+                    decision = decide(plan, planned_source, outcomes)
+                except SchedulingOrderError as exc:
+                    raise BatchExecutionPreflightError(str(exc)) from exc
+                if decision.kind == "skip":
                     outcomes[planned_source.source_id] = SourceOutcome.skipped(
                         planned_source,
-                        direct_blocking_upstream_ids=blockers,
-                        root_failed_source_ids=_root_failures(blockers, outcomes),
+                        direct_blocking_upstream_ids=decision.blockers,
+                        root_failed_source_ids=decision.roots,
                     )
                     continue
 
-                if planned_source.failure is not None:
+                if decision.kind == "planning_failure":
                     outcomes[planned_source.source_id] = SourceOutcome.from_planning_failure(
                         planned_source
                     )
@@ -384,45 +392,21 @@ def _preflight(plan: BatchPlan, registry: SourceRegistry) -> None:
         )
 
 
-def _blocking_upstreams(
-    plan: BatchPlan,
-    planned_source: PlannedSource,
-    outcomes: Mapping[str, SourceOutcome | None],
-) -> tuple[str, ...]:
-    blockers: list[str] = []
-    for upstream_id in plan.upstreams_of(planned_source.source_id):
-        upstream = outcomes[upstream_id]
-        if upstream is None:
-            raise BatchExecutionPreflightError(
-                f"Source {planned_source.source_id!r} was reached before upstream "
-                f"{upstream_id!r}; nothing further was scheduled"
-            )
-        if upstream.status in {"failed", "skipped"}:
-            blockers.append(upstream_id)
-    return tuple(blockers)
-
-
-def _root_failures(
-    blockers: tuple[str, ...],
-    outcomes: Mapping[str, SourceOutcome | None],
-) -> tuple[str, ...]:
-    root_ids: set[str] = set()
-    for source_id in blockers:
-        outcome = outcomes[source_id]
-        assert outcome is not None
-        if outcome.status == "failed":
-            root_ids.add(source_id)
-            continue
-        assert outcome.skip is not None
-        root_ids.update(outcome.skip.root_failed_source_ids)
-    return tuple(sorted(root_ids))
-
-
 def _attempt_from_exception(
     planned_source: PlannedSource,
     timing: ExecutionTiming,
     error: Exception,
 ) -> SourceAttempt:
+    if isinstance(error, SourceLockedError | LockUnsupportedError):
+        # Lock refusal precedes execution: there is no run evidence to translate.
+        return SourceAttempt.failed_from_exception(
+            source_id=planned_source.source_id,
+            run_id=planned_source.run_id,
+            attempt=planned_source.attempt,
+            timing=timing,
+            error=error,
+            phase=LOCK_FAILURE_PHASE,
+        )
     if not isinstance(error, SourceCleanupError):
         return SourceAttempt.failed_from_exception(
             source_id=planned_source.source_id,

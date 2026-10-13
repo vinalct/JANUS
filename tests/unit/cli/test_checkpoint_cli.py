@@ -12,7 +12,12 @@ from janus.checkpoints import CheckpointStore
 from janus.lineage import MetadataZonePaths
 from janus.models import ExecutionPlan
 from janus.planner import Planner, PlanningRequest
-from tests.support.operator_cli import OPERATOR_ENV, arm_spark_tripwire, run_janus
+from tests.support.operator_cli import (
+    OPERATOR_ENV,
+    arm_spark_tripwire,
+    operator_state_snapshot,
+    run_janus,
+)
 from tests.support.semantics_fixtures import (
     CLEAN,
     CLEAN_CONSUMER,
@@ -174,14 +179,14 @@ def test_state_changes_refuse_to_run_without_a_reason(root: Path, argv: tuple[st
 def test_set_refuses_a_value_of_another_kind(root: Path) -> None:
     """D-14: a `datetime` checkpoint set to text would compare lexicographically forever."""
     plan = _seed(root)
-    before = tree_snapshot(root)
+    before = operator_state_snapshot(root)
 
     result = _checkpoint(root, "set", "--to", "latest", "--reason", "wrong kind")
 
     assert result.exit_code == 2
     for expected in ("datetime", "text", LATEST):
         assert expected in result.stderr
-    assert tree_snapshot(root) == before
+    assert operator_state_snapshot(root) == before
     assert _current_value(plan) == LATEST
 
 
@@ -263,12 +268,12 @@ def test_clear_records_what_it_forgets_and_deletes_the_state(root: Path) -> None
 
 
 def test_clear_with_no_state_writes_nothing(root: Path) -> None:
-    before = tree_snapshot(root)
+    before = operator_state_snapshot(root)
 
     result = _checkpoint(root, "clear", "--reason", "nothing stored")
 
     assert result.exit_code == 0, result.output
-    assert tree_snapshot(root) == before
+    assert operator_state_snapshot(root) == before
 
 
 @pytest.mark.parametrize(
@@ -456,13 +461,13 @@ def test_an_unreadable_history_file_is_named_and_the_rest_still_print(root: Path
 
 def test_set_refuses_a_value_the_store_could_not_compare(root: Path) -> None:
     """FR-6: a value the next run could not compare is rejected, even with nothing stored."""
-    before = tree_snapshot(root)
+    before = operator_state_snapshot(root)
 
     result = _checkpoint(root, "set", "--to", "NaN", "--reason", "not a number")
 
     assert result.exit_code == 2
     assert "could not compare" in result.stderr
-    assert tree_snapshot(root) == before
+    assert operator_state_snapshot(root) == before
 
 
 @pytest.mark.parametrize(

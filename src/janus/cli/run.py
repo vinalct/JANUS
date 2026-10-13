@@ -17,9 +17,11 @@ from janus.cli.common import (
 )
 from janus.observability.metrics import resolve_metrics_settings
 from janus.observability.openlineage import resolve_openlineage_settings
+from janus.orchestration.settings import resolve_orchestration_settings
 from janus.planner import Planner, PlannerError, PlanningRequest
 from janus.registry import SourceNotFoundError, load_registry
 from janus.runtime import SourceExecutor, SparkSessionProvider
+from janus.runtime.locking import LockUnsupportedError, SourceLockedError
 from janus.scripts import ingest_raw_to_bronze
 from janus.utils.environment import (
     build_spark_session,
@@ -119,7 +121,11 @@ def parse_run_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "disagrees with the checksum sidecar written at extraction time."
         ),
     )
+    parser.add_argument("--max-parallel", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+
+    if hasattr(args, "max_parallel"):
+        parser.error("--max-parallel applies to run-all; a single source runs in this process")
 
     if args.execute and not args.source_id:
         parser.error("--execute requires --source-id")
@@ -143,14 +149,15 @@ def run_command(argv: Sequence[str] | None = None) -> int:
 
     try:
         config = load_environment_config(args.environment, project_root)
+        orchestration = resolve_orchestration_settings(config)
         resolved_paths = prepare_runtime(config, project_root)
         resolve_openlineage_settings(config)
         resolve_metrics_settings(config)
-    except (FileNotFoundError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    except PermissionError as exc:
-        print(format_runtime_permission_error(exc), file=sys.stderr)
+    except (FileNotFoundError, ValueError, PermissionError) as exc:
+        message = (
+            format_runtime_permission_error(exc) if isinstance(exc, PermissionError) else str(exc)
+        )
+        print(message, file=sys.stderr)
         return 2
 
     summary = {
@@ -213,13 +220,18 @@ def run_command(argv: Sequence[str] | None = None) -> int:
 
         spark_provider = SparkSessionProvider(config, resolved_paths, execution_logger)
         try:
-            executed_run = SourceExecutor(logger=execution_logger).execute(
+            executed_run = SourceExecutor(
+                logger=execution_logger, lock_wait_seconds=orchestration.lock_wait_seconds
+            ).execute(
                 planned_run,
                 spark_provider,
                 config,
             )
             summary["executed_run"] = executed_run.to_summary()
             record_spark_session(summary, spark_provider)
+        except (SourceLockedError, LockUnsupportedError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         finally:
             # The executor already stops in its own finally; this is the backstop for
             # a session acquired outside that span.
@@ -257,6 +269,9 @@ def run_command(argv: Sequence[str] | None = None) -> int:
             )
             summary["raw_to_bronze_run"] = raw_to_bronze_run.to_summary()
             record_spark_session(summary, spark_provider)
+        except (SourceLockedError, LockUnsupportedError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         finally:
             # Same backstop as --execute: the loader stops in its own finally, this
             # covers a session acquired outside that span.

@@ -27,6 +27,7 @@ from janus.observability import (
     latest_run_emission,
     wire_run_event_emitter,
 )
+from janus.orchestration.settings import resolve_orchestration_settings
 from janus.planner import PlannedRun
 from janus.quality import (
     ContractEnforcementError,
@@ -42,6 +43,7 @@ from janus.runtime.contract_preflight import (
     start_observed_preflight,
 )
 from janus.runtime.executor import _plan_with_storage_layout_outputs
+from janus.runtime.locking import COMMAND_RUN_REPLAY, hold_source_state_lock
 from janus.runtime.materialize import (
     BronzeMaterializer,
     _bind_execution_logger,
@@ -187,8 +189,9 @@ class RawToBronzeLoader:
     )
 
     preflight_loader: Callable[..., LiveTable | None] = load_live_table
+    lock_wait_seconds: float = 0.0
 
-    def ingest( 
+    def ingest(
         self,
         planned_run: PlannedRun,
         spark: SparkSessionProvider | SparkSession,
@@ -210,6 +213,36 @@ class RawToBronzeLoader:
         storage_layout = self.storage_layout_resolver(planned_run.plan, environment_config)
         plan = _plan_with_storage_layout_outputs(planned_run.plan, storage_layout)
         plan = _override_bronze_output(plan, bronze_table)
+        attributes = plan.run_context.attributes_as_dict()
+        # Replay writes the same source state; refuse before wiring its observer.
+        with hold_source_state_lock(
+            plan,
+            storage_layout,
+            command=COMMAND_RUN_REPLAY,
+            run_id=plan.run_context.run_id,
+            pipeline_run_id=attributes.get("pipeline_run_id"),
+            wait_seconds=self.lock_wait_seconds,
+            logger=_bind_execution_logger(self.logger, plan),
+        ):
+            return self._ingest_locked(
+                planned_run,
+                plan,
+                storage_layout,
+                spark_provider,
+                environment_config,
+                verify_checksums=verify_checksums,
+            )
+
+    def _ingest_locked(
+        self,
+        planned_run: PlannedRun,
+        plan: ExecutionPlan,
+        storage_layout: StorageLayout,
+        spark_provider: SparkSessionProvider,
+        environment_config: Mapping[str, Any],
+        *,
+        verify_checksums: bool,
+    ) -> RawToBronzeRun:
         runtime_planned_run = replace(planned_run, plan=plan)
         logger = _bind_execution_logger(self.logger, plan)
 
@@ -477,7 +510,8 @@ def ingest_raw_to_bronze(
     logger: StructuredLogger | None = None,
     verify_checksums: bool = False,
 ) -> RawToBronzeRun:
-    return RawToBronzeLoader(logger=logger).ingest(
+    settings = resolve_orchestration_settings(environment_config)
+    return RawToBronzeLoader(logger=logger, lock_wait_seconds=settings.lock_wait_seconds).ingest(
         planned_run,
         spark,
         environment_config,

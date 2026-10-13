@@ -17,16 +17,23 @@ from dagster import DagsterInstance, Definitions, RetryPolicy  # noqa: E402
 from janus.adapters.dagster import (  # noqa: E402
     DagsterAdapterServices,
     build_dagster_adapter,
+    build_definitions,
+    build_job,
     source_op_name,
 )
 from janus.planner import Planner  # noqa: E402
-from janus.runtime import SourceExecutor  # noqa: E402
+from janus.runtime import (  # noqa: E402
+    LOCK_FAILURE_PHASE,
+    SourceExecutionService,
+    SourceExecutor,
+)
 from tests.support.orchestration import (  # noqa: E402
     SourceSpec,
     build_graph_project,
     source_payload,
     write_project,
 )
+from tests.support.parallel_execution import file_snapshot, held_lock  # noqa: E402
 
 
 def _environment_config() -> dict[str, Any]:
@@ -264,6 +271,41 @@ def test_failure_blocks_descendants_but_independent_peer_finishes_and_is_collect
     assert stored == outcome.to_summary()
 
 
+def test_in_process_lock_refusal_is_collected_with_holder_and_skip_causes(tmp_path):
+    root = build_graph_project(tmp_path, "chain_and_peer")
+    service = SourceExecutionService()
+
+    class LockedExecution(RecordingExecution):
+        def execute(self, planned_run, environment_config, resolved_paths):
+            if planned_run.plan.source.source_id == "A":
+                return service.execute(planned_run, environment_config, resolved_paths)
+            return super().execute(planned_run, environment_config, resolved_paths)
+
+    adapter = _adapter(root, LockedExecution())
+    metadata = root / "data/metadata/A"
+    with held_lock(metadata / ".lock") as (_process, _release, holder):
+        before = file_snapshot(metadata)
+        result, outcome = adapter.execute_in_process()
+        assert file_snapshot(metadata) == before
+
+    sources = _sources(outcome)
+    assert not result.success
+    assert outcome.status == "failed"
+    assert sources["A"].status == "failed"
+    assert sources["A"].failure.phase == LOCK_FAILURE_PHASE
+    assert sources["A"].failure.error_type == "SourceLockedError"
+    for key in ("pid", "hostname", "run_id", "acquired_at"):
+        assert str(holder[key]) in sources["A"].failure.reason
+    assert dict(sources["A"].attempts[0].evidence) == {}
+    assert sources["B"].status == "skipped"
+    assert sources["B"].skip.direct_blocking_upstream_ids == ("A",)
+    assert sources["B"].skip.root_failed_source_ids == ("A",)
+    assert sources["D"].skip.root_failed_source_ids == ("A",)
+    assert sources["C"].status == "succeeded"
+    stored = json.loads(outcome.summary_persistence.path.read_text(encoding="utf-8"))
+    assert stored == outcome.to_summary()
+
+
 def test_retries_are_opt_in_and_keep_distinct_attempt_ids_in_one_pipeline(tmp_path):
     root = build_graph_project(tmp_path, "chain")
     execution = RecordingExecution(fail_once={"A"})
@@ -328,3 +370,112 @@ def test_terminal_status_sensors_are_enabled_for_success_failure_and_cancel(tmp_
         sensor.default_status == dagster.DefaultSensorStatus.RUNNING
         for sensor in adapter.definitions.sensors
     )
+
+
+def test_default_adapter_uses_profile_lock_wait_without_changing_executor(
+    tmp_path, monkeypatch
+):
+    root = build_graph_project(tmp_path, "independent")
+    config = _environment_config()
+    config["orchestration"] = {"max_parallel_default": 7, "lock_wait_seconds": 3}
+    waits = []
+
+    def offline_execute(self, planned, *args):
+        waits.append(self.lock_wait_seconds)
+        return FakeExecutedRun(planned, succeeded=True)
+
+    monkeypatch.setattr(SourceExecutor, "_execute_locked", offline_execute)
+    adapter = build_dagster_adapter(root, environment_config=config)
+    result, outcome = adapter.execute_in_process()
+    assert result.success
+    assert outcome.is_successful
+    assert waits == [3, 3]
+    assert adapter.job.executor_def.name == "in_process"
+
+
+def test_default_job_is_unchanged(tmp_path):
+    root = build_graph_project(tmp_path, "chain")
+    adapter = _adapter(root, RecordingExecution())
+    explicit = _adapter(root, RecordingExecution(), executor="in_process")
+
+    assert adapter.job.executor_def is dagster.in_process_executor
+    assert adapter.job.tags == explicit.job.tags == {
+        "janus/adapter": "dagster",
+        "janus/snapshot_id": adapter.manifest.snapshot_id,
+        "janus/manifest": adapter.manifest.to_json(),
+        "janus/concurrency": "single-process",
+    }
+    assert adapter.job.description == explicit.job.description == (
+        "Execute JANUS sources through the shared planner and SourceExecutor. "
+        "The reference executor is intentionally single-process."
+    )
+
+
+@pytest.mark.parametrize("max_concurrent", [1, 3])
+def test_multiprocess_job_pins_spawn_and_explicit_concurrency(tmp_path, max_concurrent):
+    root = build_graph_project(tmp_path, "chain")
+    adapter = _adapter(
+        root, RecordingExecution(), executor="multiprocess", max_concurrent=max_concurrent
+    )
+    Definitions.validate_loadable(adapter.definitions)
+    configured = adapter.job.executor_def.config_schema.resolve_config({})
+
+    assert configured.success
+    assert configured.value["config"] == {
+        "max_concurrent": max_concurrent,
+        "start_method": {"spawn": {}},
+        "retries": {"enabled": {}},
+    }
+    assert adapter.job.executor_def.name == "multiprocess"
+    assert adapter.job.tags["janus/concurrency"] == f"multiprocess:{max_concurrent}"
+    assert adapter.job.description == (
+        "Execute JANUS sources through the shared planner and SourceExecutor. "
+        "Steps run in spawned processes; each JANUS source holds its source-state lock "
+        "for its whole execution."
+    )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_concurrent": 3}, "max_concurrent applies only to executor='multiprocess'"),
+        ({"executor": "threads"}, "executor must be one of {'in_process', 'multiprocess'}"),
+        *(
+            (
+                {"executor": "multiprocess", "max_concurrent": value},
+                "executor='multiprocess' requires an explicit max_concurrent >= 1",
+            )
+            for value in (None, 0, -1, True, 1.5, "3")
+        ),
+    ],
+)
+def test_executor_arguments_fail_closed(tmp_path, kwargs, message):
+    with pytest.raises(ValueError, match=re.escape(message)):
+        build_dagster_adapter(tmp_path, **kwargs)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("builder", [build_definitions, build_job])
+def test_public_builders_forward_executor_options(tmp_path, builder):
+    root = build_graph_project(tmp_path, "chain")
+    built = builder(
+        root,
+        environment_config=_environment_config(),
+        executor="multiprocess",
+        max_concurrent=3,
+    )
+    job = built.resolve_job_def("janus_sources") if isinstance(built, Definitions) else built
+    assert job.executor_def.name == "multiprocess"
+    assert job.tags["janus/concurrency"] == "multiprocess:3"
+
+
+def test_execute_in_process_uses_local_executor_for_a_multiprocess_job(tmp_path):
+    root = build_graph_project(tmp_path, "chain")
+    execution = RecordingExecution()
+    adapter = _adapter(root, execution, executor="multiprocess", max_concurrent=3)
+
+    result, outcome = adapter.execute_in_process()
+
+    assert result.success and outcome.is_successful
+    assert [call[:2] for call in execution.calls] == [("A", 1), ("B", 1)]
+    assert adapter.job.executor_def.name == "multiprocess"

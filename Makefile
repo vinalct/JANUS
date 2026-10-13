@@ -24,6 +24,8 @@ IVY_JAR_NAMES := $(ICEBERG_JAR_NAME) $(SQLITE_JAR_NAME) $(POSTGRES_JAR_NAME)
 IVY_JAR_DEST_DIR := data/metadata/ivy/jars
 
 DAGSTER_VERSION := 1.13.22
+CI_DAGSTER_VENV := /tmp/janus-ci-dagster
+CI_DAGSTER_PYTHON := $(CI_DAGSTER_VENV)/bin/python
 DAGSTER_TEST_REPORT := data/metadata/test-reports/dagster.xml
 FAST_TEST_REPORT := data/metadata/test-reports/fast.xml
 METRICS_TEST_REPORT := data/metadata/test-reports/metrics.xml
@@ -46,6 +48,8 @@ SPARK_UNIT_TEST_ARGS := -ra -m 'not cluster' tests/unit \
 SPARK_COVERAGE_UNIT_TEST_ARGS := $(SPARK_UNIT_TEST_ARGS) --deselect=$(CLI_TIMING_TEST)
 SPARK_INTEGRATION_TEST_ARGS := -ra -m 'not cluster and not large_handoff' tests/integration \
 	--ignore=tests/integration/dagster
+# CI adds the optional adapter in an isolated venv and runs its complete Spark parity suite.
+CI_INTEGRATION_TEST_ARGS := $(filter-out --ignore=tests/integration/dagster,$(SPARK_INTEGRATION_TEST_ARGS))
 SPARK_LARGE_TEST_ARGS := -ra -m 'not cluster and large_handoff' tests/integration/writers
 # The release-then-resume module is session-free but for its bronze case, which needs Spark:
 # the fast job runs the rest, and `ci` requires every case, that one included.
@@ -127,7 +131,21 @@ CONTRACT_ENFORCEMENT_CLASSES := \
 	tests.unit.runtime.test_contract_preflight \
 	tests.unit.toolchain.test_no_write_without_contract_check \
 	tests.unit.models.test_schema_config_contract_only
+LOCKING_PARALLEL_REQUIRED_CLASSES := \
+	tests.unit.runtime.test_source_state_lock \
+	tests.unit.runtime.test_lock_refusal_evidence \
+	tests.unit.cli.test_operator_verbs_hold_the_lock \
+	tests.unit.toolchain.test_lock_acquisition_sites \
+	tests.unit.orchestration.test_ready_queue_scheduler \
+	tests.unit.orchestration.test_attempt_wire_format \
+	tests.unit.runtime.test_parallel_runner \
+	tests.unit.toolchain.test_no_threaded_source_execution \
+	tests.unit.orchestration.test_orchestration_settings
+LOCK_ACQUISITION_CLASS := tests.unit.toolchain.test_lock_acquisition_sites
+SOURCE_STATE_LOCK_CLASS := tests.unit.runtime.test_source_state_lock
 SPARK_ORCHESTRATION_CLASS := tests.integration.orchestration.test_dependency_execution
+PARALLEL_EXECUTION_CLASS := tests.integration.orchestration.test_parallel_execution
+DAGSTER_PARITY_CLASS := tests.integration.dagster.test_cli_adapter_parity
 DEAD_LETTER_REPLAY_CLASS := tests.integration.cli.test_dead_letter_replay
 QUERYABLE_CLASS := tests.integration.catalog_commits.test_queryable_observability
 RUNS_SINK_CLASS := tests.integration.catalog_commits.test_runs_table_append_sink
@@ -320,7 +338,7 @@ test-write-sizing:
 test-fast:
 	@mkdir -p "$(dir $(FAST_TEST_REPORT))"
 	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --durations=20 --junitxml="$(FAST_TEST_REPORT)"
-	@for class_name in $(FAST_REQUIRED_CLASSES) $(COMPACTION_REQUIRED_CLASSES) $(METRICS_REQUIRED_CLASSES); do \
+	@for class_name in $(FAST_REQUIRED_CLASSES) $(COMPACTION_REQUIRED_CLASSES) $(METRICS_REQUIRED_CLASSES) $(LOCKING_PARALLEL_REQUIRED_CLASSES); do \
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
@@ -333,6 +351,9 @@ test-fast:
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
 	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63
+	# Full green counts: every acquisition rule and kernel-release/CLOEXEC case must run.
+	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name $(LOCK_ACQUISITION_CLASS) --minimum-passed 39
+	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name $(SOURCE_STATE_LOCK_CLASS) --minimum-passed 34
 
 # Focused, session-free metrics/budget/freshness gate; Spark parity is required by ci.
 test-metrics:
@@ -346,11 +367,21 @@ test-metrics:
 test-contract-schema:
 	$(PYTHON) -m pytest -q $(CONTRACT_SCHEMA_TESTS)
 
+# Spawn/retry/collector coverage runs without Spark; real parity runs in the full container suite.
 test-adapter:
 	@mkdir -p "$(dir $(DAGSTER_TEST_REPORT))"
 	$(PYTHON) -c "import dagster; from importlib.metadata import version; actual = version('dagster'); assert actual == '$(DAGSTER_VERSION)', f'expected dagster $(DAGSTER_VERSION), found {actual}'"
-	$(PYTHON) -m pytest -ra $(DAGSTER_TESTS) --junitxml="$(DAGSTER_TEST_REPORT)"
-	$(PYTHON) -m tests.support.required_test_gate "$(DAGSTER_TEST_REPORT)" --minimum-passed 13
+	$(PYTHON) -m pytest -ra -m 'not spark' $(DAGSTER_TESTS) --junitxml="$(DAGSTER_TEST_REPORT)"
+	$(PYTHON) -m tests.support.required_test_gate "$(DAGSTER_TEST_REPORT)" --minimum-passed 40
+
+.PHONY: test-ci-integration
+
+# Keep Dagster optional in the image while requiring all 15 CLI/adapter parity cases in CI.
+# System site packages reuse the pinned Spark runtime; children inherit this venv's interpreter.
+test-ci-integration:
+	$(PYTHON) -m venv --system-site-packages "$(CI_DAGSTER_VENV)"
+	$(CI_DAGSTER_PYTHON) -m pip install "dagster==$(DAGSTER_VERSION)"
+	$(CI_DAGSTER_PYTHON) -m pytest $(CI_INTEGRATION_TEST_ARGS) --cov=janus --cov-append --cov-report= --durations=20 --junitxml=$(CI_TEST_REPORT)
 
 .PHONY: test-spark-startup
 
@@ -390,7 +421,7 @@ ci: ensure-up
 	@$(MAKE) --no-print-directory -o ensure-up test-spark-startup
 	@$(MAKE) --no-print-directory -o ensure-up test-cli-timing
 	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) $(JANUS_ENTRYPOINT) python -m pytest $(SPARK_COVERAGE_UNIT_TEST_ARGS) --cov=janus --cov-report= --durations=20 --junitxml=$(CI_UNIT_TEST_REPORT))
-	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) $(JANUS_ENTRYPOINT) python -m pytest $(SPARK_INTEGRATION_TEST_ARGS) --cov=janus --cov-append --cov-report= --durations=20 --junitxml=$(CI_TEST_REPORT))
+	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) $(JANUS_ENTRYPOINT) $(MAKE) test-ci-integration)
 	$(call RUN_COMPOSE,exec -T -e COVERAGE_FILE=data/.coverage -e SPARK_DRIVER_MEMORY=2g $(SERVICE) $(JANUS_ENTRYPOINT) python -m pytest $(SPARK_LARGE_TEST_ARGS) --cov=janus --cov-append --cov-report=term-missing --cov-report=xml:data/coverage.xml --durations=20 --junitxml=$(CI_LARGE_TEST_REPORT))
 	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(MAINTENANCE_SWEEP_CLASS) --minimum-passed 63)
 	@$(MAKE) --no-print-directory test-maintenance
@@ -413,6 +444,9 @@ ci: ensure-up
 	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(QUERYABLE_CLASS) --test-name $(AC2_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(CROSS_ENGINE_CLASS) --test-name $(CROSS_ENGINE_TEST) --minimum-passed 1)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(SPARK_ORCHESTRATION_CLASS) --minimum-passed 8)
+	# Full green counts: 18 parallel cases (including parameter sets), 15 adapter parity cases.
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(PARALLEL_EXECUTION_CLASS) --minimum-passed 18)
+	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(DAGSTER_PARITY_CLASS) --minimum-passed 15)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m tests.support.required_test_gate $(CI_GATE_REPORTS) --class-name $(DEAD_LETTER_REPLAY_CLASS) --minimum-passed 7)
 	$(call RUN_COMPOSE,exec -T $(SERVICE) $(JANUS_ENTRYPOINT) python -m janus.main validate --environment $(ENVIRONMENT))
 

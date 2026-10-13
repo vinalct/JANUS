@@ -31,7 +31,12 @@ from janus.runtime import (  # noqa: E402
 from janus.runtime.contract_preflight import LiveTable  # noqa: E402
 from janus.writers.evolution import LiveColumn  # noqa: E402
 from tests.support.contracts import DECLARED_CONTRACT_PATH  # noqa: E402
-from tests.support.orchestration import build_graph_project  # noqa: E402
+from tests.support.orchestration import (  # noqa: E402
+    build_graph_project,
+)
+from tests.support.orchestration import (  # noqa: E402
+    normalized_terminal_contract as _normalized_terminal_contract,
+)
 
 PLANNED_AT = "2026-09-15T12:00:00Z"
 
@@ -120,7 +125,7 @@ def test_cli_and_dagster_have_identical_graph_selection_and_terminal_contract(
     monkeypatch.setattr(
         run_all_module,
         "_build_batch_executor",
-        lambda _logger: BatchExecutor(source_execution=cli_execution),
+        lambda _logger, **_settings: BatchExecutor(source_execution=cli_execution),
     )
 
     cli_status = main(
@@ -207,7 +212,7 @@ def test_cli_and_dagster_normalize_strict_preflight_refusal_identically(
     monkeypatch.setattr(
         run_all_module,
         "_build_batch_executor",
-        lambda _logger: BatchExecutor(source_execution=cli_service),
+        lambda _logger, **_settings: BatchExecutor(source_execution=cli_service),
     )
     cli_status = main(
         [
@@ -276,7 +281,7 @@ def test_cli_and_adapter_emit_the_same_four_aggregate_samples_after_persistence(
     monkeypatch.setattr(
         run_all_module,
         "_build_batch_executor",
-        lambda _logger: BatchExecutor(source_execution=cli_execution),
+        lambda _logger, **_settings: BatchExecutor(source_execution=cli_execution),
     )
     exit_code = main(
         [
@@ -396,42 +401,251 @@ def _environment_config() -> dict[str, Any]:
     }
 
 
-def _normalized_terminal_contract(summary: Mapping[str, Any]) -> dict[str, Any]:
-    """Exclude only runtime identity/timing/trigger and persistence locations.
+@pytest.mark.parametrize("scenario", ["failure", "budget", "preflight"])
+def test_multiprocess_matches_cli_and_in_process_terminal_contract(
+    tmp_path, monkeypatch, capsys, scenario
+):
+    from tests.support.parallel_execution import (
+        adapter_execution_factory,
+        example_multiprocess_job,
+        parity_adapter,
+    )
 
-    Dagster owns its run id, trigger, wall-clock timestamps, and retry attempt ids; the
-    CLI owns a caller-supplied pipeline id and its own timing. Attempt numbers/statuses,
-    graph selection, config versions, failures, and skip causes remain comparable.
-    """
+    root = _project(tmp_path, "chain_and_peer")
+    monkeypatch.setenv("JANUS_TEST_DAGSTER_ROOT", str(root))
+    monkeypatch.setenv("JANUS_TEST_DAGSTER_SCENARIO", scenario)
+    if scenario == "budget":
+        path = root / "conf/sources/sources.yaml"
+        document = yaml.safe_load(path.read_text())
+        next(source for source in document["sources"] if source["source_id"] == "A")[
+            "operations"
+        ] = {"max_duration_seconds": 4}
+        path.write_text(yaml.safe_dump(document))
+    if scenario == "preflight":
+        path = root / DECLARED_CONTRACT_PATH
+        document = yaml.safe_load(path.read_text())
+        next(
+            item for item in document["customProperties"] if item["property"] == "janus.enforcement"
+        )["value"] = "strict"
+        path.write_text(yaml.safe_dump(document))
+    adapter = parity_adapter(root, executor="multiprocess")
+    monkeypatch.setattr(
+        run_all_module,
+        "_build_batch_executor",
+        lambda logger, **_settings: BatchExecutor(
+            source_execution=adapter_execution_factory(logger)
+        ),
+    )
+    code = main(
+        [
+            "run-all",
+            "--project-root",
+            str(root),
+            "--pipeline-run-id",
+            "mp-parity",
+            *(["--fail-on-budget-breach"] if scenario == "budget" else []),
+        ]
+    )
+    cli = json.loads(capsys.readouterr().out)
+    _native, sequential = parity_adapter(root).execute_in_process(
+        instance=DagsterInstance.ephemeral()
+    )
+    with (
+        DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
+        dagster.execute_job(
+            _reconstructable_example_job(example_multiprocess_job, root), instance=instance
+        ) as native,
+    ):
+        outcome = adapter.collect(instance, native.run_id)
+        assert native.success is False and code == 1
+        assert _normalized_terminal_contract(outcome.to_summary()) == (
+            _normalized_terminal_contract(sequential.to_summary())
+        )
+        assert _normalized_terminal_contract(outcome.to_summary()) == (
+            _normalized_terminal_contract(cli)
+        )
 
-    return {
-        "schema_version": summary["schema_version"],
-        "environment": summary["pipeline"]["environment"],
-        "selection": summary["selection"],
-        "graph": summary["graph"],
-        "config_versions": summary["config_versions"],
-        "sources": [
-            {
-                "source_id": source["source_id"],
-                "selected_directly": source["selected_directly"],
-                "upstream_ids": source["upstream_ids"],
-                "config_version": source["config_version"],
-                "status": source["status"],
-                "attempted": source["attempted"],
-                "attempts": [
-                    {
-                        "attempt": attempt["attempt"],
-                        "status": attempt["status"],
-                        "failure": attempt.get("failure"),
-                    }
-                    for attempt in source["attempts"]
-                ],
-                "failure": source.get("failure"),
-                "skip": source.get("skip"),
+
+def test_multiprocess_retry_is_collected_once_and_releases_consumer(tmp_path, monkeypatch):
+    from tests.support.parallel_execution import example_multiprocess_job, parity_adapter
+
+    root = _project(tmp_path, "chain")
+    monkeypatch.setenv("JANUS_TEST_DAGSTER_ROOT", str(root))
+    monkeypatch.setenv("JANUS_TEST_DAGSTER_SCENARIO", "retry")
+    adapter = parity_adapter(root, executor="multiprocess")
+    with (
+        DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
+        dagster.execute_job(
+            _reconstructable_example_job(example_multiprocess_job, root), instance=instance
+        ) as native,
+    ):
+        outcome = adapter.collect(instance, native.run_id)
+        sources = {source.source_id: source for source in outcome.sources}
+        assert native.success and outcome.is_successful
+        assert [attempt.status for attempt in sources["A"].attempts] == ["failed", "succeeded"]
+        assert [attempt.attempt for attempt in sources["A"].attempts] == [1, 2]
+        assert len({attempt.run_id for attempt in sources["A"].attempts}) == 2
+        assert sources["B"].status == "succeeded"
+        assert adapter.collect(instance, native.run_id) == outcome
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_multiprocess_emits_four_samples_after_summary_persistence(tmp_path, monkeypatch, failed):
+    from tests.support.parallel_execution import example_multiprocess_job, parity_adapter
+
+    root = _project(tmp_path, "chain_and_peer")
+    profile = root / "conf/environments/local.yaml"
+    config = yaml.safe_load(profile.read_text())
+    config["observability"] = {"metrics": {"transport": "file"}}
+    profile.write_text(yaml.safe_dump(config))
+    monkeypatch.setenv("JANUS_TEST_DAGSTER_ROOT", str(root))
+    monkeypatch.setenv("JANUS_TEST_DAGSTER_SCENARIO", "failure" if failed else "success")
+    adapter = parity_adapter(root, executor="multiprocess")
+    with (
+        DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
+        dagster.execute_job(
+            _reconstructable_example_job(example_multiprocess_job, root), instance=instance
+        ) as native,
+    ):
+        outcome = adapter.collect(instance, native.run_id)
+        assert native.success is not failed
+        summary = outcome.to_summary()
+        stored = root / "data/metadata/pipelines" / outcome.pipeline_run_id / "summary.json"
+        assert json.loads(stored.read_text()) == summary
+        batches = [
+            json.loads(line)
+            for path in (root / "data/metadata/metrics").glob("*.ndjson")
+            for line in path.read_text().splitlines()
+        ]
+        assert len(batches) == 1 and len(batches[0]["samples"]) == 4
+        assert batches[0]["emitted_at"] == summary["pipeline"]["ended_at"]
+        assert [sample["value"] for sample in batches[0]["samples"][1:]] == [
+            summary["totals"][status] for status in ("succeeded", "failed", "skipped")
+        ]
+        assert adapter.collect(instance, native.run_id) == outcome
+
+
+def test_multiprocess_same_source_overlap_is_recorded_lock_failure(tmp_path, monkeypatch):
+    from tests.support.parallel_execution import example_multiprocess_job, held_lock, parity_adapter
+
+    root = _project(tmp_path, "chain_and_peer")
+    monkeypatch.setenv("JANUS_TEST_DAGSTER_ROOT", str(root))
+    adapter = parity_adapter(root, executor="multiprocess")
+    with (
+        held_lock(root / "data/metadata/A/.lock"),
+        DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
+        dagster.execute_job(
+            _reconstructable_example_job(example_multiprocess_job, root), instance=instance
+        ) as native,
+    ):
+        outcome = adapter.collect(instance, native.run_id)
+        sources = {source.source_id: source for source in outcome.sources}
+        assert not native.success
+        assert sources["A"].failure.phase == "lock"
+        assert sources["B"].skip.root_failed_source_ids == ("A",)
+        assert sources["C"].status == "succeeded"
+
+
+@pytest.mark.spark
+def test_multiprocess_executor_matches_cli_parallel_and_sequential(
+    tmp_path, monkeypatch, record_property
+):
+    from tests.support.parallel_order24 import (
+        example_multiprocess_job,
+        example_project,
+        fixture_service,
+        run_example,
+    )
+
+    with fixture_service() as server:
+        root = example_project(tmp_path / "dagster", server)
+        sequential_root = example_project(tmp_path / "sequential", server)
+        parallel_root = example_project(tmp_path / "parallel", server)
+        cli_sequential, _, sequential_process = run_example(sequential_root, max_parallel=1)
+        cli_parallel, _, parallel_process = run_example(parallel_root, max_parallel=3)
+        monkeypatch.setenv("JANUS_TEST_DAGSTER_EXAMPLE_ROOT", str(root))
+        adapter = build_dagster_adapter(
+            root, environment="example", executor="multiprocess", max_concurrent=3
+        )
+        with (
+            DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
+            dagster.execute_job(
+                dagster.reconstructable(example_multiprocess_job), instance=instance
+            ) as native,
+        ):
+            outcome = adapter.collect(instance, native.run_id)
+            normalized = {
+                "dagster_multiprocess": _normalized_terminal_contract(outcome.to_summary()),
+                "cli_sequential": _normalized_terminal_contract(cli_sequential),
+                "cli_parallel": _normalized_terminal_contract(cli_parallel),
             }
-            for source in summary["sources"]
-        ],
-        "totals": {
-            key: value for key, value in summary["totals"].items() if key != "duration_seconds"
-        },
-    }
+            record_property("multiprocess_terminal_parity", json.dumps(normalized))
+            assert sequential_process.returncode == parallel_process.returncode == 0
+            assert native.success and outcome.is_successful
+            assert normalized["dagster_multiprocess"] == normalized["cli_sequential"] == (
+                normalized["cli_parallel"]
+            )
+            assert adapter.collect(instance, native.run_id) == outcome
+            assert json.loads(outcome.summary_persistence.path.read_text()) == outcome.to_summary()
+
+
+@pytest.mark.spark
+def test_multiprocess_same_source_overlap_is_a_recorded_lock_failure(
+    tmp_path, monkeypatch, record_property
+):
+    from tests.support.parallel_execution import file_snapshot, held_lock, probe_lock
+    from tests.support.parallel_order24 import (
+        example_multiprocess_job,
+        example_project,
+        fixture_service,
+    )
+
+    with fixture_service() as server:
+        root = example_project(tmp_path / "dagster", server)
+        monkeypatch.setenv("JANUS_TEST_DAGSTER_EXAMPLE_ROOT", str(root))
+        adapter = build_dagster_adapter(
+            root, environment="example", executor="multiprocess", max_concurrent=3
+        )
+        metadata = root / "runtime/data/metadata/A"
+        with held_lock(metadata / ".lock") as (_process, _release, holder):
+            before = file_snapshot(metadata)
+            with (
+                DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
+                dagster.execute_job(
+                    _reconstructable_example_job(example_multiprocess_job, root), instance=instance
+                ) as native,
+            ):
+                outcome = adapter.collect(instance, native.run_id)
+                sources = {source.source_id: source for source in outcome.sources}
+                record_property("multiprocess_lock_outcome", json.dumps(outcome.to_summary()))
+                assert not native.success
+                assert sources["A"].status == "failed"
+                assert sources["A"].failure.phase == "lock"
+                assert sources["A"].failure.error_type == "SourceLockedError"
+                for key in ("pid", "hostname", "run_id", "acquired_at"):
+                    assert str(holder[key]) in sources["A"].failure.reason
+                assert dict(sources["A"].attempts[0].evidence) == {}
+                assert sources["B"].status == "skipped"
+                assert sources["B"].skip.direct_blocking_upstream_ids == ("A",)
+                assert sources["B"].skip.root_failed_source_ids == ("A",)
+                assert sources["B"].attempts == ()
+                assert sources["C"].status == "succeeded"
+                assert file_snapshot(metadata) == before
+                assert not (root / "runtime/data/metadata/B").exists()
+                assert adapter.collect(instance, native.run_id) == outcome
+        assert probe_lock(metadata / ".lock")["acquired"]
+
+
+@pytest.fixture(autouse=True)
+def _persistent_instance_directory(tmp_path):
+    """Dagster local_temp requires its explicit storage directory to exist already."""
+    (tmp_path / "instance").mkdir()
+
+
+def _reconstructable_example_job(factory, project_root):
+    """Carry the root in the pointer so Dagster's definition cache isolates each test."""
+    return dagster.build_reconstructable_job(
+        factory.__module__,
+        "project_multiprocess_job",
+        reconstructable_kwargs={"project_root": str(project_root)},
+    )

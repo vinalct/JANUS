@@ -3,6 +3,10 @@ name: local
 runtime:
   log_level: ${JANUS_LOG_LEVEL:-INFO}
 
+orchestration:
+  max_parallel_default: 1
+  lock_wait_seconds: 0
+
 spark:
   app_name: ${JANUS_SPARK_APP_NAME:-janus-local}
   master: ${JANUS_SPARK_MASTER:-local[*]}

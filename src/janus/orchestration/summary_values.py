@@ -38,6 +38,16 @@ class FailureDetails:
         reason = str(exc).strip() or type(exc).__name__
         return cls(phase=phase, error_type=type(exc).__name__, reason=reason)
 
+    @classmethod
+    def from_summary(cls, summary: Mapping[str, Any]) -> Self:
+        """Rebuild bounded failure details from their exact wire fields."""
+        _require_keys(summary, {"phase", "error_type", "reason"})
+        for name in ("phase", "error_type", "reason"):
+            _require_string(summary[name], name)
+        return cls(
+            phase=summary["phase"], error_type=summary["error_type"], reason=summary["reason"]
+        )
+
     def to_summary(self) -> dict[str, str]:
         return {
             "phase": self.phase,
@@ -122,3 +132,24 @@ def _bounded_reason(reason: str) -> str:
 def _validate_aware(field_name: str, value: datetime) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field_name} must be timezone-aware")
+
+
+def _require_keys(
+    summary: Mapping[str, Any], required: set[str], *, optional: frozenset[str] = frozenset()
+) -> None:
+    """Validate a wire object and translate missing fields in one place."""
+    if not isinstance(summary, Mapping):
+        raise ValueError("summary must be a JSON object")
+    for name in sorted(required):
+        try:
+            summary[name]
+        except KeyError as exc:
+            raise ValueError(f"summary is missing {name}") from exc
+    unknown = set(summary) - required - optional
+    if unknown:
+        raise ValueError(f"summary contains unknown fields: {sorted(map(str, unknown))}")
+
+
+def _require_string(value: Any, field_name: str) -> None:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
