@@ -176,10 +176,16 @@ def test_parent_never_starts_spark_and_spawned_fake_batch_matches_sequential(tmp
     assert parallel.to_summary()["pipeline"]["max_parallel"] == 3
 
 
-def test_crashed_worker_returns_failure_and_skips_consumer(tmp_path):
+@pytest.mark.parametrize(
+    "mode,reason",
+    [("137", "code 137"), ("SIGKILL", "SIGKILL"), ("0", "cleanly without sending a result")],
+)
+def test_crashed_worker_returns_failure_and_skips_consumer(tmp_path, monkeypatch, mode, reason):
     from janus.runtime.parallel import ParallelBatchExecutor
+    from tests.support.parallel_execution import lock_at
 
-    _root, registry, plan, config, paths = planned_project(tmp_path)
+    root, registry, plan, config, paths = planned_project(tmp_path)
+    monkeypatch.setenv("JANUS_TEST_WORKER_EXIT", mode)
     runner = ParallelBatchExecutor(
         max_parallel=3, execution_factory="tests.support.parallel_execution:crash_execution_factory"
     )
@@ -187,10 +193,18 @@ def test_crashed_worker_returns_failure_and_skips_consumer(tmp_path):
     sources = {source.source_id: source for source in outcome.sources}
     assert sources["A"].failure.phase == "worker_crash"
     assert sources["A"].failure.error_type == "WorkerCrashed"
-    assert "137" in sources["A"].failure.reason
+    assert reason in sources["A"].failure.reason
     assert dict(sources["A"].attempts[0].evidence) == {}
     assert sources["B"].status == "skipped"
     assert sources["B"].skip.root_failed_source_ids == ("A",)
+    assert sources["C"].status == "succeeded"
+    lock_path = root / "data/metadata/A/.lock"
+    assert lock_path.is_file()
+    with lock_at(lock_path):
+        pass
+    (tmp_path / "crash-attempt.json").write_text(
+        json.dumps(sources["A"].attempts[0].to_summary(), indent=2)
+    )
 
 
 def test_parent_tripwire_catches_planted_preflight_acquisition(tmp_path, monkeypatch):

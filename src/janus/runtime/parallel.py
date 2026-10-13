@@ -19,7 +19,7 @@ from janus.orchestration.persistence import PipelineSummaryStore
 from janus.orchestration.plans import BatchPlan, BatchPlanRequest, PlannedSource
 from janus.orchestration.results import PipelineOutcome, SourceAttempt, SourceOutcome
 from janus.orchestration.scheduling import ReadyQueue
-from janus.orchestration.timing import ClockSample, ExecutionTiming, PipelineClock
+from janus.orchestration.timing import ClockSample, PipelineClock
 from janus.registry import SourceRegistry, load_registry
 from janus.runtime.batch import (
     BatchExecutionInterrupted,
@@ -34,6 +34,15 @@ from janus.runtime.batch import (
 )
 from janus.runtime.executor import SourceExecutor
 from janus.runtime.locking import source_state_lock_path
+from janus.runtime.parallel_results import (
+    MAX_ENVELOPE_BYTES,  # noqa: F401 — preserve the worker transport import surface
+    WORKER_CRASH_PHASE,  # noqa: F401 — public failure phase
+    WorkerCrashed,  # noqa: F401 — preserve the worker error import surface
+    _attempt_from_worker,
+    _read_envelope,
+    _WorkerHandle,
+)
+from janus.runtime.parallel_signals import parent_signal_handlers
 from janus.runtime.spark_lifecycle import SparkSessionProvider
 from janus.utils.environment import RuntimeLocation, read_spark_write_defaults
 from janus.utils.logging import StructuredLogger, build_structured_logger
@@ -41,7 +50,6 @@ from janus.utils.storage import StorageLayout
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
-    from multiprocessing.process import BaseProcess
 
 SNAPSHOT_DRIFT_PHASE = "snapshot_drift"
 DEFAULT_EXECUTION_FACTORY = "janus.runtime.parallel:default_execution_factory"
@@ -258,45 +266,7 @@ def _raise_keyboard_interrupt(signum: int, frame: FrameType | None) -> None:
     raise KeyboardInterrupt
 
 
-MAX_ENVELOPE_BYTES = 16 * 1024 * 1024
 MIN_PARALLEL_WORKERS = 2
-
-
-@dataclass(slots=True)
-class _WorkerHandle:
-    request: WorkerTask
-    process: BaseProcess
-    reader: Connection
-    envelope: dict[str, Any] | None = None
-    transport_error: str | None = None
-
-    @property
-    def sentinel(self) -> int:
-        return self.process.sentinel
-
-    @property
-    def pid(self) -> int | None:
-        return self.process.pid
-
-    @property
-    def exitcode(self) -> int | None:
-        return self.process.exitcode
-
-    def is_alive(self) -> bool:
-        return self.process.is_alive()
-
-    def terminate(self) -> None:
-        self.process.terminate()
-
-    def kill(self) -> None:
-        self.process.kill()
-
-    def join(self, *, timeout: float | None = None) -> None:
-        self.process.join(timeout)
-
-    def close(self) -> None:
-        self.reader.close()
-        self.process.close()
 
 
 def _spawn_worker(task: WorkerTask) -> _WorkerHandle:
@@ -323,68 +293,20 @@ def _spawn_worker(task: WorkerTask) -> _WorkerHandle:
 def _wait_any(handles: list[_WorkerHandle], *, timeout: float | None = None) -> list[_WorkerHandle]:
     from multiprocessing.connection import wait
 
-    ready = wait([item for h in handles for item in (h.sentinel, h.reader)], timeout)
-    return [h for h in handles if h.reader in ready or h.sentinel in ready]
-
-
-def _read_envelope(handle: _WorkerHandle) -> None:
-    """Read before joining so pipe-buffer-sized results cannot block the sender."""
-    try:
-        message = handle.reader.recv_bytes(MAX_ENVELOPE_BYTES)
-        envelope = json.loads(message)
-        if not isinstance(envelope, dict) or set(envelope) != {"attempt", "worker"}:
-            raise ValueError("invalid worker envelope")
-        worker = envelope["worker"]
-        if not isinstance(worker, dict) or set(worker) != {
-            "pid",
-            "spark_started",
-            "spark_application_id",
-        }:
-            raise ValueError("invalid worker diagnostics")
-        attempt = SourceAttempt.from_summary(envelope["attempt"])
-        task = handle.request
-        if (attempt.source_id, attempt.run_id, attempt.attempt) != (
-            task.source_id,
-            task.run_id,
-            task.attempt,
-        ):
-            raise ValueError("worker attempt identity differs from dispatched task")
-        handle.envelope = envelope
-    except EOFError:
-        pass
-    except (OSError, ValueError, TypeError) as error:
-        handle.transport_error = (
-            f"Worker envelope refused (cap {MAX_ENVELOPE_BYTES} bytes / 16 MiB): "
-            f"{type(error).__name__}: {error}"
-        )
-    finally:
-        handle.reader.close()
-
-
-class WorkerCrashed(RuntimeError):
-    """A spawned attempt exited without a valid result envelope."""
-
-
-def _attempt_from_worker(handle: _WorkerHandle, timing: ExecutionTiming) -> SourceAttempt:
-    if handle.envelope is not None:
-        return SourceAttempt.from_summary(handle.envelope["attempt"])
-    task = handle.request
-    reason = f"Worker for source {task.source_id!r} exited with code {handle.exitcode}"
-    if handle.transport_error:
-        reason += f"; {handle.transport_error}"
-    return SourceAttempt.failed_from_exception(
-        source_id=task.source_id,
-        run_id=task.run_id,
-        attempt=task.attempt,
-        timing=timing,
-        error=WorkerCrashed(reason),
-        phase="worker_crash",
+    ready = wait(
+        [h.sentinel for h in handles] + [h.reader for h in handles if not h.result_received],
+        timeout,
     )
+    return [h for h in handles if h.sentinel in ready or h.reader in ready]
 
 
 @dataclass(slots=True)
 class ParallelBatchExecutor:
-    """Run ready nodes in spawned processes through the shared attempt seam."""
+    """Run ready nodes in spawned processes through the shared attempt seam.
+
+    Parent signal handlers cover dispatch and shutdown only. When embedded off the
+    main thread, existing handlers remain installed and one diagnostic is logged.
+    """
 
     max_parallel: int
     clock: PipelineClock = field(default_factory=PipelineClock)
@@ -400,6 +322,8 @@ class ParallelBatchExecutor:
             raise ValueError(
                 "ParallelBatchExecutor needs max_parallel >= 2; use BatchExecutor for 1"
             )
+        if not 0 < self.interrupt_grace_seconds < float("inf"):
+            raise ValueError("interrupt_grace_seconds must be finite and greater than zero")
 
     def execute(
         self,
@@ -434,22 +358,40 @@ class ParallelBatchExecutor:
         running: dict[str, _WorkerHandle] = {}
         started: dict[str, ClockSample] = {}
         pipeline_started = self.clock.start()
-        try:
-            while not queue.is_finished(outcomes):
-                self._dispatch(
-                    queue, outcomes, running, started, environment_config, resolved_paths
+        with parent_signal_handlers(self._log):
+            try:
+                while not queue.is_finished(outcomes):
+                    self._dispatch(
+                        queue, outcomes, running, started, environment_config, resolved_paths
+                    )
+                    if running:
+                        self._collect(plan, outcomes, running, started)
+                    elif not queue.is_finished(outcomes):
+                        raise RuntimeError(
+                            "Batch scheduler has unfinished nodes but no runnable work"
+                        )
+            except KeyboardInterrupt as interruption:
+                self._log(
+                    "parallel_batch_interrupted",
+                    running=sorted(running),
+                    grace_seconds=self.interrupt_grace_seconds,
                 )
-                if running:
-                    self._collect(plan, outcomes, running, started)
-                elif not queue.is_finished(outcomes):
-                    raise RuntimeError("Batch scheduler has unfinished nodes but no runnable work")
-        except KeyboardInterrupt as interruption:
-            self._stop_workers(list(running.values()))
-            partial = _partial_execution(plan, outcomes, self.clock.finish(pipeline_started))
-            raise BatchExecutionInterrupted(partial) from interruption
-        except BaseException:
-            self._stop_workers(list(running.values()))
-            raise
+                self._stop_workers(
+                    running,
+                    collect=lambda timeout: self._collect(
+                        plan, outcomes, running, started, timeout=timeout, interrupted=True
+                    ),
+                )
+                partial = _partial_execution(plan, outcomes, self.clock.finish(pipeline_started))
+                self._log(
+                    "parallel_batch_partial",
+                    completed_source_ids=[s.source_id for s in partial.source_outcomes],
+                    pending_source_ids=partial.pending_source_ids,
+                )
+                raise BatchExecutionInterrupted(partial) from interruption
+            except BaseException:
+                self._stop_workers(running)
+                raise
         outcome = PipelineOutcome.from_plan(
             plan,
             timing=self.clock.finish(pipeline_started),
@@ -523,16 +465,27 @@ class ParallelBatchExecutor:
         outcomes: dict[str, SourceOutcome | None],
         running: dict[str, _WorkerHandle],
         started: dict[str, ClockSample],
+        *,
+        timeout: float | None = None,
+        interrupted: bool = False,
     ) -> None:
-        for handle in _wait_any(list(running.values())):
-            if handle.envelope is None:
+        handles = list(running.values())
+        ready = _wait_any(handles) if timeout is None else _wait_any(handles, timeout=timeout)
+        for handle in ready:
+            if handle.envelope is None and not handle.result_received:
                 _read_envelope(handle)
-            handle.join()
+            if interrupted:
+                handle.join(timeout=0)
+            else:
+                handle.join()
             source_id = handle.request.source_id
-            source = plan.source(source_id)
-            attempt = _attempt_from_worker(handle, self.clock.finish(started.pop(source_id)))
-            attempt = _apply_budget_policy(attempt, source, plan.request)
-            outcomes[source_id] = SourceOutcome.from_attempts(source, (attempt,))
+            if outcomes[source_id] is None and (handle.envelope is not None or not interrupted):
+                source = plan.source(source_id)
+                attempt = _attempt_from_worker(handle, self.clock.finish(started.pop(source_id)))
+                attempt = _apply_budget_policy(attempt, source, plan.request)
+                outcomes[source_id] = SourceOutcome.from_attempts(source, (attempt,))
+            if interrupted and handle.is_alive():
+                continue
             worker = handle.envelope["worker"] if handle.envelope else {}
             self._log(
                 "parallel_worker_finished",
@@ -545,18 +498,34 @@ class ParallelBatchExecutor:
             handle.close()
             del running[source_id]
 
-    def _stop_workers(self, handles: list[_WorkerHandle]) -> None:
-        for handle in handles:
-            if handle.is_alive():
-                handle.terminate()
-        deadline = monotonic() + self.interrupt_grace_seconds
-        for handle in handles:
-            handle.join(timeout=max(0.0, deadline - monotonic()))
-        for handle in handles:
-            if handle.is_alive():
-                handle.kill()
-            handle.join()
-            handle.close()
+    def _stop_workers(
+        self,
+        running: dict[str, _WorkerHandle],
+        *,
+        collect: Callable[[float], None] | None = None,
+    ) -> None:
+        try:
+            for handle in running.values():
+                if handle.is_alive():
+                    handle.terminate()
+            deadline = monotonic() + self.interrupt_grace_seconds
+            if collect is not None:
+                while running and (remaining := deadline - monotonic()) > 0:
+                    collect(remaining)
+            else:
+                for handle in running.values():
+                    handle.join(timeout=max(0.0, deadline - monotonic()))
+        except KeyboardInterrupt:
+            self._log("parallel_batch_interrupted_again")
+        finally:
+            # Signal every survivor before reaping any of them, even if collection fails.
+            for handle in running.values():
+                if handle.is_alive():
+                    handle.kill()
+            for source_id, handle in tuple(running.items()):
+                handle.join(timeout=5)
+                handle.close()
+                del running[source_id]
 
     def _log(self, event: str, **fields: Any) -> None:
         if self.logger:

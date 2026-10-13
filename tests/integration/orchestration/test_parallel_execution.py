@@ -34,6 +34,11 @@ from tests.support.parallel_execution import (
     file_snapshot,
     spark_project,
 )
+from tests.support.parallel_interrupts import (
+    session_processes,
+    wait_for_events,
+    wait_for_session_exit,
+)
 from tests.support.parallel_order24 import (
     PAGE_DELAY_SECONDS,
     SPAWN_COST_SECONDS,
@@ -43,8 +48,6 @@ from tests.support.parallel_order24 import (
     run_example,
     write_parity_evidence,
 )
-
-INTERRUPT_RED = pytest.mark.xfail(strict=True, reason="parallel CLI interrupt cleanup is absent")
 
 
 def finish(process):
@@ -310,7 +313,7 @@ def test_empty_handoff_worker_stays_jvm_free(tmp_path):
     write_lifecycle_evidence(tmp_path / "lifecycle-evidence.json", process, summary, events)
 
 
-@INTERRUPT_RED
+@pytest.mark.spark
 @pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM])
 def test_interrupt_terminates_workers_without_finalized_summary(tmp_path, sig):
     pytest.importorskip("pyspark")
@@ -322,13 +325,19 @@ def test_interrupt_terminates_workers_without_finalized_summary(tmp_path, sig):
         process = cli_process(root, extra_env={"JANUS_TEST_BARRIER_DIR": str(barrier_dir)})
         try:
             assert ready.wait(30)
+            before = session_processes(process.pid)
             started = time.monotonic()
-            process.send_signal(sig)
+            if sig == signal.SIGINT:
+                os.killpg(process.pid, sig)
+            else:
+                process.send_signal(sig)
             stdout, stderr = process.communicate(timeout=15)
-            assert time.monotonic() - started < 15
+            elapsed = time.monotonic() - started
+            assert elapsed < 15
             assert process.returncode == 130 and stdout == ""
+            assert "completed sources: 0, pending sources: 3" in stderr
             assert not list((root / "data/metadata/pipelines").rglob("summary.json"))
-            events = [json.loads(line) for line in stderr.splitlines() if line.startswith("{")]
+            events = parse_log_events(stderr)
             workers = [
                 event["worker_pid"]
                 for event in events
@@ -338,7 +347,155 @@ def test_interrupt_terminates_workers_without_finalized_summary(tmp_path, sig):
             for pid in workers:
                 with pytest.raises(ProcessLookupError):
                     os.kill(pid, 0)
+            after = wait_for_session_exit(process.pid)
+            partial = next(event for event in events if event["event"] == "parallel_batch_partial")
+            assert partial["completed_source_ids"] == []
+            assert partial["pending_source_ids"] == ["A", "B", "C"]
+            from tests.support.parallel_execution import lock_at
+
+            for source_id in partial["pending_source_ids"]:
+                with lock_at(root / "data/metadata" / source_id / ".lock", source_id=source_id):
+                    pass
+            (tmp_path / "interrupt-evidence.json").write_text(
+                json.dumps(
+                    {
+                        "signal": sig.name,
+                        "target": "process_group" if sig == signal.SIGINT else "parent",
+                        "exit_code": process.returncode,
+                        "elapsed_seconds": elapsed,
+                        "grace_seconds": 2,
+                        "before": before,
+                        "after": after,
+                        "partial": partial,
+                    },
+                    indent=2,
+                )
+            )
         finally:
             if process.poll() is None:
-                process.kill()
+                os.killpg(process.pid, signal.SIGKILL)
                 process.communicate(timeout=10)
+
+
+@pytest.mark.spark
+def test_sigint_terminates_workers_and_exits_130(tmp_path):
+    from uuid import uuid4
+
+    from tests.support.parallel_execution import lock_at
+
+    with fixture_service(page_delay_seconds=5) as server:
+        root = example_project(tmp_path / "interrupted-example", server)
+        pipeline_id = f"task16-{uuid4().hex}"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "tests.support.parallel_order24",
+                "run-all",
+                "--project-root",
+                str(root),
+                "--environment",
+                "example",
+                "--pipeline-run-id",
+                pipeline_id,
+                "--max-parallel",
+                "3",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join((str(REPO_ROOT / "src"), str(REPO_ROOT))),
+                "JANUS_SPARK_DRIVER_MEMORY": "1g",
+            },
+        )
+        try:
+            prefix = wait_for_events(process, "source_execution_started", count=2)
+            before = session_processes(process.pid)
+            started = time.monotonic()
+            os.killpg(process.pid, signal.SIGINT)
+            stdout, stderr = process.communicate(timeout=40)
+            elapsed = time.monotonic() - started
+            stderr = prefix + stderr
+            events = parse_log_events(stderr)
+            assert elapsed < 40 and process.returncode == 130 and stdout == "", stderr
+            assert sum(e["event"] == "parallel_worker_dispatched" for e in events) == 2
+            assert not (
+                root / "runtime/data/metadata/pipelines" / pipeline_id / "summary.json"
+            ).exists()
+            assert "completed sources: 0, pending sources: 3" in stderr
+            partial = next(e for e in events if e["event"] == "parallel_batch_partial")
+            assert partial["pending_source_ids"] == ["A", "B", "C"]
+            after = wait_for_session_exit(process.pid)
+            for source_id in partial["pending_source_ids"]:
+                with lock_at(
+                    root / "runtime/data/metadata" / source_id / ".lock", source_id=source_id
+                ):
+                    pass
+            (tmp_path / "interrupt-evidence.json").write_text(
+                json.dumps(
+                    {
+                        "signal": "SIGINT",
+                        "target": "process_group",
+                        "exit_code": process.returncode,
+                        "elapsed_seconds": elapsed,
+                        "grace_seconds": 30,
+                        "before": before,
+                        "after": after,
+                        "partial": partial,
+                    },
+                    indent=2,
+                )
+            )
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate(timeout=10)
+
+
+@pytest.mark.spark
+def test_sigterm_to_parent_reaps_workers_with_live_spark(tmp_path):
+    from tests.support.parallel_execution import lock_at
+
+    root = spark_project(tmp_path)
+    process = cli_process(root)
+    try:
+        prefix = wait_for_events(process, "spark_session_started", timeout=60)
+        before = session_processes(process.pid)
+        assert any(row["command"] == "java" for row in before)
+        started = time.monotonic()
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=12)
+        elapsed = time.monotonic() - started
+        stderr = prefix + stderr
+        assert elapsed < 12 and process.returncode == 130 and stdout == "", stderr
+        assert not list((root / "data/metadata/pipelines").rglob("summary.json"))
+        partial = next(
+            e for e in parse_log_events(stderr) if e["event"] == "parallel_batch_partial"
+        )
+        assert {"A", "C"} <= set(partial["pending_source_ids"])
+        after = wait_for_session_exit(process.pid)
+        for source_id in partial["pending_source_ids"]:
+            with lock_at(root / "data/metadata" / source_id / ".lock", source_id=source_id):
+                pass
+        (tmp_path / "interrupt-evidence.json").write_text(
+            json.dumps(
+                {
+                    "signal": "SIGTERM",
+                    "target": "parent",
+                    "exit_code": process.returncode,
+                    "elapsed_seconds": elapsed,
+                    "grace_seconds": 2,
+                    "before": before,
+                    "after": after,
+                    "partial": partial,
+                },
+                indent=2,
+            )
+        )
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=10)

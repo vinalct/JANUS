@@ -225,8 +225,27 @@ and no second runs-table row or lineage event is emitted. Runs with `within` or
 `undeclared` outcomes are unaffected, and an already failed run retains its original
 failure phase. Single-source `janus run` rejects `--fail-on-budget-breach` by name.
 
-Failure phases include `planning`, `lock`, `execution`, `cleanup`, `result_translation`, and
-`budget`; a budget phase means the data is fine and the schedule's assumption is not.
+Failure phases identify where the attempt stopped:
+
+| Phase | Meaning |
+|---|---|
+| `planning` | The source could not be planned. |
+| `lock` | Another process holds the source's state lock; nothing ran. |
+| `snapshot_drift` | A worker's reloaded source or contract differs from the parent's planned snapshot; nothing ran. |
+| `execution` | Source execution failed. |
+| `cleanup` | Session cleanup failed after execution. |
+| `result_translation` | The executed result could not be converted into an attempt. |
+| `worker_crash` | A worker exited without a valid result; the reason names its exit code, signal, or envelope error. Its dependents are skipped and its evidence is empty. |
+| `budget` | The data is fine and the schedule's duration assumption is not. |
+
+Parallel interruption stops dispatch, sends `SIGTERM` to workers, and collects completed
+results for a bounded grace period (30 seconds by default). Workers without a result remain
+pending. Survivors are killed after the grace; a second interrupt skips straight to that
+step. Parent `SIGINT` and `SIGTERM` both exit 130 with completed and pending counts and no
+finalized summary. The runner restores its previous signal handlers after dispatch and
+shutdown; callers embedding it outside the main thread keep their existing handlers and
+receive a `parallel_signal_handlers_not_installed` diagnostic.
+
 A `lock` phase means another process held this source's state lock; nothing ran; the reason
 names the holder. An unsupported locking platform also reports `lock`, naming the requirement.
 The policy travels on `BatchPlanRequest.fail_on_budget_breach` (default `False`).

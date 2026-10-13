@@ -194,8 +194,26 @@ def exec_lock_holder(path, ready, proceed, connection):
 
 def crash_execution_factory(logger, recorder, lock_wait_seconds):
     class Crash:
-        def execute(self, *args):
-            os._exit(137)
+        def execute(self, planned_run, config, paths):
+            from janus.runtime.locking import hold_source_state_lock
+            from janus.utils.storage import StorageLayout
+
+            plan = planned_run.plan
+            if plan.source.source_id != "A":
+                return fake_execution_factory(logger, recorder, lock_wait_seconds).execute(
+                    planned_run, config, paths
+                )
+            with hold_source_state_lock(
+                plan,
+                StorageLayout.from_environment_config(config, plan.run_context.project_root),
+                command="run-all",
+                run_id=plan.run_context.run_id,
+                pipeline_run_id=plan.run_context.attributes_as_dict().get("pipeline_run_id"),
+            ):
+                mode = os.environ.get("JANUS_TEST_WORKER_EXIT", "137")
+                if mode == "SIGKILL":
+                    os.kill(os.getpid(), signal.SIGKILL)
+                os._exit(int(mode))
 
     return Crash()
 
@@ -454,10 +472,7 @@ def run_parallel_cli(case, argv):
 
     run_all._build_batch_executor = executor
     cli_argv = list(argv)
-    if (
-        os.environ.get("JANUS_TEST_CAPTURE_LIFECYCLE")
-        and "--max-parallel" not in run_all.build_parser()._option_string_actions
-    ):
+    if "--max-parallel" not in run_all.build_parser()._option_string_actions:
         index = cli_argv.index("--max-parallel")
         del cli_argv[index : index + 2]
     return main(cli_argv)
@@ -487,6 +502,7 @@ def cli_process(root, *, max_parallel=3, extra_env=None):
         stderr=subprocess.PIPE,
         text=True,
         env=environment,
+        start_new_session=True,
     )
 
 
@@ -601,7 +617,9 @@ def download_barrier_server(directory, listening, downloads_ready, release):
             downloads_ready.set()
             assert release.wait(30)
             for connection in connections:
-                connection.sendall(b"1")
+                # Interrupt cases deliberately close their download sockets first.
+                with contextlib.suppress(BrokenPipeError):
+                    connection.sendall(b"1")
         finally:
             for connection in connections:
                 connection.close()
