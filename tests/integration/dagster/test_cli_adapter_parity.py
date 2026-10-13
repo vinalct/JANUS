@@ -401,7 +401,6 @@ def _environment_config() -> dict[str, Any]:
     }
 
 
-@pytest.mark.xfail(strict=True, reason="Dagster multiprocess executor is absent")
 @pytest.mark.parametrize("scenario", ["failure", "budget", "preflight"])
 def test_multiprocess_matches_cli_and_in_process_terminal_contract(
     tmp_path, monkeypatch, capsys, scenario
@@ -454,7 +453,7 @@ def test_multiprocess_matches_cli_and_in_process_terminal_contract(
     with (
         DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
         dagster.execute_job(
-            dagster.reconstructable(example_multiprocess_job), instance=instance
+            _reconstructable_example_job(example_multiprocess_job, root), instance=instance
         ) as native,
     ):
         outcome = adapter.collect(instance, native.run_id)
@@ -467,7 +466,6 @@ def test_multiprocess_matches_cli_and_in_process_terminal_contract(
         )
 
 
-@pytest.mark.xfail(strict=True, reason="multiprocess retry parity is absent")
 def test_multiprocess_retry_is_collected_once_and_releases_consumer(tmp_path, monkeypatch):
     from tests.support.parallel_execution import example_multiprocess_job, parity_adapter
 
@@ -478,7 +476,7 @@ def test_multiprocess_retry_is_collected_once_and_releases_consumer(tmp_path, mo
     with (
         DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
         dagster.execute_job(
-            dagster.reconstructable(example_multiprocess_job), instance=instance
+            _reconstructable_example_job(example_multiprocess_job, root), instance=instance
         ) as native,
     ):
         outcome = adapter.collect(instance, native.run_id)
@@ -491,7 +489,6 @@ def test_multiprocess_retry_is_collected_once_and_releases_consumer(tmp_path, mo
         assert adapter.collect(instance, native.run_id) == outcome
 
 
-@pytest.mark.xfail(strict=True, reason="multiprocess aggregate metrics parity absent")
 @pytest.mark.parametrize("failed", [False, True])
 def test_multiprocess_emits_four_samples_after_summary_persistence(tmp_path, monkeypatch, failed):
     from tests.support.parallel_execution import example_multiprocess_job, parity_adapter
@@ -507,7 +504,7 @@ def test_multiprocess_emits_four_samples_after_summary_persistence(tmp_path, mon
     with (
         DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
         dagster.execute_job(
-            dagster.reconstructable(example_multiprocess_job), instance=instance
+            _reconstructable_example_job(example_multiprocess_job, root), instance=instance
         ) as native,
     ):
         outcome = adapter.collect(instance, native.run_id)
@@ -528,7 +525,6 @@ def test_multiprocess_emits_four_samples_after_summary_persistence(tmp_path, mon
         assert adapter.collect(instance, native.run_id) == outcome
 
 
-@pytest.mark.xfail(strict=True, reason="multiprocess overlap lock evidence absent")
 def test_multiprocess_same_source_overlap_is_recorded_lock_failure(tmp_path, monkeypatch):
     from tests.support.parallel_execution import example_multiprocess_job, held_lock, parity_adapter
 
@@ -539,7 +535,7 @@ def test_multiprocess_same_source_overlap_is_recorded_lock_failure(tmp_path, mon
         held_lock(root / "data/metadata/A/.lock"),
         DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
         dagster.execute_job(
-            dagster.reconstructable(example_multiprocess_job), instance=instance
+            _reconstructable_example_job(example_multiprocess_job, root), instance=instance
         ) as native,
     ):
         outcome = adapter.collect(instance, native.run_id)
@@ -548,3 +544,108 @@ def test_multiprocess_same_source_overlap_is_recorded_lock_failure(tmp_path, mon
         assert sources["A"].failure.phase == "lock"
         assert sources["B"].skip.root_failed_source_ids == ("A",)
         assert sources["C"].status == "succeeded"
+
+
+@pytest.mark.spark
+def test_multiprocess_executor_matches_cli_parallel_and_sequential(
+    tmp_path, monkeypatch, record_property
+):
+    from tests.support.parallel_order24 import (
+        example_multiprocess_job,
+        example_project,
+        fixture_service,
+        run_example,
+    )
+
+    with fixture_service() as server:
+        root = example_project(tmp_path / "dagster", server)
+        sequential_root = example_project(tmp_path / "sequential", server)
+        parallel_root = example_project(tmp_path / "parallel", server)
+        cli_sequential, _, sequential_process = run_example(sequential_root, max_parallel=1)
+        cli_parallel, _, parallel_process = run_example(parallel_root, max_parallel=3)
+        monkeypatch.setenv("JANUS_TEST_DAGSTER_EXAMPLE_ROOT", str(root))
+        adapter = build_dagster_adapter(
+            root, environment="example", executor="multiprocess", max_concurrent=3
+        )
+        with (
+            DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
+            dagster.execute_job(
+                dagster.reconstructable(example_multiprocess_job), instance=instance
+            ) as native,
+        ):
+            outcome = adapter.collect(instance, native.run_id)
+            normalized = {
+                "dagster_multiprocess": _normalized_terminal_contract(outcome.to_summary()),
+                "cli_sequential": _normalized_terminal_contract(cli_sequential),
+                "cli_parallel": _normalized_terminal_contract(cli_parallel),
+            }
+            record_property("multiprocess_terminal_parity", json.dumps(normalized))
+            assert sequential_process.returncode == parallel_process.returncode == 0
+            assert native.success and outcome.is_successful
+            assert normalized["dagster_multiprocess"] == normalized["cli_sequential"] == (
+                normalized["cli_parallel"]
+            )
+            assert adapter.collect(instance, native.run_id) == outcome
+            assert json.loads(outcome.summary_persistence.path.read_text()) == outcome.to_summary()
+
+
+@pytest.mark.spark
+def test_multiprocess_same_source_overlap_is_a_recorded_lock_failure(
+    tmp_path, monkeypatch, record_property
+):
+    from tests.support.parallel_execution import file_snapshot, held_lock, probe_lock
+    from tests.support.parallel_order24 import (
+        example_multiprocess_job,
+        example_project,
+        fixture_service,
+    )
+
+    with fixture_service() as server:
+        root = example_project(tmp_path / "dagster", server)
+        monkeypatch.setenv("JANUS_TEST_DAGSTER_EXAMPLE_ROOT", str(root))
+        adapter = build_dagster_adapter(
+            root, environment="example", executor="multiprocess", max_concurrent=3
+        )
+        metadata = root / "runtime/data/metadata/A"
+        with held_lock(metadata / ".lock") as (_process, _release, holder):
+            before = file_snapshot(metadata)
+            with (
+                DagsterInstance.local_temp(str(tmp_path / "instance")) as instance,
+                dagster.execute_job(
+                    _reconstructable_example_job(example_multiprocess_job, root), instance=instance
+                ) as native,
+            ):
+                outcome = adapter.collect(instance, native.run_id)
+                sources = {source.source_id: source for source in outcome.sources}
+                record_property("multiprocess_lock_outcome", json.dumps(outcome.to_summary()))
+                assert not native.success
+                assert sources["A"].status == "failed"
+                assert sources["A"].failure.phase == "lock"
+                assert sources["A"].failure.error_type == "SourceLockedError"
+                for key in ("pid", "hostname", "run_id", "acquired_at"):
+                    assert str(holder[key]) in sources["A"].failure.reason
+                assert dict(sources["A"].attempts[0].evidence) == {}
+                assert sources["B"].status == "skipped"
+                assert sources["B"].skip.direct_blocking_upstream_ids == ("A",)
+                assert sources["B"].skip.root_failed_source_ids == ("A",)
+                assert sources["B"].attempts == ()
+                assert sources["C"].status == "succeeded"
+                assert file_snapshot(metadata) == before
+                assert not (root / "runtime/data/metadata/B").exists()
+                assert adapter.collect(instance, native.run_id) == outcome
+        assert probe_lock(metadata / ".lock")["acquired"]
+
+
+@pytest.fixture(autouse=True)
+def _persistent_instance_directory(tmp_path):
+    """Dagster local_temp requires its explicit storage directory to exist already."""
+    (tmp_path / "instance").mkdir()
+
+
+def _reconstructable_example_job(factory, project_root):
+    """Carry the root in the pointer so Dagster's definition cache isolates each test."""
+    return dagster.build_reconstructable_job(
+        factory.__module__,
+        "project_multiprocess_job",
+        reconstructable_kwargs={"project_root": str(project_root)},
+    )

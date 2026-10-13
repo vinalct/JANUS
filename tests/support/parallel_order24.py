@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -207,6 +208,23 @@ def write_parity_evidence(directory, sequential, parallel, **fields):
             sort_keys=True,
             default=str,
         )
+    )
+
+
+def example_multiprocess_job():
+    """Reconstruct the real HTTP/Spark example job independently in each spawned step."""
+    return project_multiprocess_job(os.environ["JANUS_TEST_DAGSTER_EXAMPLE_ROOT"])
+
+
+def project_multiprocess_job(project_root):
+    """Reconstruct an isolated example with its root carried explicitly in the pointer."""
+    from janus.adapters.dagster import build_job
+
+    return build_job(
+        Path(project_root),
+        environment="example",
+        executor="multiprocess",
+        max_concurrent=3,
     )
 
 

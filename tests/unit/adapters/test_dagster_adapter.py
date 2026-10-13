@@ -17,6 +17,8 @@ from dagster import DagsterInstance, Definitions, RetryPolicy  # noqa: E402
 from janus.adapters.dagster import (  # noqa: E402
     DagsterAdapterServices,
     build_dagster_adapter,
+    build_definitions,
+    build_job,
     source_op_name,
 )
 from janus.planner import Planner  # noqa: E402
@@ -389,3 +391,91 @@ def test_default_adapter_uses_profile_lock_wait_without_changing_executor(
     assert outcome.is_successful
     assert waits == [3, 3]
     assert adapter.job.executor_def.name == "in_process"
+
+
+def test_default_job_is_unchanged(tmp_path):
+    root = build_graph_project(tmp_path, "chain")
+    adapter = _adapter(root, RecordingExecution())
+    explicit = _adapter(root, RecordingExecution(), executor="in_process")
+
+    assert adapter.job.executor_def is dagster.in_process_executor
+    assert adapter.job.tags == explicit.job.tags == {
+        "janus/adapter": "dagster",
+        "janus/snapshot_id": adapter.manifest.snapshot_id,
+        "janus/manifest": adapter.manifest.to_json(),
+        "janus/concurrency": "single-process",
+    }
+    assert adapter.job.description == explicit.job.description == (
+        "Execute JANUS sources through the shared planner and SourceExecutor. "
+        "The reference executor is intentionally single-process."
+    )
+
+
+@pytest.mark.parametrize("max_concurrent", [1, 3])
+def test_multiprocess_job_pins_spawn_and_explicit_concurrency(tmp_path, max_concurrent):
+    root = build_graph_project(tmp_path, "chain")
+    adapter = _adapter(
+        root, RecordingExecution(), executor="multiprocess", max_concurrent=max_concurrent
+    )
+    Definitions.validate_loadable(adapter.definitions)
+    configured = adapter.job.executor_def.config_schema.resolve_config({})
+
+    assert configured.success
+    assert configured.value["config"] == {
+        "max_concurrent": max_concurrent,
+        "start_method": {"spawn": {}},
+        "retries": {"enabled": {}},
+    }
+    assert adapter.job.executor_def.name == "multiprocess"
+    assert adapter.job.tags["janus/concurrency"] == f"multiprocess:{max_concurrent}"
+    assert adapter.job.description == (
+        "Execute JANUS sources through the shared planner and SourceExecutor. "
+        "Steps run in spawned processes; each JANUS source holds its source-state lock "
+        "for its whole execution."
+    )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_concurrent": 3}, "max_concurrent applies only to executor='multiprocess'"),
+        ({"executor": "threads"}, "executor must be one of {'in_process', 'multiprocess'}"),
+        *(
+            (
+                {"executor": "multiprocess", "max_concurrent": value},
+                "executor='multiprocess' requires an explicit max_concurrent >= 1",
+            )
+            for value in (None, 0, -1, True, 1.5, "3")
+        ),
+    ],
+)
+def test_executor_arguments_fail_closed(tmp_path, kwargs, message):
+    with pytest.raises(ValueError, match=re.escape(message)):
+        build_dagster_adapter(tmp_path, **kwargs)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("builder", [build_definitions, build_job])
+def test_public_builders_forward_executor_options(tmp_path, builder):
+    root = build_graph_project(tmp_path, "chain")
+    built = builder(
+        root,
+        environment_config=_environment_config(),
+        executor="multiprocess",
+        max_concurrent=3,
+    )
+    job = built.resolve_job_def("janus_sources") if isinstance(built, Definitions) else built
+    assert job.executor_def.name == "multiprocess"
+    assert job.tags["janus/concurrency"] == "multiprocess:3"
+
+
+def test_execute_in_process_uses_local_executor_for_a_multiprocess_job(tmp_path):
+    root = build_graph_project(tmp_path, "chain")
+    execution = RecordingExecution()
+    adapter = _adapter(root, execution, executor="multiprocess", max_concurrent=3)
+
+    result, outcome = adapter.execute_in_process()
+
+    assert result.success and outcome.is_successful
+    assert [call[:2] for call in execution.calls] == [("A", 1), ("B", 1)]
+    assert adapter.job.executor_def.name == "multiprocess"

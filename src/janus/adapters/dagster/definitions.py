@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dagster import (
     DagsterInstance,
@@ -24,6 +24,7 @@ from dagster import (
     ResourceDefinition,
     RetryPolicy,
     in_process_executor,
+    multiprocess_executor,
     op,
     run_status_sensor,
 )
@@ -46,6 +47,7 @@ from .runtime import (
 JANUS_RESOURCE_KEY = "janus"
 DEFAULT_JOB_NAME = "janus_sources"
 SOURCE_EXECUTION_POOL = "janus_source_execution"
+AdapterExecutor = Literal["in_process", "multiprocess"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +102,7 @@ class DagsterAdapterServices:
     summary_store_factory: SummaryStoreFactory = _default_summary_store_factory
 
 
-def build_dagster_adapter(
+def build_dagster_adapter(  # noqa: PLR0913 — public builder keeps explicit keyword options
     project_root: Path,
     *,
     environment: str = "local",
@@ -110,13 +112,19 @@ def build_dagster_adapter(
     services: DagsterAdapterServices | None = None,
     retry_policy: RetryPolicy | None = None,
     job_name: str = DEFAULT_JOB_NAME,
+    executor: AdapterExecutor = "in_process",
+    max_concurrent: int | None = None,
 ) -> DagsterAdapter:
     """Build one source op per expanded id and wire the shared graph's exact edges.
 
     Loading definitions reads and validates configuration only. Runtime directories,
     Spark providers, source execution, and summary writes begin only after Dagster starts
     a run or invokes a terminal status sensor.
+
+    Multiprocess execution requires an explicit limit on concurrent spawned steps.
+    ``DagsterAdapter.execute_in_process`` always executes locally, regardless of this choice.
     """
+    executor_def, concurrency_tag = _executor(executor, max_concurrent)
     resolved_root = project_root.resolve()
     resolved_config = copy.deepcopy(
         dict(environment_config)
@@ -185,16 +193,21 @@ def build_dagster_adapter(
     job = graph.to_job(
         name=job_name,
         resource_defs={JANUS_RESOURCE_KEY: resource},
-        executor_def=in_process_executor,
+        executor_def=executor_def,
         tags={
             ADAPTER_TAG: ADAPTER_NAME,
             SNAPSHOT_TAG: manifest.snapshot_id,
             MANIFEST_TAG: manifest.to_json(),
-            "janus/concurrency": "single-process",
+            "janus/concurrency": concurrency_tag,
         },
         description=(
             "Execute JANUS sources through the shared planner and SourceExecutor. "
-            "The reference executor is intentionally single-process."
+            + (
+                "The reference executor is intentionally single-process."
+                if executor == "in_process"
+                else "Steps run in spawned processes; each JANUS source holds its "
+                "source-state lock for its whole execution."
+            )
         ),
     )
     store_factory = resolved_services.summary_store_factory
@@ -222,6 +235,27 @@ def build_dagster_adapter(
         summary_store_factory=store_factory,
         environment_config=resolved_config,
     )
+
+
+def _executor(kind: AdapterExecutor, max_concurrent: int | None):
+    if kind == "in_process":
+        if max_concurrent is not None:
+            raise ValueError("max_concurrent applies only to executor='multiprocess'")
+        return in_process_executor, "single-process"
+    if kind == "multiprocess":
+        if (
+            not isinstance(max_concurrent, int)
+            or isinstance(max_concurrent, bool)
+            or max_concurrent < 1
+        ):
+            raise ValueError("executor='multiprocess' requires an explicit max_concurrent >= 1")
+        return (
+            multiprocess_executor.configured(
+                {"max_concurrent": max_concurrent, "start_method": {"spawn": {}}}
+            ),
+            f"multiprocess:{max_concurrent}",
+        )
+    raise ValueError(f"executor must be one of {{'in_process', 'multiprocess'}}, got {kind!r}")
 
 
 def build_definitions(project_root: Path, **kwargs: Any) -> Definitions:

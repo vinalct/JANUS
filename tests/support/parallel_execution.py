@@ -507,8 +507,12 @@ def cli_process(root, *, max_parallel=3, extra_env=None):
 
 
 def example_multiprocess_job():
-    root = Path(os.environ["JANUS_TEST_DAGSTER_ROOT"])
-    return parity_adapter(root, executor="multiprocess").job
+    return project_multiprocess_job(os.environ["JANUS_TEST_DAGSTER_ROOT"])
+
+
+def project_multiprocess_job(project_root):
+    """Include each fixture root in the reconstructable pointer's cache identity."""
+    return parity_adapter(Path(project_root), executor="multiprocess").job
 
 
 def adapter_execution_factory(logger):

@@ -340,6 +340,19 @@ from janus.adapters.dagster import build_definitions
 defs = build_definitions(Path("/srv/janus"), environment="local")
 ```
 
+The default executor runs in one process and keeps the `janus/concurrency: single-process`
+tag. Pass `executor="multiprocess", max_concurrent=3` to `build_definitions`, `build_job`,
+or `build_dagster_adapter` to run independent steps in spawned processes, tagged
+`janus/concurrency: multiprocess:3`. Multiprocess execution requires an explicit positive
+integer limit: each running source may start its own Spark driver. The adapter's
+`execute_in_process` convenience always runs in the calling process; use a reconstructable
+job and a persistent Dagster instance with `dagster.execute_job` for multiprocess execution.
+
+Each source holds its source-state lock through the shared executor. Overlap with another
+Dagster run or cron invocation records a failed attempt with `phase: "lock"` and skips its
+dependents. An opt-in Dagster `RetryPolicy` can retry that failure after its configured
+delay, allowing an operator to wait for the competing run to finish.
+
 A run is planned once, at definition time, and the selected graph travels with the run as an
 immutable manifest, so a code reload mid-run cannot silently change the batch. Terminal
 aggregation happens outside the job's dependency gating, which is why a node Dagster never

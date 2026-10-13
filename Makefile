@@ -346,10 +346,11 @@ test-metrics:
 test-contract-schema:
 	$(PYTHON) -m pytest -q $(CONTRACT_SCHEMA_TESTS)
 
+# Spawn/retry/collector coverage runs without Spark; real parity runs in the full container suite.
 test-adapter:
 	@mkdir -p "$(dir $(DAGSTER_TEST_REPORT))"
 	$(PYTHON) -c "import dagster; from importlib.metadata import version; actual = version('dagster'); assert actual == '$(DAGSTER_VERSION)', f'expected dagster $(DAGSTER_VERSION), found {actual}'"
-	$(PYTHON) -m pytest -ra $(DAGSTER_TESTS) --junitxml="$(DAGSTER_TEST_REPORT)"
+	$(PYTHON) -m pytest -ra -m 'not spark' $(DAGSTER_TESTS) --junitxml="$(DAGSTER_TEST_REPORT)"
 	$(PYTHON) -m tests.support.required_test_gate "$(DAGSTER_TEST_REPORT)" --minimum-passed 13
 
 .PHONY: test-spark-startup
