@@ -13,12 +13,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
 from janus.checkpoints import (
     CheckpointState,
     CheckpointStore,
+    DeadLetterState,
     DeadLetterStore,
     can_continue_after_dead_letter,
 )
@@ -219,6 +221,19 @@ class RunTotals:
         return max(self.total_attempts - self.loaded_file_count, 0)
 
 
+@dataclass(slots=True)
+class CandidateLedger:
+    """The loop's mutable bookkeeping, owned by the loop's thread (order-25 NFR-3)."""
+
+    totals: RunTotals
+    dead_letter_state: DeadLetterState | None
+    dead_letter_keys: set[str]
+    dead_letter_skip_count: int = 0
+
+    def is_dead_lettered(self, discovered_file: DiscoveredFile) -> bool:
+        return _discovered_file_dead_letter_key(discovered_file) in self.dead_letter_keys
+
+
 @dataclass(frozen=True, slots=True)
 class FileExtractionOutcome:
     """What the candidate loop produced, ready for result assembly."""
@@ -232,6 +247,68 @@ class FileExtractionOutcome:
     raw_path_prefix: Path | None
 
 
+def _skip_dead_lettered(
+    context: FileExtractionContext, ledger: CandidateLedger, discovered_file: DiscoveredFile,
+    *, file_index: int,
+) -> bool:
+    """Count and log a resume-time skip when the candidate is already dead-lettered."""
+    if not ledger.is_dead_lettered(discovered_file):
+        return False
+    ledger.dead_letter_skip_count += 1
+    if context.logger is not None:
+        context.logger.info(
+            "file_candidate_skipped_dead_letter",
+            file_index=file_index, filename=discovered_file.filename,
+            dead_letter_count=len(ledger.dead_letter_keys),
+        )
+    return True
+
+
+def _consume_candidate(
+    context: FileExtractionContext, ledger: CandidateLedger, discovered_file: DiscoveredFile,
+    *, file_index: int, selected_file_count: int, dead_letter_store: DeadLetterStore,
+    complete: Callable[[], FileCandidateResult | None],
+) -> None:
+    """Run a completion thunk and apply the dead-letter policy on the loop's thread.
+    Exceptions, budget decisions and result bookkeeping stay in candidate order.
+    """
+    logger = context.logger
+    try:
+        candidate = complete()
+    except Exception as exc:
+        if logger is not None:
+            logger.exception("file_candidate_execution_failed")
+        ledger.dead_letter_state = dead_letter_store.record(
+            context.plan,
+            item_key=_discovered_file_dead_letter_key(discovered_file),
+            item_type="file_candidate", error=exc,
+            metadata=_discovered_file_dead_letter_metadata(
+                discovered_file, file_index=file_index, selected_file_count=selected_file_count,
+            ),
+        )
+        ledger.dead_letter_keys = set(ledger.dead_letter_state.item_keys)
+        if logger is not None:
+            logger.info(
+                "file_candidate_dead_lettered",
+                file_index=file_index, filename=discovered_file.filename,
+                dead_letter_count=ledger.dead_letter_state.entry_count,
+                dead_letter_max_items=context.dead_letter_max_items,
+                error_type=type(exc).__name__,
+            )
+        if not can_continue_after_dead_letter(
+            total_item_count=selected_file_count,
+            dead_letter_count=ledger.dead_letter_state.entry_count,
+            dead_letter_max_items=context.dead_letter_max_items,
+        ):
+            raise
+        ledger.dead_letter_skip_count += 1
+        return
+    if candidate is None:
+        ledger.totals.skipped_file_count += 1
+        return
+    ledger.totals.absorb(candidate)
+
+
 def run_file_extraction(
     context: FileExtractionContext,
     *,
@@ -239,7 +316,6 @@ def run_file_extraction(
 ) -> FileExtractionOutcome:
     """Download every selected file, recording failures as dead letters while the budget allows."""
     plan = context.plan
-    logger = context.logger
     raw_path_prefix = _raw_run_path_prefix(plan)
     raw_writer = context.raw_writer_for(raw_path_prefix)
 
@@ -250,9 +326,10 @@ def run_file_extraction(
 
     context.log_extraction_started()
 
-    totals = RunTotals()
-    dead_letter_keys = set(dead_letter_state.item_keys) if dead_letter_state is not None else set()
-    dead_letter_skip_count = 0
+    ledger = CandidateLedger(
+        totals=RunTotals(), dead_letter_state=dead_letter_state,
+        dead_letter_keys=set(dead_letter_state.item_keys) if dead_letter_state else set(),
+    )
 
     with context.downloader.open_client() as client:
         discovered_files = _discover_files(plan, context.file_hook, client.transport)
@@ -260,77 +337,29 @@ def run_file_extraction(
         context.log_discovery_finished(discovered_files, selected_files)
 
         for file_index, discovered_file in enumerate(selected_files, start=1):
-            candidate_key = _discovered_file_dead_letter_key(discovered_file)
             context.log_candidate_started(
-                discovered_file,
-                file_index=file_index,
-                selected_file_count=len(selected_files),
+                discovered_file, file_index=file_index, selected_file_count=len(selected_files),
             )
 
-            if candidate_key in dead_letter_keys:
-                dead_letter_skip_count += 1
-                if logger is not None:
-                    logger.info(
-                        "file_candidate_skipped_dead_letter",
-                        file_index=file_index,
-                        filename=discovered_file.filename,
-                        dead_letter_count=len(dead_letter_keys),
-                    )
+            if _skip_dead_lettered(context, ledger, discovered_file, file_index=file_index):
                 continue
+            _consume_candidate(
+                context, ledger, discovered_file,
+                file_index=file_index, selected_file_count=len(selected_files),
+                dead_letter_store=dead_letter_store,
+                complete=partial(
+                    _extract_one_file, context, discovered_file,
+                    client=client, raw_writer=raw_writer, file_index=file_index,
+                ),
+            )
 
-            try:
-                candidate = _extract_one_file(
-                    context,
-                    discovered_file,
-                    client=client,
-                    raw_writer=raw_writer,
-                    file_index=file_index,
-                )
-            except Exception as exc:
-                if logger is not None:
-                    logger.exception("file_candidate_execution_failed")
-                dead_letter_state = dead_letter_store.record(
-                    plan,
-                    item_key=candidate_key,
-                    item_type="file_candidate",
-                    error=exc,
-                    metadata=_discovered_file_dead_letter_metadata(
-                        discovered_file,
-                        file_index=file_index,
-                        selected_file_count=len(selected_files),
-                    ),
-                )
-                dead_letter_keys = set(dead_letter_state.item_keys)
-                if logger is not None:
-                    logger.info(
-                        "file_candidate_dead_lettered",
-                        file_index=file_index,
-                        filename=discovered_file.filename,
-                        dead_letter_count=dead_letter_state.entry_count,
-                        dead_letter_max_items=context.dead_letter_max_items,
-                        error_type=type(exc).__name__,
-                    )
-                if not can_continue_after_dead_letter(
-                    total_item_count=len(selected_files),
-                    dead_letter_count=dead_letter_state.entry_count,
-                    dead_letter_max_items=context.dead_letter_max_items,
-                ):
-                    raise
-                dead_letter_skip_count += 1
-                continue
-
-            if candidate is None:
-                totals.skipped_file_count += 1
-                continue
-
-            totals.absorb(candidate)
-
+    totals = ledger.totals
     normalization_candidate_count = sum(
         1
         for artifact in totals.artifacts
         if artifact.format == plan.source_config.spark.input_format
     )
-    dead_letter_count = dead_letter_state.entry_count if dead_letter_state is not None else 0
+    dead_letter_count = ledger.dead_letter_state.entry_count if ledger.dead_letter_state else 0
 
     context.log_extraction_finished(
         totals,
@@ -338,7 +367,7 @@ def run_file_extraction(
         selected_file_count=len(selected_files),
         normalization_candidate_count=normalization_candidate_count,
         dead_letter_count=dead_letter_count,
-        dead_letter_skip_count=dead_letter_skip_count,
+        dead_letter_skip_count=ledger.dead_letter_skip_count,
     )
 
     return FileExtractionOutcome(
@@ -347,7 +376,7 @@ def run_file_extraction(
         selected_file_count=len(selected_files),
         normalization_candidate_count=normalization_candidate_count,
         dead_letter_count=dead_letter_count,
-        dead_letter_skip_count=dead_letter_skip_count,
+        dead_letter_skip_count=ledger.dead_letter_skip_count,
         raw_path_prefix=raw_path_prefix,
     )
 
@@ -389,11 +418,9 @@ def build_extraction_result(
         metadata=extraction_metadata,
     )
     extraction_result = extraction_result.with_metadata(
-        "dead_letter_count",
-        str(outcome.dead_letter_count),
+        "dead_letter_count", str(outcome.dead_letter_count),
     ).with_metadata(
-        "dead_letter_skipped_count",
-        str(outcome.dead_letter_skip_count),
+        "dead_letter_skipped_count", str(outcome.dead_letter_skip_count),
     )
     if outcome.dead_letter_count > 0:
         extraction_result = extraction_result.with_metadata(
