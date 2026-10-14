@@ -10,7 +10,6 @@ import pytest
 
 import janus.strategies.files as files_package
 
-TASK09 = pytest.mark.xfail(strict=True, reason="download window boundary anchors")
 PACKAGE_ROOT = Path(inspect.getfile(files_package)).parent
 
 
@@ -132,7 +131,6 @@ def _rule_violations(sources):
     return violations
 
 
-@TASK09
 def test_sweep_covers_every_module_including_the_download_window():
     sources = _package_sources()
     assert len(sources) >= 10
@@ -147,7 +145,6 @@ def test_existing_package_boundaries_remain_green(rule):
     assert not _rule_violations(_package_sources())[rule]
 
 
-@TASK09
 def test_only_the_download_window_imports_threading_mechanics():
     assert _rule_violations(_package_sources())["threading"] == ["download_window.py"]
 
@@ -156,7 +153,6 @@ def test_existing_extraction_orchestrator_has_no_transport_symbols():
     assert not _rule_violations(_package_sources())["transport"]
 
 
-@TASK09
 def test_download_window_has_no_transport_symbols():
     sources = _package_sources()
     assert "download_window.py" in sources

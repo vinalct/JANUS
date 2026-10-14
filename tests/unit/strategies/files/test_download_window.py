@@ -4,14 +4,14 @@ import threading
 from collections import Counter
 from concurrent.futures import Future
 from functools import partial
+from itertools import permutations
+from random import Random
 from types import SimpleNamespace
 
 import pytest
 
-pytestmark = pytest.mark.xfail(
-    strict=True, reason="ordered download window missing"
-)
 TIMEOUT = 5
+COMPLETION_ORDERS = Random(25).sample(list(permutations(range(1, 7))), 50)
 
 
 class Payload:
@@ -107,13 +107,20 @@ def test_ordinary_exception_is_an_outcome_value():
 def test_worker_base_exception_propagates_and_exit_discards_remaining_payloads():
     discarded = Counter()
     error = KeyboardInterrupt("worker interrupt")
-    with pytest.raises(KeyboardInterrupt, match="worker interrupt"), _window(4) as window:
+    answered = {index: threading.Event() for index in range(1, 5)}
+    with pytest.raises(KeyboardInterrupt, match="worker interrupt") as caught, _window(4) as window:
         for index in range(1, 5):
             window.submit(
-                index, partial(_download, index, discarded, error=error if index == 2 else None)
+                index, partial(
+                    _download, index, discarded, answered=answered[index],
+                    error=error if index == 2 else None,
+                ),
             )
+        # Ensure every download started before shutdown can cancel queued futures.
+        assert all(event.wait(TIMEOUT) for event in answered.values())
         window.take(1)
         window.take(2)
+    assert caught.value is error
     assert discarded == Counter({3: 1, 4: 1})
     assert window.in_flight == 0
 
@@ -159,9 +166,11 @@ def test_stop_and_drain_wait_for_every_future_and_discard_once(monkeypatch):
 
 def test_context_exception_discards_untaken_payloads_and_shuts_pool_down():
     discarded = Counter()
+    answered = {index: threading.Event() for index in range(1, 4)}
     with pytest.raises(ValueError, match="loop error"), _window(3) as window:
         for index in range(1, 4):
-            window.submit(index, partial(_download, index, discarded))
+            window.submit(index, partial(_download, index, discarded, answered=answered[index]))
+        assert all(event.wait(TIMEOUT) for event in answered.values())
         raise ValueError("loop error")
     assert discarded == Counter({1: 1, 2: 1, 3: 1})
     assert window.in_flight == 0
@@ -194,3 +203,140 @@ def test_outcome_requires_exactly_one_of_value_or_error(downloaded, error):
 
     with pytest.raises(ValueError, match="exactly one"):
         DownloadOutcome(1, downloaded, error, 0.0)
+
+
+@pytest.mark.parametrize("completion_order", COMPLETION_ORDERS)
+def test_seeded_completion_permutations_preserve_order_and_bound(completion_order):
+    discarded, order = Counter(), []
+    answered = {index: threading.Event() for index in completion_order}
+    predecessors = dict(zip(completion_order[1:], completion_order[:-1], strict=True))
+    with _window(6) as window:
+        for index in range(1, 7):
+            window.submit(
+                index, partial(
+                    _download, index, discarded,
+                    gate=answered[predecessors[index]] if index in predecessors else None,
+                    answered=answered[index], order=order,
+                ),
+            )
+            assert window.in_flight == index <= 6
+        assert not window.has_room and window.max_in_flight_observed == 6
+        outcomes = []
+        for index in range(1, 7):
+            outcomes.append(window.take(index))
+            assert window.in_flight == 6 - index
+        assert [outcome.file_index for outcome in outcomes] == list(range(1, 7))
+        assert all(outcome.error is None for outcome in outcomes)
+        assert order == list(completion_order)
+    assert discarded == Counter()
+
+
+@pytest.mark.parametrize("error", [None, ValueError("candidate failure")])
+def test_worker_returns_the_value_or_error_with_injected_elapsed_time(error):
+    from janus.strategies.files.download_window import _download_in_worker
+
+    outcome = _download_in_worker(
+        7, partial(_download, 7, Counter(), error=error),
+        monotonic=partial(next, iter((10.0, 12.5))),
+    )
+    assert outcome.file_index == 7
+    assert outcome.download_seconds == 2.5
+    assert outcome.error is error
+    assert (outcome.downloaded is None) == (error is not None)
+
+
+def test_drain_cleans_all_outcomes_before_raising_the_first_worker_interrupt():
+    discarded = Counter()
+    first_error, later_error = KeyboardInterrupt("first"), SystemExit("later")
+    errors = {2: first_error, 3: later_error}
+    with _window(4) as window:
+        # Drain sorts by index even when submissions and completions differ.
+        for index in (4, 3, 2, 1):
+            window.submit(index, partial(_download, index, discarded, error=errors.get(index)))
+        with pytest.raises(KeyboardInterrupt) as caught:
+            window.drain()
+        assert caught.value is first_error
+        assert discarded == Counter({1: 1, 4: 1})
+        assert window.in_flight == 0
+        assert window.drain() == ()
+    assert discarded == Counter({1: 1, 4: 1})
+
+
+@pytest.mark.parametrize("finished_before_interrupt", [False, True])
+def test_caller_interrupt_during_take_keeps_its_payload_reachable_for_cleanup(
+    monkeypatch, finished_before_interrupt,
+):
+    discarded, gate, answered = Counter(), threading.Event(), threading.Event()
+    error = KeyboardInterrupt("caller interrupt")
+    original_result = Future.result
+    interrupted = False
+
+    def result(self, *args, **kwargs):
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            if finished_before_interrupt:
+                gate.set()
+                original_result(self, *args, **kwargs)
+            raise error
+        return original_result(self, *args, **kwargs)
+
+    with pytest.raises(KeyboardInterrupt) as caught, _window(2) as window:
+        window.submit(1, partial(_download, 1, discarded, gate=gate))
+        window.submit(2, partial(_download, 2, discarded, answered=answered))
+        assert answered.wait(TIMEOUT)
+        monkeypatch.setattr(Future, "result", result)
+        try:
+            window.take(1)
+        finally:
+            gate.set()
+    assert caught.value is error
+    assert discarded == Counter({1: 1, 2: 1})
+    assert window.in_flight == 0
+
+
+def test_exit_preserves_the_caller_error_when_an_untaken_worker_also_interrupts():
+    discarded, answered = Counter(), threading.Event()
+    caller_error = ValueError("caller failure")
+    with pytest.raises(ValueError) as caught, _window(2) as window:
+        window.submit(1, partial(_download, 1, discarded, error=KeyboardInterrupt("worker")))
+        window.submit(2, partial(_download, 2, discarded, answered=answered))
+        assert answered.wait(TIMEOUT)
+        raise caller_error
+    assert caught.value is caller_error
+    assert discarded == Counter({2: 1})
+    assert window.in_flight == 0
+
+
+def test_duplicate_pending_index_cannot_overwrite_a_payload():
+    discarded, answered = Counter(), threading.Event()
+    with _window(2) as window:
+        window.submit(1, partial(_download, 1, discarded, answered=answered))
+        assert answered.wait(TIMEOUT)
+        with pytest.raises(RuntimeError, match="already dispatched"):
+            window.submit(1, partial(_download, 1, discarded))
+        assert window.in_flight == window.max_in_flight_observed == 1
+    assert discarded == Counter({1: 1})
+
+
+@pytest.mark.parametrize("thread_name_prefix", ["janus-file", "custom-file"])
+def test_pool_uses_configured_capacity_and_thread_names(monkeypatch, thread_name_prefix):
+    from janus.strategies.files import download_window
+
+    original_pool = download_window.ThreadPoolExecutor
+    constructed, worker_names = [], []
+
+    def pool(**kwargs):
+        constructed.append(kwargs)
+        return original_pool(**kwargs)
+
+    def download():
+        worker_names.append(threading.current_thread().name)
+        return _download(1, Counter())
+
+    monkeypatch.setattr(download_window, "ThreadPoolExecutor", pool)
+    with download_window.OrderedDownloadWindow(3, thread_name_prefix=thread_name_prefix) as window:
+        window.submit(1, download)
+        window.take(1)
+    assert constructed == [{"max_workers": 3, "thread_name_prefix": thread_name_prefix}]
+    assert len(worker_names) == 1 and worker_names[0].startswith(thread_name_prefix)
