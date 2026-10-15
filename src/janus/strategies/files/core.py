@@ -94,7 +94,12 @@ class DiscoveredFile:
 
 
 class FileHook(SourceHook):
-    """File-strategy hook points for source-specific layout and version quirks."""
+    """File-strategy hook points for source-specific layout and version quirks.
+
+    Every method is called on the extraction loop's thread, one candidate at a time and
+    in candidate order, whatever ``access.rate_limit.concurrency`` says. Downloads may
+    run on worker threads; hooks never do, so a hook needs no locking.
+    """
 
     def discovered_files(
         self,

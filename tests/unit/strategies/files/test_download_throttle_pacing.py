@@ -9,16 +9,7 @@ from janus.strategies.files.extraction import FileExtractionContext
 from janus.strategies.http import HttpRequestThrottle
 from tests.support.file_downloads import build_cnpj_fixture
 
-CONCURRENCIES = [
-    1,
-    pytest.param(
-        3,
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="order-25 TASK-08: shared throttle and dedicated download clients",
-        ),
-    ),
-]
+CONCURRENCIES = [1, 3]
 
 
 def _measure_slots(tmp_path, monkeypatch, concurrency):

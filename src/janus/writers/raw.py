@@ -7,6 +7,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from stat import S_ISDIR
 from typing import Any, BinaryIO
 from uuid import uuid4
 
@@ -165,7 +166,6 @@ class RawArtifactWriter:
         _validate_max_bytes(max_bytes)
         target = self.storage_layout.resolve_output(plan, zone)
         staging_dir = target.child(self._relative_path_for_zone(zone, STAGING_DIRNAME))
-        staging_dir.mkdir(parents=True, exist_ok=True)
         return StagedWrite(
             writer=self,
             plan=plan,
@@ -359,7 +359,7 @@ class StagedWrite:
             raise RuntimeError("staged write already contains a payload")
 
         try:
-            with self.path.open("xb") as destination:
+            with _open_staged_payload(self.path) as destination:
                 bytes_written, checksum = _copy_hashing(
                     stream,
                     destination,
@@ -509,6 +509,29 @@ def _hash_file(path: Path) -> str:
         while chunk := stream.read(WRITE_CHUNK_BYTES):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _open_staged_payload(path: Path) -> BinaryIO:
+    """Open exclusively even if another candidate removes the empty staging directory."""
+    while True:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except FileExistsError:
+            # mkdir(exist_ok=True) can see an existing directory that rmdir removes
+            # before pathlib checks is_dir(). Retry that race, but refuse a real file.
+            try:
+                parent_mode = path.parent.stat(follow_symlinks=False).st_mode
+            except FileNotFoundError:
+                continue
+            if S_ISDIR(parent_mode):
+                continue
+            raise
+        try:
+            return path.open("xb")
+        except FileNotFoundError:
+            # A commit/discard can remove the directory between mkdir and open.
+            # Once this file exists, rmdir cannot remove its parent during the copy.
+            continue
 
 
 def _remove_empty_staging_dir(path: Path) -> None:

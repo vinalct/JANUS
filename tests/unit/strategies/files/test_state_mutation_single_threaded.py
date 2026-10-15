@@ -21,9 +21,6 @@ from tests.unit.strategies.files.test_concurrent_dead_letter_order import (
 )
 from tests.unit.strategies.files.test_download_boundary import _aliases, _qualified_name, _resolve
 
-TASK09 = pytest.mark.xfail(
-    strict=True, reason="worker state and runtime thread proof"
-)
 BANNED_NAMES = frozenset(
     {
         "DeadLetterStore",
@@ -155,7 +152,6 @@ def _detect(sources):
     return pool_targets, window_targets, violations
 
 
-@TASK09
 def test_package_worker_targets_have_no_state_hook_commit_log_or_source_attempt_access():
     root = Path(inspect.getfile(files_package)).parent
     sources = {path.name: path.read_text("utf-8") for path in sorted(root.glob("*.py"))}
@@ -209,7 +205,6 @@ def test_detector_accepts_value_only_workers_and_loop_thread_records(source):
     assert not _detect({"sample.py": source})[2]
 
 
-@TASK09
 @pytest.mark.parametrize(
     "failures,budget", [((3, 6), 1), ((1,), 5)], ids=["budget-exceeded", "early-failure-continues"]
 )

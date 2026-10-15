@@ -20,7 +20,6 @@ from tests.support.file_downloads import (
     fingerprint_file_run,
 )
 
-TASK06 = pytest.mark.xfail(strict=True, reason="ordered concurrent downloads")
 TASK07 = pytest.mark.xfail(strict=True, reason="concurrency-only metadata")
 BUILDERS = {
     "cnpj_ten_archives": build_cnpj_fixture,
@@ -51,7 +50,6 @@ def _assert_fields_equal(actual, expected):
         assert getattr(actual, field.name) == getattr(expected, field.name), field.name
 
 
-@TASK06
 @pytest.mark.parametrize("concurrency", [2, 4, 10])
 @pytest.mark.parametrize("scenario", BUILDERS)
 def test_concurrent_outputs_equal_sequential_and_frozen_golden(tmp_path, scenario, concurrency):

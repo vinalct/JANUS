@@ -1,4 +1,4 @@
-"""AC-6/AC-7: sequential characterization and strict red concurrent counterparts."""
+"""AC-6/AC-7: sequential characterization and concurrent counterparts."""
 
 from __future__ import annotations
 
@@ -35,22 +35,8 @@ from tests.unit.strategies.files.test_concurrent_dead_letter_order import (
     seed_dead_letters,
 )
 
-
-def _concurrencies(task):
-    return [
-        1,
-        pytest.param(
-            4,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=f"{task}: policies and resume under concurrent downloads",
-            ),
-        ),
-    ]
-
-
-CAP_CONCURRENCIES = _concurrencies("TASK-10")
-RESUME_CONCURRENCIES = _concurrencies("TASK-11")
+CAP_CONCURRENCIES = [1, 4]
+RESUME_CONCURRENCIES = [1, 4]
 FAILURE = UrlResponse(500, b"scripted download failure")
 
 
@@ -265,9 +251,12 @@ def test_cross_origin_redirects_strip_auth_and_preserve_archive_bytes(
             peaks.append(len(active))
             if len(active) >= 2:
                 overlap.set()
+            wait_for_overlap = concurrency > 1 and not overlap.is_set()
         try:
-            if concurrency > 1 and path == "/Empresas0.zip":
-                overlap.wait(5)
+            # The first arriving request can be any initial candidate; waiting only
+            # on index 1 deadlocks if its peers have already answered.
+            if wait_for_overlap:
+                assert overlap.wait(5), "redirected downloads did not overlap"
             return bodies[path]
         finally:
             with lock:

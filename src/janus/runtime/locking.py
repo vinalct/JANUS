@@ -413,7 +413,7 @@ REACHED_THROUGH: Mapping[str, tuple[tuple[str, ...], str]] = {
         (_LIVE,),
         "Live file extraction clears old dead letters before candidate consumption.",
     ),
-    "janus.strategies.files.extraction:_consume_candidate": (
+    "janus.strategies.files.concurrent_extraction:_consume_candidate": (
         (_LIVE,),
         "Live file extraction records candidate failures on the loop thread under its lock.",
     ),

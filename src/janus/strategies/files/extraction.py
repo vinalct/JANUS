@@ -1,10 +1,9 @@
 """Orchestration for a file run: which candidate is next, and what a failure costs.
 
-The file family's loop is over **discovered files**, not request inputs — one candidate is
-downloaded, verified, persisted and (when it is an archive) expanded before the next one
-starts. *Orchestration* is that loop, the dead-letter policy around it and the result it
-assembles; *mechanics* — fetching bytes, expanding an archive, deciding where a payload lands
-— are ``download.py``, ``archives.py`` and ``artifacts.py``, composed one candidate at a time
+The file family's loop is over **discovered files**, not request inputs. Downloads may
+run concurrently, but verification, persistence and archive expansion remain in candidate
+order on the loop thread. Orchestration decides which candidate is next and what a failure
+costs; ``download.py``, ``archives.py`` and ``artifacts.py`` provide the mechanics composed
 by ``download_loop.py``. Nothing here speaks HTTP beyond handing
 :class:`~janus.strategies.files.download.FileDownloader` the client it opened.
 """
@@ -20,9 +19,7 @@ from typing import TYPE_CHECKING, Self
 from janus.checkpoints import (
     CheckpointState,
     CheckpointStore,
-    DeadLetterState,
     DeadLetterStore,
-    can_continue_after_dead_letter,
 )
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult
 from janus.strategies.common import _max_checkpoint_value, _raw_run_path_prefix
@@ -31,10 +28,13 @@ from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 
-from .artifacts import (
-    _discovered_file_dead_letter_key,
-    _discovered_file_dead_letter_metadata,
-    _redacted_location,
+from .artifacts import _redacted_location
+from .concurrent_extraction import (
+    CandidateLedger,
+    DownloadWindowStats,
+    _consume_candidate,
+    _run_concurrent_candidates,
+    _skip_dead_lettered,
 )
 from .discovery import _discover_files, _select_files
 from .download import FileDownloader
@@ -89,6 +89,10 @@ class FileExtractionContext:
         )
 
     @property
+    def download_concurrency(self) -> int:
+        return self.plan.source_config.access.rate_limit.concurrency
+
+    @property
     def dead_letter_max_items(self) -> int:
         return self.plan.source_config.extraction.dead_letter_max_items
 
@@ -115,7 +119,7 @@ class FileExtractionContext:
             file_pattern=plan.source_config.access.file_pattern,
             timeout_seconds=plan.source_config.access.timeout_seconds,
             requests_per_minute=(plan.source_config.access.rate_limit.requests_per_minute),
-            concurrency=plan.source_config.access.rate_limit.concurrency,
+            concurrency=self.download_concurrency,
             dead_letter_max_items=self.dead_letter_max_items,
         )
 
@@ -221,19 +225,6 @@ class RunTotals:
         return max(self.total_attempts - self.loaded_file_count, 0)
 
 
-@dataclass(slots=True)
-class CandidateLedger:
-    """The loop's mutable bookkeeping, owned by the loop's thread (order-25 NFR-3)."""
-
-    totals: RunTotals
-    dead_letter_state: DeadLetterState | None
-    dead_letter_keys: set[str]
-    dead_letter_skip_count: int = 0
-
-    def is_dead_lettered(self, discovered_file: DiscoveredFile) -> bool:
-        return _discovered_file_dead_letter_key(discovered_file) in self.dead_letter_keys
-
-
 @dataclass(frozen=True, slots=True)
 class FileExtractionOutcome:
     """What the candidate loop produced, ready for result assembly."""
@@ -245,68 +236,35 @@ class FileExtractionOutcome:
     dead_letter_count: int
     dead_letter_skip_count: int
     raw_path_prefix: Path | None
+    download_window: DownloadWindowStats | None = None
 
 
-def _skip_dead_lettered(
-    context: FileExtractionContext, ledger: CandidateLedger, discovered_file: DiscoveredFile,
-    *, file_index: int,
-) -> bool:
-    """Count and log a resume-time skip when the candidate is already dead-lettered."""
-    if not ledger.is_dead_lettered(discovered_file):
-        return False
-    ledger.dead_letter_skip_count += 1
-    if context.logger is not None:
-        context.logger.info(
-            "file_candidate_skipped_dead_letter",
-            file_index=file_index, filename=discovered_file.filename,
-            dead_letter_count=len(ledger.dead_letter_keys),
-        )
-    return True
-
-
-def _consume_candidate(
-    context: FileExtractionContext, ledger: CandidateLedger, discovered_file: DiscoveredFile,
-    *, file_index: int, selected_file_count: int, dead_letter_store: DeadLetterStore,
-    complete: Callable[[], FileCandidateResult | None],
+def _run_sequential_candidates(
+    context: FileExtractionContext,
+    ledger: CandidateLedger,
+    selected_files: Sequence[DiscoveredFile],
+    *,
+    client,
+    raw_writer: RawArtifactWriter,
+    dead_letter_store: DeadLetterStore,
 ) -> None:
-    """Run a completion thunk and apply the dead-letter policy on the loop's thread.
-    Exceptions, budget decisions and result bookkeeping stay in candidate order.
-    """
-    logger = context.logger
-    try:
-        candidate = complete()
-    except Exception as exc:
-        if logger is not None:
-            logger.exception("file_candidate_execution_failed")
-        ledger.dead_letter_state = dead_letter_store.record(
-            context.plan,
-            item_key=_discovered_file_dead_letter_key(discovered_file),
-            item_type="file_candidate", error=exc,
-            metadata=_discovered_file_dead_letter_metadata(
-                discovered_file, file_index=file_index, selected_file_count=selected_file_count,
+    """Keep the sequential loop's one client and candidate-by-candidate behavior."""
+    for file_index, discovered_file in enumerate(selected_files, start=1):
+        context.log_candidate_started(
+            discovered_file, file_index=file_index, selected_file_count=len(selected_files),
+        )
+
+        if _skip_dead_lettered(context, ledger, discovered_file, file_index=file_index):
+            continue
+        _consume_candidate(
+            context, ledger, discovered_file,
+            file_index=file_index, selected_file_count=len(selected_files),
+            dead_letter_store=dead_letter_store,
+            complete=partial(
+                _extract_one_file, context, discovered_file,
+                client=client, raw_writer=raw_writer, file_index=file_index,
             ),
         )
-        ledger.dead_letter_keys = set(ledger.dead_letter_state.item_keys)
-        if logger is not None:
-            logger.info(
-                "file_candidate_dead_lettered",
-                file_index=file_index, filename=discovered_file.filename,
-                dead_letter_count=ledger.dead_letter_state.entry_count,
-                dead_letter_max_items=context.dead_letter_max_items,
-                error_type=type(exc).__name__,
-            )
-        if not can_continue_after_dead_letter(
-            total_item_count=selected_file_count,
-            dead_letter_count=ledger.dead_letter_state.entry_count,
-            dead_letter_max_items=context.dead_letter_max_items,
-        ):
-            raise
-        ledger.dead_letter_skip_count += 1
-        return
-    if candidate is None:
-        ledger.totals.skipped_file_count += 1
-        return
-    ledger.totals.absorb(candidate)
 
 
 def run_file_extraction(
@@ -336,22 +294,17 @@ def run_file_extraction(
         selected_files = _select_files(plan, discovered_files, context.checkpoint_state)
         context.log_discovery_finished(discovered_files, selected_files)
 
-        for file_index, discovered_file in enumerate(selected_files, start=1):
-            context.log_candidate_started(
-                discovered_file, file_index=file_index, selected_file_count=len(selected_files),
+        if context.download_concurrency > 1:
+            window_stats = _run_concurrent_candidates(
+                context, ledger, selected_files,
+                raw_writer=raw_writer, dead_letter_store=dead_letter_store,
             )
-
-            if _skip_dead_lettered(context, ledger, discovered_file, file_index=file_index):
-                continue
-            _consume_candidate(
-                context, ledger, discovered_file,
-                file_index=file_index, selected_file_count=len(selected_files),
-                dead_letter_store=dead_letter_store,
-                complete=partial(
-                    _extract_one_file, context, discovered_file,
-                    client=client, raw_writer=raw_writer, file_index=file_index,
-                ),
+        else:
+            _run_sequential_candidates(
+                context, ledger, selected_files,
+                client=client, raw_writer=raw_writer, dead_letter_store=dead_letter_store,
             )
+            window_stats = None
 
     totals = ledger.totals
     normalization_candidate_count = sum(
@@ -378,6 +331,7 @@ def run_file_extraction(
         dead_letter_count=dead_letter_count,
         dead_letter_skip_count=ledger.dead_letter_skip_count,
         raw_path_prefix=raw_path_prefix,
+        download_window=window_stats,
     )
 
 

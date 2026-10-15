@@ -19,10 +19,6 @@ from tests.support.file_downloads import (
     fingerprint_file_run,
 )
 
-TASK06 = pytest.mark.xfail(
-    strict=True, reason="concurrent budget and drain semantics"
-)
-pytestmark = TASK06
 FAILURE = UrlResponse(500, b"scripted download failure")
 
 
