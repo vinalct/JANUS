@@ -79,6 +79,9 @@ class ScriptedFileServer:
     gates: Mapping[str, threading.Event] = field(default_factory=dict)
     requests: list[RecordedRequest] = field(default_factory=list, init=False)
     completions: list[RecordedRequest] = field(default_factory=list, init=False)
+    transport_requests: list[tuple[int, int]] = field(default_factory=list, init=False)
+    # Retain instances so Python cannot reuse an id and merge unrelated clients.
+    transports: dict[int, ScriptedFileTransport] = field(default_factory=dict, init=False)
     opened: int = field(default=0, init=False)
     closed: int = field(default=0, init=False)
     _lock: Any = field(default_factory=threading.Lock, init=False, repr=False)
@@ -130,6 +133,8 @@ class ScriptedFileServer:
                 self._sequence,
             )
             self.requests.append(recorded)
+            self.transports[id(transport)] = transport
+            self.transport_requests.append((id(transport), recorded.thread_ident))
             gate = self.gates.get(key[1])
 
         if gate is not None and not gate.wait(timeout=GATE_TIMEOUT_SECONDS):
