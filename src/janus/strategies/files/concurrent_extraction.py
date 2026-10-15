@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -121,12 +122,10 @@ def _fill_window(
                     raw_writer=raw_writer,
                 ),
             )
-            if context.logger is not None:
-                context.logger.info(
-                    "file_download_dispatched", file_index=start,
-                    selected_file_count=count, in_flight=window.in_flight,
-                    download_concurrency=context.download_concurrency,
-                )
+            context.log_download_dispatched(
+                discovered_file, file_index=start, selected_file_count=count,
+                in_flight=window.in_flight,
+            )
         start += 1
     return start
 
@@ -171,13 +170,14 @@ def _run_concurrent_candidates(
             if not window.is_pending(file_index):
                 _skip_dead_lettered(context, ledger, discovered_file, file_index=file_index)
                 continue
+            in_flight = window.in_flight
+            wait_started = time.monotonic()
             outcome = window.take(file_index)
             try:
-                if context.logger is not None:
-                    context.logger.info(
-                        "file_download_completed", file_index=file_index,
-                        in_flight=window.in_flight + 1,
-                    )
+                context.log_download_completed(
+                    outcome, in_flight=in_flight,
+                    waited_seconds=time.monotonic() - wait_started,
+                )
                 if ledger.is_dead_lettered(discovered_file):
                     _skip_dead_lettered(context, ledger, discovered_file, file_index=file_index)
                     continue
@@ -194,12 +194,7 @@ def _run_concurrent_candidates(
                 except Exception:
                     window.stop_dispatch()
                     for drained in window.drain():
-                        if context.logger is not None:
-                            context.logger.info(
-                                "file_download_drained", file_index=drained.file_index,
-                                outcome="failed" if drained.error is not None else "downloaded",
-                                discarded=True,
-                            )
+                        context.log_download_drained(drained)
                     raise
             finally:
                 # take() transfers ownership; also clean it on a loop-thread interrupt.

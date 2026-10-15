@@ -192,6 +192,7 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     ),
     "janus.strategies.files": (
         "DiscoveredFile",
+        "FILE_CONCURRENCY_ONLY_METADATA_KEYS",
         "FileHook",
         "FileIntegrityError",
         "FileStrategy",
@@ -199,6 +200,7 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     "janus.strategies.files.core": (
         "ArchiveExtractionError",
         "DiscoveredFile",
+        "FILE_CONCURRENCY_ONLY_METADATA_KEYS",
         "FileDiscoveryError",
         "FileDownloadError",
         "FileHook",

@@ -42,6 +42,7 @@ from .download_loop import FileCandidateResult, _extract_one_file
 
 if TYPE_CHECKING:
     from .core import DiscoveredFile, FileHook
+    from .download_window import DownloadOutcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +166,65 @@ class FileExtractionContext:
             ),
         )
 
+    def log_download_dispatched(
+        self,
+        discovered_file: DiscoveredFile,
+        *,
+        file_index: int,
+        selected_file_count: int,
+        in_flight: int,
+    ) -> None:
+        if self.logger is None:
+            return
+        self.logger.info(
+            "file_download_dispatched",
+            file_index=file_index,
+            selected_file_count=selected_file_count,
+            in_flight=in_flight,
+            download_concurrency=self.download_concurrency,
+            filename=discovered_file.filename,
+            source_location=_redacted_location(discovered_file),
+        )
+
+    def log_download_completed(
+        self,
+        outcome: DownloadOutcome,
+        *,
+        in_flight: int,
+        waited_seconds: float,
+    ) -> None:
+        if self.logger is None:
+            return
+        downloaded = outcome.downloaded
+        error_fields = (
+            {"error_type": type(outcome.error).__name__} if outcome.error is not None else {}
+        )
+        self.logger.info(
+            "file_download_completed",
+            file_index=outcome.file_index,
+            outcome="failed" if outcome.error is not None else "downloaded",
+            in_flight=in_flight,
+            attempts_used=downloaded.attempts_used if downloaded is not None else None,
+            payload_size_bytes=downloaded.payload.size_bytes if downloaded is not None else None,
+            download_seconds=outcome.download_seconds,
+            waited_seconds=waited_seconds,
+            **error_fields,
+        )
+
+    def log_download_drained(self, outcome: DownloadOutcome) -> None:
+        if self.logger is None:
+            return
+        error_fields = (
+            {"error_type": type(outcome.error).__name__} if outcome.error is not None else {}
+        )
+        self.logger.info(
+            "file_download_drained",
+            file_index=outcome.file_index,
+            outcome="failed" if outcome.error is not None else "downloaded",
+            discarded=True,
+            **error_fields,
+        )
+
     def log_extraction_finished(
         self,
         totals: RunTotals,
@@ -174,9 +234,18 @@ class FileExtractionContext:
         normalization_candidate_count: int,
         dead_letter_count: int,
         dead_letter_skip_count: int,
+        download_window: DownloadWindowStats | None = None,
     ) -> None:
         if self.logger is None:
             return
+        download_fields = (
+            {
+                "download_concurrency": download_window.download_concurrency,
+                "max_in_flight_observed": download_window.max_in_flight_observed,
+            }
+            if download_window is not None
+            else {}
+        )
         self.logger.info(
             "file_extraction_finished",
             discovered_file_count=discovered_file_count,
@@ -193,6 +262,7 @@ class FileExtractionContext:
             checkpoint_value=totals.checkpoint_value,
             dead_letter_count=dead_letter_count,
             dead_letter_skipped_count=dead_letter_skip_count,
+            **download_fields,
         )
 
 
@@ -321,6 +391,7 @@ def run_file_extraction(
         normalization_candidate_count=normalization_candidate_count,
         dead_letter_count=dead_letter_count,
         dead_letter_skip_count=ledger.dead_letter_skip_count,
+        download_window=window_stats,
     )
 
     return FileExtractionOutcome(
@@ -363,6 +434,13 @@ def build_extraction_result(
     if totals.resolved_versions:
         extraction_metadata["resolved_versions"] = ",".join(totals.resolved_versions)
     extraction_metadata["raw_path_prefix"] = str(outcome.raw_path_prefix or "")
+    if outcome.download_window is not None:
+        stats = outcome.download_window
+        extraction_metadata["download_concurrency"] = str(stats.download_concurrency)
+        extraction_metadata["max_in_flight_observed"] = str(stats.max_in_flight_observed)
+        extraction_metadata["concurrent_downloads_used"] = str(
+            stats.max_in_flight_observed > 1
+        ).lower()
 
     extraction_result = ExtractionResult.from_plan(
         plan,

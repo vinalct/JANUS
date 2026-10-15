@@ -66,6 +66,15 @@ class ArchiveExtractionError(FileStrategyError):
     """Raised when an archive payload cannot be expanded safely."""
 
 
+FILE_CONCURRENCY_ONLY_METADATA_KEYS = frozenset(
+    {
+        "download_concurrency",
+        "concurrent_downloads_used",
+        "max_in_flight_observed",
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class DiscoveredFile:
     """One discovered file candidate before raw persistence."""
@@ -199,6 +208,7 @@ from janus.strategies.files.extraction import (
 )
 
 __all__ = [
+    "FILE_CONCURRENCY_ONLY_METADATA_KEYS",
     "_RETRY_POLICY",
     "ArchiveExtractionError",
     "DiscoveredFile",
