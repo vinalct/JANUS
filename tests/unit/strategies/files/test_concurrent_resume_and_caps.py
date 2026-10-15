@@ -4,25 +4,35 @@ from __future__ import annotations
 
 import http.client
 import threading
-from contextlib import contextmanager, suppress
+import zipfile
+from copy import deepcopy
 from dataclasses import replace
 from functools import wraps
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from random import Random
+from urllib.request import HTTPRedirectHandler
 
 import pytest
 
-from janus.checkpoints import CheckpointStore
-from janus.strategies.files.core import FileHook
-from janus.strategies.http import ApiClient, UrllibApiTransport
+from janus.checkpoints import CheckpointStore, DeadLetterStore
+from janus.strategies.files.core import ArchiveExtractionError, FileDownloadError, FileHook
+from janus.strategies.files.download import FileDownloader
+from janus.strategies.http import (
+    ApiClient,
+    ApiNonRetryableTransportError,
+    ApiResponseTooLargeError,
+    UrllibApiTransport,
+)
 from janus.utils.logging import redact_url
-from janus.writers import RawArtifactWriter
+from janus.writers import RawArtifactWriter, StagedWrite
 from tests.support.file_downloads import (
     ScriptedFileServer,
     UrlResponse,
     build_cnpj_fixture,
     build_flat_files_fixture,
     fingerprint_file_run,
+    serve_file_downloads,
+    serve_redirect_origins,
 )
 from tests.support.file_downloads_fixtures import deterministic_zip
 from tests.unit.strategies.files.test_concurrent_dead_letter_order import (
@@ -56,42 +66,147 @@ def _finish(leg, concurrency):
         assert_worker_downloads(leg)
 
 
+@pytest.fixture
+def dead_letter_records(monkeypatch):
+    records = []
+    loop_ident = threading.get_ident()
+    original = DeadLetterStore.record
+
+    def record(self, plan, **kwargs):
+        assert threading.get_ident() == loop_ident, "dead letter recorded outside the loop thread"
+        records.append((kwargs["metadata"]["file_index"], kwargs["error"]))
+        return original(self, plan, **kwargs)
+
+    monkeypatch.setattr(DeadLetterStore, "record", record)
+    return records
+
+
+def _download_errors(monkeypatch):
+    errors = []
+    original = FileDownloader.load_payload
+
+    def load(self, plan, discovered_file, **kwargs):
+        try:
+            return original(self, plan, discovered_file, **kwargs)
+        except FileDownloadError as exc:
+            errors.append((discovered_file.filename, exc, threading.current_thread()))
+            raise
+
+    monkeypatch.setattr(FileDownloader, "load_payload", load)
+    return errors
+
+
+def _reference_fixture(fixture, root):
+    reference = build_cnpj_fixture(root)
+    mapping = deepcopy(fixture.source_mapping)
+    mapping["outputs"] = reference.source_mapping["outputs"]
+    return replace(
+        reference,
+        source_mapping=mapping,
+        archive_urls=fixture.urls,
+        server=ScriptedFileServer(fixture.server.routes),
+    )
+
+
+def _assert_sequential_equivalence(leg, root, **strategy_options):
+    reference = run_leg(_reference_fixture(leg.fixture, root), 1, **strategy_options)
+    assert type(leg.error) is type(reference.error)
+    assert str(leg.error) == str(reference.error)
+    assert leg.fingerprint == reference.fingerprint
+    _finish(reference, 1)
+
+
 def _cap_fixture(root, cap, *, budget=5):
     fixture = build_cnpj_fixture(root, dead_letter_max_items=budget)
     routes = dict(fixture.server.routes)
-    routes[("GET", fixture.urls[5])] = [UrlResponse(200, b"x" * (cap + 1))]
+    oversized = deterministic_zip({"cap.csv": Random(25).randbytes(cap + 1)})
+    assert len(oversized) > cap
+    assert all(len(routes[("GET", url)][0].body) < cap for url in fixture.urls)
+    routes[("GET", fixture.urls[5])] = [UrlResponse(200, oversized)]
     fixture.source_mapping["access"]["limits"] = {"max_payload_bytes": cap}
     return replace(fixture, server=ScriptedFileServer(routes))
 
 
 @pytest.mark.parametrize("concurrency", CAP_CONCURRENCIES)
 @pytest.mark.parametrize("budget", [5, 0], ids=["continue", "exceed-budget"])
-def test_payload_cap_dead_letters_only_the_capped_candidate(tmp_path, concurrency, budget):
+def test_payload_cap_dead_letters_only_the_capped_candidate(
+    tmp_path, monkeypatch, concurrency, budget, dead_letter_records, record_property,
+):
+    errors = _download_errors(monkeypatch)
+    discarded = []
+    original_write = StagedWrite.write_from
+
+    def write(self, stream):
+        try:
+            return original_write(self, stream)
+        except ApiResponseTooLargeError:
+            discarded.append(self.path)
+            assert not self.path.exists(), "capped staging file survived worker cleanup"
+            raise
+
+    monkeypatch.setattr(StagedWrite, "write_from", write)
     fixture = _cap_fixture(tmp_path, 8192, budget=budget)
     leg = run_leg(fixture, concurrency)
     assert dead_letter_indices(leg) == [6]
     entry = leg.fingerprint.dead_letters["entries"][0]
     assert "max_payload_bytes=" in entry["error_message"]
     assert entry["error_type"] == "FileDownloadError"
+    assert entry["item_key"] == f"remote:{fixture.urls[5]}"
+    assert entry["metadata"]["file_index"] == "6"
+    assert len(errors) == len(discarded) == 1
+    filename, error, thread = errors[0]
+    assert filename == "Empresas5.zip"
+    assert dead_letter_records == [("6", error)]
+    if concurrency > 1:
+        assert thread.ident != threading.get_ident()
+        assert thread.name.startswith("janus-file")
+    else:
+        assert thread.ident == threading.get_ident()
+    record_property("cap_error_thread", thread.name)
+    record_property("dead_letter_thread", threading.current_thread().name)
     if budget:
         assert leg.error is None
         assert leg.result.metadata_as_dict()["persisted_file_count"] == "9"
         assert len(committed_archives(leg)) == 9
     else:
-        assert leg.error is not None
-        reference = run_leg(_cap_fixture(tmp_path / "reference", 8192, budget=0), 1)
-        assert type(leg.error) is type(reference.error)
-        assert str(leg.error) == str(reference.error)
-        assert leg.fingerprint == reference.fingerprint
+        assert leg.error is error
         assert len(committed_archives(leg)) == 5
+        requests = download_requests(leg)
+        expected = fixture.urls[:9 if concurrency > 1 else 6]
+        assert {request.url for request in requests} == {redact_url(url) for url in expected}
+        answered = {answer.url for answer in fixture.server.completions}
+        assert all(request.url in answered for request in requests)
     _finish(leg, concurrency)
+    _assert_sequential_equivalence(leg, tmp_path / "reference")
 
 
 @pytest.mark.parametrize("concurrency", CAP_CONCURRENCIES)
 @pytest.mark.parametrize("limit", ["member", "total", "ratio"])
 def test_archive_caps_apply_to_one_candidate_after_original_archive_commit(
-    tmp_path, concurrency, limit
+    tmp_path, monkeypatch, concurrency, limit, dead_letter_records, record_property,
 ):
+    import janus.strategies.files.archives as archives
+
+    checks, opened = [], []
+    original_check = archives._check_archive_limits
+    original_open = zipfile.ZipFile.open
+    loop_ident = threading.get_ident()
+
+    def check(*args, **kwargs):
+        assert threading.get_ident() == loop_ident, "archive cap checked outside the loop thread"
+        try:
+            return original_check(*args, **kwargs)
+        except ArchiveExtractionError as exc:
+            checks.append(exc)
+            raise
+
+    def open_member(self, name, *args, **kwargs):
+        if self.mode == "r":
+            opened.append(name.filename if isinstance(name, zipfile.ZipInfo) else name)
+        return original_open(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(archives, "_check_archive_limits", check)
+    monkeypatch.setattr(zipfile.ZipFile, "open", open_member)
     fixture = build_cnpj_fixture(tmp_path)
     member = b"a" * 32768
     limits = {
@@ -109,45 +224,22 @@ def test_archive_caps_apply_to_one_candidate_after_original_archive_commit(
     leg = run_leg(fixture, concurrency)
     assert leg.error is None
     assert dead_letter_indices(leg) == [4]
-    assert leg.fingerprint.dead_letters["entries"][0]["error_type"] == "ArchiveExtractionError"
+    entry = leg.fingerprint.dead_letters["entries"][0]
+    assert entry["error_type"] == "ArchiveExtractionError"
+    assert entry["item_key"] == f"remote:{fixture.urls[3]}"
+    assert len(checks) == 1
+    assert dead_letter_records == [("4", checks[0])]
+    assert not members.keys() & set(opened), "capped archive member was opened"
     assert leg.result.metadata_as_dict()["persisted_file_count"] == "9"
     assert (
         len(committed_archives(leg)) == 10
     )  # Persist precedes expansion in the sequential contract.
+    assert "downloads/current/Empresas3.zip" in committed_archives(leg)
     assert not [path for path in leg.fingerprint.raw_tree if "extracted/current/Empresas3/" in path]
     _finish(leg, concurrency)
-
-
-@contextmanager
-def _serve(answer):
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            response = answer(
-                self.path, {key.lower(): value for key, value in self.headers.items()}
-            )
-            self.send_response(response.status_code)
-            headers = dict(response.headers)
-            headers.setdefault("Content-Length", str(len(response.body)))
-            for key, value in headers.items():
-                self.send_header(key, value)
-            self.end_headers()
-            # Declared-length rejection closes before the body is read.
-            with suppress(BrokenPipeError, ConnectionResetError):
-                self.wfile.write(response.body)
-
-        def log_message(self, format, *args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(5)
-        assert not thread.is_alive()
+    record_property("archive_cap_thread", threading.current_thread().name)
+    record_property("rejected_members_opened", 0)
+    _assert_sequential_equivalence(leg, tmp_path / "reference")
 
 
 def _listing():
@@ -175,7 +267,7 @@ def _stream_threads(monkeypatch):
 
     @wraps(original)
     def stream(self, request):
-        identities.append(threading.get_ident())
+        identities.append(threading.current_thread())
         return original(self, request)
 
     monkeypatch.setattr(ApiClient, "stream", stream)
@@ -185,16 +277,22 @@ def _stream_threads(monkeypatch):
 def _assert_real_workers(identities, concurrency):
     assert identities
     if concurrency > 1:
-        assert all(ident != threading.get_ident() for ident in identities), (
+        assert all(thread.ident != threading.get_ident() for thread in identities), (
             "real transport downloads still ran on the loop thread"
         )
+        assert all(thread.name.startswith("janus-file") for thread in identities)
+    else:
+        assert all(thread.ident == threading.get_ident() for thread in identities)
 
 
 @pytest.mark.parametrize("concurrency", CAP_CONCURRENCIES)
-def test_declared_length_is_refused_before_body_read_or_staging(tmp_path, monkeypatch, concurrency):
+def test_declared_length_is_refused_before_body_read_or_staging(
+    tmp_path, monkeypatch, concurrency, dead_letter_records,
+):
     fixture = build_cnpj_fixture(tmp_path)
     bodies = _bodies(fixture)
     reads, staging = [], []
+    errors = _download_errors(monkeypatch)
     original_read = http.client.HTTPResponse.read
     original_stage = RawArtifactWriter.begin_staged_write
 
@@ -203,12 +301,23 @@ def test_declared_length_is_refused_before_body_read_or_staging(tmp_path, monkey
             reads.append(True)
         return original_read(self, *args, **kwargs)
 
+    download_context = threading.local()
+    original_load = FileDownloader.load_payload
+
+    def load(self, plan, discovered_file, **kwargs):
+        download_context.filename = discovered_file.filename
+        try:
+            return original_load(self, plan, discovered_file, **kwargs)
+        finally:
+            del download_context.filename
+
     def stage(self, *args, **kwargs):
-        staging.append(True)
+        staging.append(download_context.filename)
         return original_stage(self, *args, **kwargs)
 
     monkeypatch.setattr(http.client.HTTPResponse, "read", read)
     monkeypatch.setattr(RawArtifactWriter, "begin_staged_write", stage)
+    monkeypatch.setattr(FileDownloader, "load_payload", load)
     identities = _stream_threads(monkeypatch)
 
     def answer(path, headers):
@@ -220,128 +329,158 @@ def test_declared_length_is_refused_before_body_read_or_staging(tmp_path, monkey
             )
         return bodies[path]
 
-    with _serve(answer) as base:
+    with serve_file_downloads(answer) as base:
         fixture = _real_fixture(fixture, base)
         fixture.source_mapping["access"]["limits"] = {"max_payload_bytes": 8192}
         leg = run_leg(fixture, concurrency, transport_factory=UrllibApiTransport)
-    assert leg.error is None
-    assert dead_letter_indices(leg) == [3]
-    assert "max_payload_bytes=" in leg.fingerprint.dead_letters["entries"][0]["error_message"]
-    assert leg.result.metadata_as_dict()["persisted_file_count"] == "9"
-    assert reads == [] and len(staging) == 9
+        assert leg.error is None
+        assert dead_letter_indices(leg) == [3]
+        entry = leg.fingerprint.dead_letters["entries"][0]
+        assert "max_payload_bytes=" in entry["error_message"]
+        assert entry["item_key"] == f"remote:{fixture.urls[2]}"
+        assert entry["error_type"] == "FileDownloadError"
+        assert len(errors) == 1
+        assert dead_letter_records == [("3", errors[0][1])]
+        assert leg.result.metadata_as_dict()["persisted_file_count"] == "9"
+        assert len(committed_archives(leg)) == 9
+        assert reads == [] and len(staging) == 9
+        assert set(staging) == {f"Empresas{index}.zip" for index in range(10) if index != 2}
+        _assert_real_workers(identities, concurrency)
+        _assert_sequential_equivalence(
+            leg, tmp_path / "reference", transport_factory=UrllibApiTransport,
+        )
     assert_no_staging(fixture)
-    _assert_real_workers(identities, concurrency)
 
 
 @pytest.mark.parametrize("concurrency", CAP_CONCURRENCIES)
 def test_cross_origin_redirects_strip_auth_and_preserve_archive_bytes(
-    tmp_path, monkeypatch, concurrency
+    tmp_path, monkeypatch, concurrency, record_property,
 ):
     fixture = build_cnpj_fixture(tmp_path)
     bodies = _bodies(fixture)
-    received, active, peaks = [], set(), []
-    lock, overlap = threading.Lock(), threading.Event()
     identities = _stream_threads(monkeypatch)
     monkeypatch.setenv("ORDER25_TEST_KEY", "fixture-secret")
 
-    def destination(path, headers):
-        with lock:
-            received.append(headers)
-            active.add(path)
-            peaks.append(len(active))
-            if len(active) >= 2:
-                overlap.set()
-            wait_for_overlap = concurrency > 1 and not overlap.is_set()
-        try:
-            # The first arriving request can be any initial candidate; waiting only
-            # on index 1 deadlocks if its peers have already answered.
-            if wait_for_overlap:
-                assert overlap.wait(5), "redirected downloads did not overlap"
-            return bodies[path]
-        finally:
-            with lock:
-                active.remove(path)
-
-    with _serve(destination) as destination_base:
-
-        def origin(path, headers):
-            if path == "/":
-                return _listing()
-            return UrlResponse(302, b"", (("Location", destination_base + path),))
-
-        with _serve(origin) as base:
-            fixture = _real_fixture(fixture, base)
-            fixture.source_mapping["access"]["auth"] = {
-                "type": "header_token",
-                "header_name": "X-Api-Key",
-                "env_var": "ORDER25_TEST_KEY",
-            }
-            leg = run_leg(fixture, concurrency, transport_factory=UrllibApiTransport)
-    if concurrency > 1:
-        assert max(peaks) >= 2, "redirected downloads did not overlap"
-    assert leg.error is None
-    assert len(received) == 10
-    assert all(
-        "x-api-key" not in headers and "authorization" not in headers for headers in received
-    )
-    assert len(committed_archives(leg)) == 10
-    for artifact in leg.result.artifacts:
-        path = Path(artifact.path)
-        if path.suffix == ".zip":
-            assert path.read_bytes() == bodies[f"/{path.name}"].body
+    with serve_redirect_origins(bodies, _listing(), require_overlap=concurrency > 1) as server:
+        fixture = _real_fixture(fixture, server.origin_url)
+        fixture.source_mapping["access"]["auth"] = {
+            "type": "header_token",
+            "header_name": "X-Api-Key",
+            "env_var": "ORDER25_TEST_KEY",
+        }
+        leg = run_leg(fixture, concurrency, transport_factory=UrllibApiTransport)
+        if concurrency > 1:
+            assert server.max_in_flight >= 2, "redirected downloads did not overlap"
+        assert leg.error is None
+        assert len(server.origin_headers) == len(server.destination_headers) == 10
+        assert all(
+            headers.get("x-api-key") == "fixture-secret" for headers in server.origin_headers
+        )
+        assert all(
+            "x-api-key" not in headers and "authorization" not in headers
+            for headers in server.destination_headers
+        )
+        assert len(committed_archives(leg)) == 10
+        for artifact in leg.result.artifacts:
+            path = Path(artifact.path)
+            if path.suffix == ".zip":
+                assert path.read_bytes() == bodies[f"/{path.name}"].body
+        _assert_real_workers(identities, concurrency)
+        record_property("redirect_destination_peak", server.max_in_flight)
+        record_property("redirect_credentials_leaked", 0)
+        _assert_sequential_equivalence(
+            leg, tmp_path / "reference", transport_factory=UrllibApiTransport,
+        )
     assert_no_staging(fixture)
-    _assert_real_workers(identities, concurrency)
 
 
 @pytest.mark.parametrize("concurrency", CAP_CONCURRENCIES)
-def test_redirect_hop_limit_dead_letters_only_that_candidate(tmp_path, monkeypatch, concurrency):
+def test_redirect_hop_limit_dead_letters_only_that_candidate(
+    tmp_path, monkeypatch, concurrency, dead_letter_records,
+):
     fixture = build_cnpj_fixture(tmp_path)
     bodies = _bodies(fixture)
     identities = _stream_threads(monkeypatch)
+    errors = _download_errors(monkeypatch)
+    hops = []
 
     def answer(path, headers):
         if path == "/":
             return _listing()
         if path.startswith("/Empresas1.zip"):
+            hops.append(path)
             hop = int(path.split("?")[-1]) if "?" in path else 0
             return UrlResponse(302, b"", (("Location", f"/Empresas1.zip?{hop + 1}"),))
         return bodies[path]
 
-    with _serve(answer) as base:
+    with serve_file_downloads(answer) as base:
         fixture = _real_fixture(fixture, base)
         fixture.source_mapping["access"]["limits"] = {"max_redirects": 2}
         leg = run_leg(fixture, concurrency, transport_factory=UrllibApiTransport)
-    assert leg.error is None
-    assert dead_letter_indices(leg) == [2]
-    assert "max_redirects" in leg.fingerprint.dead_letters["entries"][0]["error_message"]
-    assert len(committed_archives(leg)) == 9
+        assert leg.error is None
+        assert dead_letter_indices(leg) == [2]
+        entry = leg.fingerprint.dead_letters["entries"][0]
+        assert "max_redirects" in entry["error_message"]
+        assert entry["item_key"] == f"remote:{fixture.urls[1]}"
+        assert len(errors) == 1
+        assert isinstance(errors[0][1].__cause__, ApiNonRetryableTransportError)
+        assert dead_letter_records == [("2", errors[0][1])]
+        assert hops == ["/Empresas1.zip", "/Empresas1.zip?1", "/Empresas1.zip?2"]
+        assert len(committed_archives(leg)) == 9
+        _assert_real_workers(identities, concurrency)
+        _assert_sequential_equivalence(
+            leg, tmp_path / "reference", transport_factory=UrllibApiTransport,
+        )
     assert_no_staging(fixture)
-    _assert_real_workers(identities, concurrency)
 
 
 @pytest.mark.parametrize("concurrency", CAP_CONCURRENCIES)
-def test_each_real_opener_uses_the_existing_redirect_policy(tmp_path, monkeypatch, concurrency):
+def test_each_real_opener_uses_the_existing_redirect_policy(
+    tmp_path, monkeypatch, concurrency, record_property,
+):
     import janus.strategies.http.transport as transport
 
     fixture = build_cnpj_fixture(tmp_path)
     bodies = _bodies(fixture)
-    handlers = []
+    handlers, openers, opener_threads = [], [], []
     original = transport._build_opener
 
     def build(context, *, redirect_handler):
         handlers.append(redirect_handler)
-        return original(context, redirect_handler=redirect_handler)
+        opener_threads.append(threading.current_thread())
+        opener = original(context, redirect_handler=redirect_handler)
+        openers.append(opener)
+        return opener
 
     monkeypatch.setattr(transport, "_build_opener", build)
     identities = _stream_threads(monkeypatch)
-    with _serve(lambda path, headers: _listing() if path == "/" else bodies[path]) as base:
+
+    def answer(path, headers):
+        return _listing() if path == "/" else bodies[path]
+
+    with serve_file_downloads(answer) as base:
         leg = run_leg(
             _real_fixture(fixture, base), concurrency, transport_factory=UrllibApiTransport
         )
-    assert leg.error is None
-    assert all(isinstance(handler, transport.JanusRedirectHandler) for handler in handlers)
-    assert len(handlers) == (11 if concurrency > 1 else 1)
-    _assert_real_workers(identities, concurrency)
+        assert leg.error is None
+        assert all(isinstance(handler, transport.JanusRedirectHandler) for handler in handlers)
+        assert len(handlers) == (11 if concurrency > 1 else 1)
+        for opener in openers:
+            redirect_handlers = [
+                handler for handler in opener.handlers
+                if isinstance(handler, HTTPRedirectHandler)
+            ]
+            assert len(redirect_handlers) == 1
+            assert isinstance(redirect_handlers[0], transport.JanusRedirectHandler)
+        assert opener_threads[0].ident == threading.get_ident()
+        if concurrency > 1:
+            assert all(thread.name.startswith("janus-file") for thread in opener_threads[1:])
+        record_property("janus_redirect_openers", len(openers))
+        _assert_real_workers(identities, concurrency)
+        _assert_sequential_equivalence(
+            leg, tmp_path / "reference", transport_factory=UrllibApiTransport,
+        )
+    assert_no_staging(leg.fixture)
 
 
 @pytest.mark.parametrize("concurrency", CAP_CONCURRENCIES)
@@ -363,8 +502,11 @@ def test_hostile_listing_keeps_the_same_allowed_candidates(tmp_path, concurrency
     assert leg.error is None
     assert {request.url for request in download_requests(leg)} == {redact_url(url) for url in urls}
     assert leg.result.metadata_as_dict()["discovered_file_count"] == "4"
+    assert leg.fingerprint.dead_letters is None
+    assert len(fixture.server.requests) == 5
     assert fixture.server.requests[0].thread_ident == threading.get_ident()
     _finish(leg, concurrency)
+    _assert_sequential_equivalence(leg, tmp_path / "reference")
 
 
 def _carry_over(fixture, concurrency):

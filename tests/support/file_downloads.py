@@ -4,10 +4,12 @@ import argparse
 import json
 import tempfile
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from hashlib import sha256
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,7 @@ __all__ = [
     "CnpjFixture",
     "FileRunFingerprint",
     "RecordedRequest",
+    "RedirectFileServer",
     "ScriptedFileServer",
     "ScriptedFileTransport",
     "UrlResponse",
@@ -35,6 +38,8 @@ __all__ = [
     "build_cnpj_fixture",
     "build_flat_files_fixture",
     "fingerprint_file_run",
+    "serve_file_downloads",
+    "serve_redirect_origins",
 ]
 
 GATE_TIMEOUT_SECONDS = 5
@@ -56,6 +61,104 @@ class UrlResponse:
 
 
 type UrlScript = Sequence[UrlResponse | Exception]
+
+
+@contextmanager
+def serve_file_downloads(
+    answer: Callable[[str, dict[str, str]], UrlResponse],
+) -> Iterator[str]:
+    """Serve real HTTP on loopback, propagating handler failures to the test thread."""
+    errors: list[Exception] = []
+    lock = threading.Lock()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            try:
+                response = answer(
+                    self.path, {key.lower(): value for key, value in self.headers.items()}
+                )
+            except Exception as exc:
+                with lock:
+                    errors.append(exc)
+                response = UrlResponse(500, b"loopback handler failed")
+            self.send_response(response.status_code)
+            headers = dict(response.headers)
+            headers.setdefault("Content-Length", str(len(response.body)))
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.end_headers()
+            # Declared-length rejection closes the response without reading its body.
+            with suppress(BrokenPipeError, ConnectionResetError):
+                self.wfile.write(response.body)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(
+        target=lambda: server.serve_forever(poll_interval=0.01), daemon=True
+    )
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(GATE_TIMEOUT_SECONDS)
+        assert not thread.is_alive(), "loopback server did not shut down"
+    if errors:
+        raise AssertionError("loopback handler failed") from errors[0]
+
+
+@dataclass(slots=True)
+class RedirectFileServer:
+    """The two loopback origins and the headers observed before and after redirecting."""
+
+    origin_url: str = ""
+    destination_url: str = ""
+    origin_headers: list[dict[str, str]] = field(default_factory=list)
+    destination_headers: list[dict[str, str]] = field(default_factory=list)
+    max_in_flight: int = 0
+
+
+@contextmanager
+def serve_redirect_origins(
+    bodies: Mapping[str, UrlResponse], listing: UrlResponse, *, require_overlap: bool = False,
+) -> Iterator[RedirectFileServer]:
+    """Redirect archive URLs to another port; events prove concurrent arrivals at B."""
+    observed = RedirectFileServer()
+    lock, overlap = threading.Lock(), threading.Event()
+    active = 0
+
+    def destination(path: str, headers: dict[str, str]) -> UrlResponse:
+        nonlocal active
+        with lock:
+            observed.destination_headers.append(headers)
+            active += 1
+            observed.max_in_flight = max(observed.max_in_flight, active)
+            if active >= 2:
+                overlap.set()
+        try:
+            if require_overlap:
+                assert overlap.wait(GATE_TIMEOUT_SECONDS), "redirected downloads did not overlap"
+            return bodies[path]
+        finally:
+            with lock:
+                active -= 1
+
+    def origin(path: str, headers: dict[str, str]) -> UrlResponse:
+        if path == "/":
+            return listing
+        assert path in bodies, f"Unscripted redirect URL: {path}"
+        with lock:
+            observed.origin_headers.append(headers)
+        return UrlResponse(302, b"", (("Location", observed.destination_url + path),))
+
+    with serve_file_downloads(destination) as destination_url:
+        observed.destination_url = destination_url
+        with serve_file_downloads(origin) as origin_url:
+            observed.origin_url = origin_url
+            yield observed
 
 
 @dataclass(frozen=True, slots=True)
