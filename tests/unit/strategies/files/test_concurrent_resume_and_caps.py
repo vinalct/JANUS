@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import http.client
+import json
+import logging
 import threading
 import zipfile
 from copy import deepcopy
@@ -23,14 +25,16 @@ from janus.strategies.http import (
     ApiResponseTooLargeError,
     UrllibApiTransport,
 )
-from janus.utils.logging import redact_url
+from janus.utils.logging import StructuredLogger, redact_url
 from janus.writers import RawArtifactWriter, StagedWrite
 from tests.support.file_downloads import (
+    FileRunSpec,
     ScriptedFileServer,
     UrlResponse,
     build_cnpj_fixture,
     build_flat_files_fixture,
     fingerprint_file_run,
+    run_twice,
     serve_file_downloads,
     serve_redirect_origins,
 )
@@ -42,7 +46,6 @@ from tests.unit.strategies.files.test_concurrent_dead_letter_order import (
     dead_letter_indices,
     download_requests,
     run_leg,
-    seed_dead_letters,
 )
 
 CAP_CONCURRENCIES = [1, 4]
@@ -509,116 +512,211 @@ def test_hostile_listing_keeps_the_same_allowed_candidates(tmp_path, concurrency
     _assert_sequential_equivalence(leg, tmp_path / "reference")
 
 
-def _carry_over(fixture, concurrency):
-    first = run_leg(fixture, concurrency, run_id="first")
-    assert first.error is None
-    assert dead_letter_indices(first) == [3, 7]
-    healthy = build_cnpj_fixture(fixture.storage_layout.project_root)
-    return replace(fixture, server=healthy.server), first
-
-
-@pytest.mark.parametrize("concurrency", RESUME_CONCURRENCIES)
-def test_resume_carries_over_dead_letters_and_skips_their_requests(tmp_path, concurrency):
-    fixture, _ = _carry_over(
-        build_cnpj_fixture(tmp_path, failing={3: FAILURE, 7: FAILURE}), concurrency
-    )
-    leg = run_leg(fixture, concurrency, run_id="second", resume=True)
-    assert leg.error is None
-    assert dead_letter_indices(leg) == [3, 7]
-    assert len(download_requests(leg)) == 8
-    assert not {redact_url(fixture.urls[index - 1]) for index in (3, 7)} & {
-        request.url for request in download_requests(leg)
-    }
-    metadata = leg.result.metadata_as_dict()
-    assert metadata["dead_letter_count"] == metadata["dead_letter_skipped_count"] == "2"
-    assert metadata["persisted_file_count"] == "8"
-    reference_fixture, _ = _carry_over(
-        build_cnpj_fixture(tmp_path / "reference", failing={3: FAILURE, 7: FAILURE}), 1
-    )
-    reference = run_leg(reference_fixture, 1, run_id="second", resume=True)
-    assert leg.fingerprint == reference.fingerprint
-    _finish(leg, concurrency)
-
-
-@pytest.mark.parametrize("concurrency", RESUME_CONCURRENCIES)
-def test_resume_without_prior_dead_letters_behaves_like_a_fresh_run(tmp_path, concurrency):
-    leg = run_leg(build_cnpj_fixture(tmp_path), concurrency, resume=True)
-    reference = run_leg(build_cnpj_fixture(tmp_path / "reference"), 1)
-    assert leg.error is reference.error is None
-    assert leg.fingerprint == reference.fingerprint
-    assert len(download_requests(leg)) == 10
-    _finish(leg, concurrency)
-
-
-@pytest.mark.parametrize("concurrency", RESUME_CONCURRENCIES)
-def test_resume_budget_includes_the_carried_over_entries(tmp_path, concurrency):
-    fixture, _ = _carry_over(
-        build_cnpj_fixture(tmp_path, failing={3: FAILURE, 7: FAILURE}), concurrency
-    )
+def _failing_routes(fixture, indices):
     routes = dict(fixture.server.routes)
-    routes[("GET", fixture.urls[4])] = [FAILURE]
-    fixture = replace(fixture, server=ScriptedFileServer(routes))
-    fixture.source_mapping["extraction"]["dead_letter_max_items"] = 2
-    leg = run_leg(fixture, concurrency, run_id="second", resume=True)
-    assert leg.error is not None
-    assert dead_letter_indices(leg) == [3, 7, 5]
-    assert len(committed_archives(leg)) == 3
+    for index in indices:
+        routes[("GET", fixture.urls[index - 1])] = [FAILURE]
+    return routes
+
+
+def _request_indices(leg):
+    indices = {redact_url(url): index for index, url in enumerate(leg.fixture.urls, 1)}
+    return sorted(
+        indices[request.url] for request in leg.requests
+        if request.method == "GET" and request.url in indices
+    )
+
+
+def _state_documents(leg):
+    documents = {}
+    for name, payload in leg.state_files:
+        document = json.loads(payload)
+        # Keep run identity, filenames and all state values; only wall-clock writes vary.
+        document.pop("updated_at", None)
+        document.pop("recorded_at", None)
+        for entry in document.get("entries", ()):
+            entry.pop("recorded_at", None)
+        documents[name] = document
+    return documents
+
+
+def _assert_two_run_equivalence(actual, reference, concurrency):
+    for leg, sequential in zip(actual, reference, strict=True):
+        assert type(leg.error) is type(sequential.error)
+        assert str(leg.error) == str(sequential.error)
+        assert leg.fingerprint == sequential.fingerprint
+        assert _state_documents(leg) == _state_documents(sequential)
+        assert leg.staging_paths == sequential.staging_paths == ()
+        _finish(leg, concurrency)
+        _finish(sequential, 1)
+
+
+def _assert_resume_counters(leg, *, persisted, skipped=0, dead=0, dead_skipped=0):
+    assert leg.error is None
+    assert leg.plan.run_context.attributes_as_dict()["resume"] == "true"
+    metadata = leg.result.metadata_as_dict()
+    assert metadata["persisted_file_count"] == str(persisted)
+    assert metadata["skipped_file_count"] == str(skipped)
+    assert metadata["dead_letter_count"] == str(dead)
+    assert metadata["dead_letter_skipped_count"] == str(dead_skipped)
+    assert metadata["selected_file_count"] == "10"
+    assert leg.result.records_extracted == persisted
     assert all(
-        Path(path).name in {"Empresas0.zip", "Empresas1.zip", "Empresas3.zip"}
-        for path in committed_archives(leg)
+        f"/run_id={leg.plan.run_context.run_id}/" in artifact.path
+        and Path(artifact.path).is_file() for artifact in leg.result.artifacts
     )
-    reference_fixture = build_cnpj_fixture(tmp_path / "reference", failing={5: FAILURE})
-    reference_fixture.source_mapping["extraction"]["dead_letter_max_items"] = 2
-    # Same carried-over entries and error text as the first run above.
-    first_reference = run_leg(
-        build_cnpj_fixture(tmp_path / "reference", failing={3: FAILURE, 7: FAILURE}),
-        1,
-        run_id="first",
+
+
+def _record_resume_counters(leg, record_property):
+    record_property("resume_counters", json.dumps({
+        key: value for key, value in leg.fingerprint.extraction_metadata.items()
+        if key.endswith("_count")
+    }, sort_keys=True))
+    record_property("requested_candidates", json.dumps(_request_indices(leg)))
+    record_property("dead_letter_indices", json.dumps(dead_letter_indices(leg)))
+    record_property("committed_archives", json.dumps(committed_archives(leg)))
+
+
+def _carry_over_runs(root, concurrency, *, exceed_budget=False, logger=None):
+    fixture = build_cnpj_fixture(root)
+    return run_twice(
+        fixture, concurrency=concurrency,
+        first=FileRunSpec(
+            routes=_failing_routes(fixture, (3, 7)),
+            reverse_completion_indices=(1, 2, 3, 4),
+        ),
+        second=FileRunSpec(
+            resume=True, dead_letter_max_items=2 if exceed_budget else 5,
+            routes=_failing_routes(fixture, (5,)) if exceed_budget else None,
+            expected_error=FileDownloadError if exceed_budget else None,
+            reverse_completion_indices=(1, 2, 4, 5), logger=logger,
+        ),
     )
-    assert first_reference.error is None
-    reference = run_leg(reference_fixture, 1, run_id="second", resume=True)
-    assert type(leg.error) is type(reference.error)
-    assert str(leg.error) == str(reference.error)
+
+
+@pytest.mark.parametrize("concurrency", RESUME_CONCURRENCIES)
+def test_resume_carries_over_dead_letters_and_skips_their_requests(
+    tmp_path, concurrency, record_property,
+):
+    first, leg = runs = _carry_over_runs(tmp_path, concurrency)
+    assert dead_letter_indices(first) == dead_letter_indices(leg) == [3, 7]
+    assert _request_indices(first) == list(range(1, 11))
+    assert _request_indices(leg) == [1, 2, 4, 5, 6, 8, 9, 10]
+    assert first.result.metadata_as_dict()["persisted_file_count"] == "8"
+    _assert_resume_counters(leg, persisted=8, dead=2, dead_skipped=2)
+    assert len(committed_archives(leg)) == 8
+    # Loading and skipping carried-over keys must preserve the actual state file bytes.
+    assert first.state_files == leg.state_files
+    assert first.plan.run_context.attributes_as_dict().get("resume") is None
+    assert first.plan.metadata_output == leg.plan.metadata_output
+    assert {first.plan.run_context.run_id, leg.plan.run_context.run_id} == {"first", "second"}
+    assert fingerprint_file_run(first.strategy, first.plan, first.result) == first.fingerprint
+    _assert_two_run_equivalence(runs, _carry_over_runs(tmp_path / "reference", 1), concurrency)
+    _record_resume_counters(leg, record_property)
+
+
+@pytest.mark.parametrize("concurrency", RESUME_CONCURRENCIES)
+def test_resume_without_prior_dead_letters_behaves_like_a_fresh_run(
+    tmp_path, concurrency, record_property,
+):
+    fixture = build_cnpj_fixture(tmp_path)
+    plan = fixture.build_plan("fresh", concurrency=concurrency, resume=True)
+    assert not DeadLetterStore().path(plan).exists()
+    leg = run_leg(fixture, concurrency, run_id="fresh", resume=True)
+    reference = run_leg(build_cnpj_fixture(tmp_path / "reference"), 1, run_id="fresh")
+    _assert_resume_counters(leg, persisted=10)
     assert leg.fingerprint == reference.fingerprint
+    assert len(committed_archives(leg)) == len(download_requests(leg)) == 10
+    assert leg.fingerprint.dead_letters is None
+    assert not DeadLetterStore().path(leg.plan).exists()
     _finish(leg, concurrency)
+    _finish(reference, 1)
+    record_property(
+        "resume_counters", json.dumps(leg.fingerprint.extraction_metadata, sort_keys=True),
+    )
+
+
+@pytest.mark.parametrize("concurrency", RESUME_CONCURRENCIES)
+def test_resume_budget_includes_the_carried_over_entries(
+    tmp_path, concurrency, caplog, record_property, dead_letter_records,
+):
+    logger = StructuredLogger(logging.getLogger(__name__))
+    with caplog.at_level(logging.INFO, logger=__name__):
+        first, leg = runs = _carry_over_runs(
+            tmp_path, concurrency, exceed_budget=True, logger=logger,
+        )
+    assert isinstance(leg.error, FileDownloadError)
+    assert [index for index, _ in dead_letter_records] == ["3", "7", "5"]
+    assert dead_letter_records[-1][1] is leg.error
+    assert dead_letter_indices(first) == [3, 7]
+    assert dead_letter_indices(leg) == [3, 7, 5]
+    assert dict(first.state_files)["dead_letters/current.json"] != (
+        dict(leg.state_files)["dead_letters/current.json"]
+    )
+    assert leg.fingerprint.dead_letters["entries"][:2] == first.fingerprint.dead_letters["entries"]
+    assert {Path(path).name for path in committed_archives(leg)} == {
+        "Empresas0.zip", "Empresas1.zip", "Empresas3.zip",
+    }
+    requested = [1, 2, 4, 5, 6, 8, 9] if concurrency > 1 else [1, 2, 4, 5]
+    assert _request_indices(leg) == requested
+    assert {request.url for request in leg.requests} == {answer.url for answer in leg.completions}
+    drained = [
+        record.event_fields["file_index"] for record in caplog.records
+        if record.getMessage() == "file_download_drained"
+    ]
+    # D-4: carried-over key 7 never occupies a slot; the eligible tail is 6, 8, 9.
+    assert drained == ([6, 8, 9] if concurrency > 1 else [])
+    assert first.fingerprint.raw_tree == fingerprint_file_run(
+        first.strategy, first.plan, first.result,
+    ).raw_tree
+    reference = _carry_over_runs(tmp_path / "reference", 1, exceed_budget=True)
+    _assert_two_run_equivalence(runs, reference, concurrency)
+    _record_resume_counters(leg, record_property)
 
 
 @pytest.mark.parametrize("concurrency", RESUME_CONCURRENCIES)
 def test_interrupt_then_resume_redownloads_successes_under_the_new_run_prefix(
-    tmp_path, concurrency
+    tmp_path, concurrency, record_property,
 ):
+    loop_thread = threading.get_ident()
+
     class InterruptHook(FileHook):
         def resolve_version(self, plan, discovered_file):
+            assert threading.get_ident() == loop_thread
             if discovered_file.filename == "Empresas3.zip":
                 raise KeyboardInterrupt("candidate 4")
 
-    fixture = build_cnpj_fixture(tmp_path)
-    strategy = fixture.build_strategy()
-    first_plan = fixture.build_plan("first", concurrency=concurrency)
-    with pytest.raises(KeyboardInterrupt, match="candidate 4"):
-        strategy.extract(first_plan, hook=InterruptHook())
-    before = fingerprint_file_run(strategy, first_plan, None)
-    assert len([path for path in before.raw_tree if path.endswith(".zip")]) == 3
-    assert_no_staging(fixture)
-    assert fixture.server.opened == fixture.server.closed
-    fixture.server.requests.clear()
-    leg = run_leg(fixture, concurrency, run_id="second", resume=True)
-    # D-9: resume has no persisted-candidate rediscovery. All successes are requested again.
-    assert len(download_requests(leg)) == 10
-    assert leg.error is None
+    def interrupted_runs(root, workers):
+        return run_twice(
+            build_cnpj_fixture(root), concurrency=workers,
+            first=FileRunSpec(
+                hook=InterruptHook(), expected_error=KeyboardInterrupt,
+                reverse_completion_indices=(1, 2, 3, 4),
+            ),
+            second=FileRunSpec(resume=True, reverse_completion_indices=(1, 2, 3, 4)),
+        )
+
+    first, leg = runs = interrupted_runs(tmp_path, concurrency)
+    assert str(first.error) == "candidate 4"
+    assert first.staging_paths == ()
+    assert {Path(path).name for path in committed_archives(first)} == {
+        "Empresas0.zip", "Empresas1.zip", "Empresas2.zip",
+    }
+    raw_root = first.fixture.storage_layout.resolve_output(first.plan, "raw").resolved_path
+    zip_paths = list(raw_root.rglob("*.zip"))
+    assert len(zip_paths) == 13
+    assert sum("/run_id=first/" in str(path) for path in zip_paths) == 3
+    assert sum("/run_id=second/" in str(path) for path in zip_paths) == 10
+    # D-9: resume has no persisted-candidate rediscovery. All ten are requested again,
+    # including archives 1..3 committed before the loop-thread interrupt at candidate 4.
+    assert _request_indices(leg) == list(range(1, 11))
+    _assert_resume_counters(leg, persisted=10)
     assert len(committed_archives(leg)) == 10
-    assert leg.fingerprint.dead_letters == before.dead_letters
-    assert all("run_id=second" in artifact.path for artifact in leg.result.artifacts)
-    assert fingerprint_file_run(strategy, first_plan, None) == before
-    reference_fixture = build_cnpj_fixture(tmp_path / "reference")
-    reference_strategy = reference_fixture.build_strategy()
-    reference_plan = reference_fixture.build_plan("first")
-    with pytest.raises(KeyboardInterrupt, match="candidate 4"):
-        reference_strategy.extract(reference_plan, hook=InterruptHook())
-    assert fingerprint_file_run(reference_strategy, reference_plan, None) == before
-    reference = run_leg(reference_fixture, 1, run_id="second", resume=True)
-    assert leg.fingerprint == reference.fingerprint
-    _finish(leg, concurrency)
+    assert first.fingerprint.dead_letters is leg.fingerprint.dead_letters is None
+    assert first.state_files == leg.state_files == ()
+    assert fingerprint_file_run(first.strategy, first.plan, None) == first.fingerprint
+    _assert_two_run_equivalence(runs, interrupted_runs(tmp_path / "reference", 1), concurrency)
+    _record_resume_counters(leg, record_property)
 
 
 class MonthlyVersionHook(FileHook):
@@ -639,8 +737,25 @@ def _versioned_fixture(root):
     fixture.source_mapping["extraction"].update(
         mode="incremental", checkpoint_strategy="max_value", checkpoint_field="publication_version"
     )
-    CheckpointStore().save(fixture.build_plan("checkpoint"), "2026-06")
+    plan = fixture.build_plan("checkpoint")
+    CheckpointStore().save(plan, "2026-06", updated_at=plan.run_context.started_at)
     return fixture
+
+
+def _checkpoint_runs(root, concurrency, with_dead_letter, *, logger=None):
+    fixture = _versioned_fixture(root)
+    return run_twice(
+        fixture, concurrency=concurrency,
+        first=FileRunSpec(
+            hook=MonthlyVersionHook(),
+            routes=_failing_routes(fixture, (8,)) if with_dead_letter else None,
+            reverse_completion_indices=(1, 2, 3, 4),
+        ),
+        second=FileRunSpec(
+            resume=True, hook=MonthlyVersionHook(), logger=logger,
+            reverse_completion_indices=(1, 2, 3, 4),
+        ),
+    )
 
 
 @pytest.mark.parametrize("concurrency", RESUME_CONCURRENCIES)
@@ -648,28 +763,48 @@ def _versioned_fixture(root):
     "with_dead_letter", [False, True], ids=["checkpoint", "checkpoint-and-dead-letter"]
 )
 def test_resume_checkpoint_gate_discards_downloads_with_old_resolved_versions(
-    tmp_path,
-    concurrency,
-    with_dead_letter,
+    tmp_path, concurrency, with_dead_letter, caplog, record_property,
 ):
-    fixture = _versioned_fixture(tmp_path)
-    if with_dead_letter:
-        seed_dead_letters(fixture, [8])
-    leg = run_leg(fixture, concurrency, resume=True, hook=MonthlyVersionHook())
-    assert leg.error is None
-    metadata = leg.result.metadata_as_dict()
-    assert metadata["skipped_file_count"] == "6"
-    assert metadata["persisted_file_count"] == str(3 if with_dead_letter else 4)
-    assert metadata["dead_letter_skipped_count"] == str(int(with_dead_letter))
-    assert len(download_requests(leg)) == (9 if with_dead_letter else 10)
+    logger = StructuredLogger(logging.getLogger(__name__))
+    with caplog.at_level(logging.INFO, logger=__name__):
+        first, leg = runs = _checkpoint_runs(tmp_path, concurrency, with_dead_letter, logger=logger)
+    persisted = 3 if with_dead_letter else 4
+    _assert_resume_counters(
+        leg, persisted=persisted, skipped=6,
+        dead=int(with_dead_letter), dead_skipped=int(with_dead_letter),
+    )
+    assert _request_indices(first) == list(range(1, 11))
+    assert _request_indices(leg) == [
+        index for index in range(1, 11) if not (with_dead_letter and index == 8)
+    ]
+    assert dead_letter_indices(first) == dead_letter_indices(leg) == (
+        [8] if with_dead_letter else []
+    )
+    skipped = [
+        record for record in caplog.records if record.getMessage() == "file_candidate_skipped"
+    ]
+    assert [record.event_fields["file_index"] for record in skipped] == list(range(1, 7))
+    assert [record.event_fields["resolved_version"] for record in skipped] == [
+        f"2026-{month:02d}" for month in range(1, 7)
+    ]
+    assert all(record.event_fields["reason"] == "checkpoint_not_newer" for record in skipped)
+    assert all(record.event_fields["checkpoint_value"] == "2026-06" for record in skipped)
+    assert all(record.thread == threading.get_ident() for record in skipped)
+    expected_versions = {"2026-07", "2026-09", "2026-10"}
+    if not with_dead_letter:
+        expected_versions.add("2026-08")
+    assert {
+        artifact.path.split("/downloads/")[1].split("/")[0]
+        for artifact in leg.result.artifacts
+    } == expected_versions
     assert leg.result.checkpoint_value == "2026-10"
     assert CheckpointStore().load(leg.plan).checkpoint_value == "2026-06"
-    reference_fixture = _versioned_fixture(tmp_path / "reference")
-    if with_dead_letter:
-        seed_dead_letters(reference_fixture, [8])
-    reference = run_leg(reference_fixture, 1, resume=True, hook=MonthlyVersionHook())
-    assert leg.fingerprint == reference.fingerprint
-    _finish(leg, concurrency)
+    # A strategy extraction cannot advance the seeded checkpoint; no executor ran.
+    assert first.state_files == leg.state_files
+    assert "checkpoints/current.json" in dict(leg.state_files)
+    reference = _checkpoint_runs(tmp_path / "reference", 1, with_dead_letter)
+    _assert_two_run_equivalence(runs, reference, concurrency)
+    _record_resume_counters(leg, record_property)
 
 
 @pytest.mark.parametrize("concurrency", RESUME_CONCURRENCIES)

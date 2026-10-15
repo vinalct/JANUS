@@ -14,10 +14,12 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from janus.lineage.persistence import MetadataZonePaths
 from janus.models import ExecutionPlan, ExtractionResult
 from janus.strategies.common import _raw_run_path_prefix
-from janus.strategies.files import FileStrategy
+from janus.strategies.files import FileHook, FileStrategy
 from janus.strategies.http import ApiRequest, ApiResponse, ApiTransport
+from janus.utils.logging import StructuredLogger
 from tests.support.file_downloads_fixtures import (
     CnpjFixture,
     build_archive_package_fixture,
@@ -27,7 +29,9 @@ from tests.support.file_downloads_fixtures import (
 
 __all__ = [
     "CnpjFixture",
+    "FileRunCapture",
     "FileRunFingerprint",
+    "FileRunSpec",
     "RecordedRequest",
     "RedirectFileServer",
     "ScriptedFileServer",
@@ -38,6 +42,7 @@ __all__ = [
     "build_cnpj_fixture",
     "build_flat_files_fixture",
     "fingerprint_file_run",
+    "run_twice",
     "serve_file_downloads",
     "serve_redirect_origins",
 ]
@@ -323,6 +328,91 @@ class FileRunFingerprint:
         for key in ("sidecars", "raw_files_sha256"):
             data[key] = tuple(tuple(pair) for pair in data[key])
         return cls(**data)
+
+
+@dataclass(frozen=True, slots=True)
+class FileRunSpec:
+    """Per-run answers and options; unexpected failures always propagate."""
+
+    resume: bool = False
+    dead_letter_max_items: int | None = None
+    routes: Mapping[tuple[str, str], UrlScript] | None = None
+    hook: FileHook | None = None
+    logger: StructuredLogger | None = None
+    expected_error: type[BaseException] | None = None
+    reverse_completion_indices: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class FileRunCapture:
+    """Snapshot one run before the next can change its metadata or request log."""
+
+    fixture: CnpjFixture
+    strategy: FileStrategy
+    plan: ExecutionPlan
+    result: ExtractionResult | None
+    error: BaseException | None
+    fingerprint: FileRunFingerprint
+    requests: tuple[RecordedRequest, ...]
+    completions: tuple[RecordedRequest, ...]
+    state_files: tuple[tuple[str, bytes], ...]
+    staging_paths: tuple[str, ...]
+
+
+def _capture_file_run(
+    fixture: CnpjFixture, concurrency: int, run_id: str, spec: FileRunSpec,
+) -> FileRunCapture:
+    # Fresh servers isolate scripts/attempt counters, while both runs retain the
+    # source's one metadata zone. Never clear a request log from a previous run.
+    routes = fixture.server.routes if spec.routes is None else spec.routes
+    server = ScriptedFileServer(routes)
+    if concurrency > 1:
+        server.reverse_completion([
+            fixture.urls[index - 1] for index in spec.reverse_completion_indices
+        ])
+    fixture = replace(fixture, server=server)
+    strategy = fixture.build_strategy(logger=spec.logger)
+    plan = fixture.build_plan(
+        run_id, concurrency=concurrency, resume=spec.resume,
+        dead_letter_max_items=spec.dead_letter_max_items,
+    )
+    result, error = None, None
+    try:
+        result = strategy.extract(plan, hook=spec.hook)
+    except BaseException as exc:
+        if spec.expected_error is None or not isinstance(exc, spec.expected_error):
+            raise
+        error = exc
+    if spec.expected_error is not None and error is None:
+        raise AssertionError(f"Expected {spec.expected_error.__name__} in run {run_id}")
+    metadata_root = MetadataZonePaths.from_plan(plan).base_dir
+    raw_root = fixture.storage_layout.resolve_output(plan, "raw").resolved_path
+    return FileRunCapture(
+        fixture=fixture, strategy=strategy, plan=plan, result=result, error=error,
+        fingerprint=fingerprint_file_run(strategy, plan, result),
+        requests=tuple(server.requests), completions=tuple(server.completions),
+        state_files=tuple(
+            (path.relative_to(metadata_root).as_posix(), path.read_bytes())
+            for path in sorted(metadata_root.rglob("*")) if path.is_file()
+        ),
+        staging_paths=tuple(
+            path.relative_to(raw_root).as_posix() for path in sorted(raw_root.rglob(".staging"))
+        ),
+    )
+
+
+def run_twice(
+    fixture: CnpjFixture, *, concurrency: int, first: FileRunSpec, second: FileRunSpec,
+) -> tuple[FileRunCapture, FileRunCapture]:
+    """Extract twice into one metadata zone with distinct run-scoped raw prefixes.
+
+    Each capture contains its fingerprint, immutable per-run request/completion logs
+    and exact state-file bytes. Resume is explicit, using the CLI's ``resume=true``
+    attribute through ``build_plan``; the helper never seeds or advances state.
+    """
+    first_run = _capture_file_run(fixture, concurrency, "first", first)
+    second_run = _capture_file_run(fixture, concurrency, "second", second)
+    return first_run, second_run
 
 
 def _file_sha256(path: Path) -> str:
