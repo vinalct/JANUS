@@ -66,6 +66,15 @@ class ArchiveExtractionError(FileStrategyError):
     """Raised when an archive payload cannot be expanded safely."""
 
 
+FILE_CONCURRENCY_ONLY_METADATA_KEYS = frozenset(
+    {
+        "download_concurrency",
+        "concurrent_downloads_used",
+        "max_in_flight_observed",
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class DiscoveredFile:
     """One discovered file candidate before raw persistence."""
@@ -94,7 +103,12 @@ class DiscoveredFile:
 
 
 class FileHook(SourceHook):
-    """File-strategy hook points for source-specific layout and version quirks."""
+    """File-strategy hook points for source-specific layout and version quirks.
+
+    Every method is called on the extraction loop's thread, one candidate at a time and
+    in candidate order, whatever ``access.rate_limit.concurrency`` says. Downloads may
+    run on worker threads; hooks never do, so a hook needs no locking.
+    """
 
     def discovered_files(
         self,
@@ -194,6 +208,7 @@ from janus.strategies.files.extraction import (
 )
 
 __all__ = [
+    "FILE_CONCURRENCY_ONLY_METADATA_KEYS",
     "_RETRY_POLICY",
     "ArchiveExtractionError",
     "DiscoveredFile",

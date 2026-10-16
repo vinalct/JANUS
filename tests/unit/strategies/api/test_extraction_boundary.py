@@ -38,9 +38,7 @@ from janus.checkpoints import DeadLetterStore
 from janus.runtime import SparkSessionProvider
 from janus.strategies.api import ApiStrategy
 from janus.strategies.api.request_inputs import ApiParameterBindingError
-
-#: Tokens that only appear when the retry loop has been re-implemented locally.
-BANNED_RETRY_TOKENS = ("while attempt", "RETRYABLE_STATUS_CODES", "time.sleep(")
+from tests.support.http_boundary import BANNED_RETRY_TOKENS
 
 #: Names that would let the orchestration layer speak HTTP directly.
 BANNED_TRANSPORT_TOKENS = ("ApiTransport", "ApiClient", "urllib")

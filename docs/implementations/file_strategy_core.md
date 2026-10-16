@@ -12,6 +12,8 @@ The result is the generic runtime layer used by bulk-file sources such as INEP a
 
 - `src/janus/strategies/files/core.py` now implements the `FileStrategy` itself, plus the file-specific hook points and helper objects that support discovery, download, version handling, archive extraction, normalization handoff, and metadata emission.
 - `src/janus/strategies/files/formats.py` is the file-family source of truth for filename handling, format inference, supported handoff formats, archive suffix constants, and safe path segment rendering.
+- `src/janus/strategies/files/download_loop.py` separates each candidate into download and completion phases; `concurrent_extraction.py` orchestrates ordered consumption and the shared dead-letter policy.
+- `src/janus/strategies/files/download_window.py` owns `DownloadOutcome`, the ordered download window and the family's only thread pool.
 - `src/janus/strategies/files/resolvers.py` provides the reusable link resolver chain used when a file source starts from a landing page or public share instead of a direct download URL.
 - `src/janus/strategies/files/__init__.py` now exposes the file strategy package surface for downstream imports.
 - `src/janus/planner/core.py` now resolves file variants to the real `FileStrategy` in the default strategy catalog.
@@ -111,11 +113,17 @@ In practice, that means remote file execution now supports:
 - the configured HTTP method and timeout;
 - header or token auth from the source contract;
 - bounded retry behavior for transient response codes and transport failures;
-- the same safe single-threaded request throttling style already used elsewhere in the project.
+- one shared, thread-safe request throttle across discovery, downloads and retries.
 
 The important boundary here is that the file strategy is reusing generic HTTP plumbing, not API pagination or API payload logic. The file runtime still stays file-oriented.
 
 When one selected file candidate still fails, the strategy records that candidate in the dead-letter state and continues only while `extraction.dead_letter_max_items` allows it. When the operator runs with `--resume`, previously dead-lettered candidates are skipped instead of being retried again.
+
+### Download phase
+
+`access.rate_limit.concurrency > 1` enables workers only for `_download_candidate`: each calls `FileDownloader.load_payload_with_dedicated_client` on a fresh transport, streams into the raw staging area and hashes while writing. `OrderedDownloadWindow` holds at most N submitted, unconsumed outcomes, including completed payloads, and exposes them in candidate order. `_complete_candidate` runs on the loop thread: remote-payload validation, every hook, version and checkpoint decisions, checksum verification, raw commit, sidecar creation and archive expansion stay sequential. `_consume_candidate`, shared by both paths, records dead letters and evaluates their budget there. On budget failure, in-flight downloads finish and are discarded without additional commits or dead letters before the original exception propagates. At concurrency 1, both phases run sequentially using the existing run-wide client, with no pool and no concurrency-only metadata keys.
+
+Resume still re-downloads every selected non-dead-lettered candidate; an existing checkpoint can subsequently skip its completion. No file progress record or persisted-candidate rediscovery is introduced. See [Concurrent downloads](../source-onboarding.md#concurrent-downloads) for memory measurements, hook caveats, log fields and the live-smoke runbook.
 
 ## Raw persistence
 

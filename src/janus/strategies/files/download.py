@@ -213,13 +213,14 @@ class FileDownloader:
     object rather than a bag of functions taking ``self``.
     """
 
+    # Only factories and functions are retained, so this frozen downloader is safe to share.
     transport_factory: Callable[[], ApiTransport] = UrllibApiTransport
     sleeper: Callable[[float], None] = time.sleep
     env_reader: Callable[[str], str | None] = os.getenv
 
     @contextmanager
     def open_client(self) -> Iterator[ApiClient]:
-        """Open the one client a file run uses for link resolution and every download.
+        """Open a client for run-wide use or one dedicated download.
 
         Yielding the client rather than holding it in the strategy is what lets the
         orchestration layer own that lifetime without owning the transport.
@@ -283,6 +284,26 @@ class FileDownloader:
         finally:
             streamed.close()
         return payload, streamed, attempts_used
+
+    def load_payload_with_dedicated_client(
+        self,
+        plan: ExecutionPlan,
+        discovered_file: DiscoveredFile,
+        *,
+        throttle: HttpRequestThrottle,
+        logger: StructuredLogger | None,
+        raw_writer: RawArtifactWriter,
+    ) -> tuple[DownloadedPayload, ApiStreamedResponse | None, int]:
+        """Load with a fresh client, avoiding urllib's cached-opener/close race.
+
+        Mirrors ``ApiRequestExecutor.fetch_with_dedicated_client``. Local candidates also
+        open a client: negligible overhead keeps one path for all downloads.
+        """
+        with self.open_client() as client:
+            return self.load_payload(
+                plan, discovered_file, client=client, throttle=throttle,
+                logger=logger, raw_writer=raw_writer,
+            )
 
     def resolve_env_var(self, name: str) -> str | None:
         value = self.env_reader(name)

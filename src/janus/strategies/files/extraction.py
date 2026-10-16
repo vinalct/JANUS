@@ -1,10 +1,9 @@
 """Orchestration for a file run: which candidate is next, and what a failure costs.
 
-The file family's loop is over **discovered files**, not request inputs — one candidate is
-downloaded, verified, persisted and (when it is an archive) expanded before the next one
-starts. *Orchestration* is that loop, the dead-letter policy around it and the result it
-assembles; *mechanics* — fetching bytes, expanding an archive, deciding where a payload lands
-— are ``download.py``, ``archives.py`` and ``artifacts.py``, composed one candidate at a time
+The file family's loop is over **discovered files**, not request inputs. Downloads may
+run concurrently, but verification, persistence and archive expansion remain in candidate
+order on the loop thread. Orchestration decides which candidate is next and what a failure
+costs; ``download.py``, ``archives.py`` and ``artifacts.py`` provide the mechanics composed
 by ``download_loop.py``. Nothing here speaks HTTP beyond handing
 :class:`~janus.strategies.files.download.FileDownloader` the client it opened.
 """
@@ -13,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
@@ -20,7 +20,6 @@ from janus.checkpoints import (
     CheckpointState,
     CheckpointStore,
     DeadLetterStore,
-    can_continue_after_dead_letter,
 )
 from janus.models import ExecutionPlan, ExtractedArtifact, ExtractionResult
 from janus.strategies.common import _max_checkpoint_value, _raw_run_path_prefix
@@ -29,10 +28,13 @@ from janus.utils.logging import StructuredLogger
 from janus.utils.storage import StorageLayout
 from janus.writers import RawArtifactWriter
 
-from .artifacts import (
-    _discovered_file_dead_letter_key,
-    _discovered_file_dead_letter_metadata,
-    _redacted_location,
+from .artifacts import _redacted_location
+from .concurrent_extraction import (
+    CandidateLedger,
+    DownloadWindowStats,
+    _consume_candidate,
+    _run_concurrent_candidates,
+    _skip_dead_lettered,
 )
 from .discovery import _discover_files, _select_files
 from .download import FileDownloader
@@ -40,6 +42,7 @@ from .download_loop import FileCandidateResult, _extract_one_file
 
 if TYPE_CHECKING:
     from .core import DiscoveredFile, FileHook
+    from .download_window import DownloadOutcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +90,10 @@ class FileExtractionContext:
         )
 
     @property
+    def download_concurrency(self) -> int:
+        return self.plan.source_config.access.rate_limit.concurrency
+
+    @property
     def dead_letter_max_items(self) -> int:
         return self.plan.source_config.extraction.dead_letter_max_items
 
@@ -113,7 +120,7 @@ class FileExtractionContext:
             file_pattern=plan.source_config.access.file_pattern,
             timeout_seconds=plan.source_config.access.timeout_seconds,
             requests_per_minute=(plan.source_config.access.rate_limit.requests_per_minute),
-            concurrency=plan.source_config.access.rate_limit.concurrency,
+            concurrency=self.download_concurrency,
             dead_letter_max_items=self.dead_letter_max_items,
         )
 
@@ -159,6 +166,65 @@ class FileExtractionContext:
             ),
         )
 
+    def log_download_dispatched(
+        self,
+        discovered_file: DiscoveredFile,
+        *,
+        file_index: int,
+        selected_file_count: int,
+        in_flight: int,
+    ) -> None:
+        if self.logger is None:
+            return
+        self.logger.info(
+            "file_download_dispatched",
+            file_index=file_index,
+            selected_file_count=selected_file_count,
+            in_flight=in_flight,
+            download_concurrency=self.download_concurrency,
+            filename=discovered_file.filename,
+            source_location=_redacted_location(discovered_file),
+        )
+
+    def log_download_completed(
+        self,
+        outcome: DownloadOutcome,
+        *,
+        in_flight: int,
+        waited_seconds: float,
+    ) -> None:
+        if self.logger is None:
+            return
+        downloaded = outcome.downloaded
+        error_fields = (
+            {"error_type": type(outcome.error).__name__} if outcome.error is not None else {}
+        )
+        self.logger.info(
+            "file_download_completed",
+            file_index=outcome.file_index,
+            outcome="failed" if outcome.error is not None else "downloaded",
+            in_flight=in_flight,
+            attempts_used=downloaded.attempts_used if downloaded is not None else None,
+            payload_size_bytes=downloaded.payload.size_bytes if downloaded is not None else None,
+            download_seconds=outcome.download_seconds,
+            waited_seconds=waited_seconds,
+            **error_fields,
+        )
+
+    def log_download_drained(self, outcome: DownloadOutcome) -> None:
+        if self.logger is None:
+            return
+        error_fields = (
+            {"error_type": type(outcome.error).__name__} if outcome.error is not None else {}
+        )
+        self.logger.info(
+            "file_download_drained",
+            file_index=outcome.file_index,
+            outcome="failed" if outcome.error is not None else "downloaded",
+            discarded=True,
+            **error_fields,
+        )
+
     def log_extraction_finished(
         self,
         totals: RunTotals,
@@ -168,9 +234,18 @@ class FileExtractionContext:
         normalization_candidate_count: int,
         dead_letter_count: int,
         dead_letter_skip_count: int,
+        download_window: DownloadWindowStats | None = None,
     ) -> None:
         if self.logger is None:
             return
+        download_fields = (
+            {
+                "download_concurrency": download_window.download_concurrency,
+                "max_in_flight_observed": download_window.max_in_flight_observed,
+            }
+            if download_window is not None
+            else {}
+        )
         self.logger.info(
             "file_extraction_finished",
             discovered_file_count=discovered_file_count,
@@ -187,6 +262,7 @@ class FileExtractionContext:
             checkpoint_value=totals.checkpoint_value,
             dead_letter_count=dead_letter_count,
             dead_letter_skipped_count=dead_letter_skip_count,
+            **download_fields,
         )
 
 
@@ -230,6 +306,35 @@ class FileExtractionOutcome:
     dead_letter_count: int
     dead_letter_skip_count: int
     raw_path_prefix: Path | None
+    download_window: DownloadWindowStats | None = None
+
+
+def _run_sequential_candidates(
+    context: FileExtractionContext,
+    ledger: CandidateLedger,
+    selected_files: Sequence[DiscoveredFile],
+    *,
+    client,
+    raw_writer: RawArtifactWriter,
+    dead_letter_store: DeadLetterStore,
+) -> None:
+    """Keep the sequential loop's one client and candidate-by-candidate behavior."""
+    for file_index, discovered_file in enumerate(selected_files, start=1):
+        context.log_candidate_started(
+            discovered_file, file_index=file_index, selected_file_count=len(selected_files),
+        )
+
+        if _skip_dead_lettered(context, ledger, discovered_file, file_index=file_index):
+            continue
+        _consume_candidate(
+            context, ledger, discovered_file,
+            file_index=file_index, selected_file_count=len(selected_files),
+            dead_letter_store=dead_letter_store,
+            complete=partial(
+                _extract_one_file, context, discovered_file,
+                client=client, raw_writer=raw_writer, file_index=file_index,
+            ),
+        )
 
 
 def run_file_extraction(
@@ -239,7 +344,6 @@ def run_file_extraction(
 ) -> FileExtractionOutcome:
     """Download every selected file, recording failures as dead letters while the budget allows."""
     plan = context.plan
-    logger = context.logger
     raw_path_prefix = _raw_run_path_prefix(plan)
     raw_writer = context.raw_writer_for(raw_path_prefix)
 
@@ -250,87 +354,35 @@ def run_file_extraction(
 
     context.log_extraction_started()
 
-    totals = RunTotals()
-    dead_letter_keys = set(dead_letter_state.item_keys) if dead_letter_state is not None else set()
-    dead_letter_skip_count = 0
+    ledger = CandidateLedger(
+        totals=RunTotals(), dead_letter_state=dead_letter_state,
+        dead_letter_keys=set(dead_letter_state.item_keys) if dead_letter_state else set(),
+    )
 
     with context.downloader.open_client() as client:
         discovered_files = _discover_files(plan, context.file_hook, client.transport)
         selected_files = _select_files(plan, discovered_files, context.checkpoint_state)
         context.log_discovery_finished(discovered_files, selected_files)
 
-        for file_index, discovered_file in enumerate(selected_files, start=1):
-            candidate_key = _discovered_file_dead_letter_key(discovered_file)
-            context.log_candidate_started(
-                discovered_file,
-                file_index=file_index,
-                selected_file_count=len(selected_files),
+        if context.download_concurrency > 1:
+            window_stats = _run_concurrent_candidates(
+                context, ledger, selected_files,
+                raw_writer=raw_writer, dead_letter_store=dead_letter_store,
             )
+        else:
+            _run_sequential_candidates(
+                context, ledger, selected_files,
+                client=client, raw_writer=raw_writer, dead_letter_store=dead_letter_store,
+            )
+            window_stats = None
 
-            if candidate_key in dead_letter_keys:
-                dead_letter_skip_count += 1
-                if logger is not None:
-                    logger.info(
-                        "file_candidate_skipped_dead_letter",
-                        file_index=file_index,
-                        filename=discovered_file.filename,
-                        dead_letter_count=len(dead_letter_keys),
-                    )
-                continue
-
-            try:
-                candidate = _extract_one_file(
-                    context,
-                    discovered_file,
-                    client=client,
-                    raw_writer=raw_writer,
-                    file_index=file_index,
-                )
-            except Exception as exc:
-                if logger is not None:
-                    logger.exception("file_candidate_execution_failed")
-                dead_letter_state = dead_letter_store.record(
-                    plan,
-                    item_key=candidate_key,
-                    item_type="file_candidate",
-                    error=exc,
-                    metadata=_discovered_file_dead_letter_metadata(
-                        discovered_file,
-                        file_index=file_index,
-                        selected_file_count=len(selected_files),
-                    ),
-                )
-                dead_letter_keys = set(dead_letter_state.item_keys)
-                if logger is not None:
-                    logger.info(
-                        "file_candidate_dead_lettered",
-                        file_index=file_index,
-                        filename=discovered_file.filename,
-                        dead_letter_count=dead_letter_state.entry_count,
-                        dead_letter_max_items=context.dead_letter_max_items,
-                        error_type=type(exc).__name__,
-                    )
-                if not can_continue_after_dead_letter(
-                    total_item_count=len(selected_files),
-                    dead_letter_count=dead_letter_state.entry_count,
-                    dead_letter_max_items=context.dead_letter_max_items,
-                ):
-                    raise
-                dead_letter_skip_count += 1
-                continue
-
-            if candidate is None:
-                totals.skipped_file_count += 1
-                continue
-
-            totals.absorb(candidate)
-
+    totals = ledger.totals
     normalization_candidate_count = sum(
         1
         for artifact in totals.artifacts
         if artifact.format == plan.source_config.spark.input_format
     )
-    dead_letter_count = dead_letter_state.entry_count if dead_letter_state is not None else 0
+    dead_letter_count = ledger.dead_letter_state.entry_count if ledger.dead_letter_state else 0
 
     context.log_extraction_finished(
         totals,
@@ -338,7 +390,8 @@ def run_file_extraction(
         selected_file_count=len(selected_files),
         normalization_candidate_count=normalization_candidate_count,
         dead_letter_count=dead_letter_count,
-        dead_letter_skip_count=dead_letter_skip_count,
+        dead_letter_skip_count=ledger.dead_letter_skip_count,
+        download_window=window_stats,
     )
 
     return FileExtractionOutcome(
@@ -347,8 +400,9 @@ def run_file_extraction(
         selected_file_count=len(selected_files),
         normalization_candidate_count=normalization_candidate_count,
         dead_letter_count=dead_letter_count,
-        dead_letter_skip_count=dead_letter_skip_count,
+        dead_letter_skip_count=ledger.dead_letter_skip_count,
         raw_path_prefix=raw_path_prefix,
+        download_window=window_stats,
     )
 
 
@@ -380,6 +434,13 @@ def build_extraction_result(
     if totals.resolved_versions:
         extraction_metadata["resolved_versions"] = ",".join(totals.resolved_versions)
     extraction_metadata["raw_path_prefix"] = str(outcome.raw_path_prefix or "")
+    if outcome.download_window is not None:
+        stats = outcome.download_window
+        extraction_metadata["download_concurrency"] = str(stats.download_concurrency)
+        extraction_metadata["max_in_flight_observed"] = str(stats.max_in_flight_observed)
+        extraction_metadata["concurrent_downloads_used"] = str(
+            stats.max_in_flight_observed > 1
+        ).lower()
 
     extraction_result = ExtractionResult.from_plan(
         plan,
@@ -389,11 +450,9 @@ def build_extraction_result(
         metadata=extraction_metadata,
     )
     extraction_result = extraction_result.with_metadata(
-        "dead_letter_count",
-        str(outcome.dead_letter_count),
+        "dead_letter_count", str(outcome.dead_letter_count),
     ).with_metadata(
-        "dead_letter_skipped_count",
-        str(outcome.dead_letter_skip_count),
+        "dead_letter_skipped_count", str(outcome.dead_letter_skip_count),
     )
     if outcome.dead_letter_count > 0:
         extraction_result = extraction_result.with_metadata(

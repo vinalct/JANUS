@@ -160,7 +160,7 @@ The `api`, `catalog`, and `file` families all speak HTTP, so the *behavioral* HT
 - `payload.py` — one `decode_payload` (`json` / `jsonl` / `text` / `binary`), shared by `api` and `catalog`;
 - `binding.py` — one each of `resolve_url`, `split_path_and_query_params`, `default_checkpoint_params`, and `checkpoint_request_value`, shared by `api` and `catalog`.
 
-New HTTP-shaped strategies **compose** these collaborators; they do not copy them. The throttle is thread-safe by construction, so any family that later adds concurrency keeps its rate-limit contract for free. Genuine family differences — which payload formats a family accepts, the error type raised on retry exhaustion, family-specific messages — are passed as explicit parameters, never forked into a private copy. The file family composes the throttle and retry loop only: it handles bytes and archives and does not JSON-decode.
+New HTTP-shaped strategies **compose** these collaborators; they do not copy them. The throttle is thread-safe by construction, so any family that later adds concurrency keeps its rate-limit contract for free. The file family now does this in its download phase only, with results consumed in candidate order; discovery, hooks, archive expansion and handoff remain sequential. Genuine family differences — which payload formats a family accepts, the error type raised on retry exhaustion, family-specific messages — are passed as explicit parameters, never forked into a private copy. The file family composes the throttle and retry loop only: it handles bytes and archives and does not JSON-decode.
 
 ## When a new pattern deserves promotion
 

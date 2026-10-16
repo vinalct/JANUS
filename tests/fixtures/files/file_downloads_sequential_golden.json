@@ -1,0 +1,1337 @@
+{
+  "archive_package": {
+    "exception": null,
+    "fingerprint": {
+      "artifact_bytes_sha256": [
+        "6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f",
+        "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0",
+        "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d"
+      ],
+      "artifact_checksums": [
+        "6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f",
+        "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0",
+        "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d"
+      ],
+      "artifact_formats": [
+        "binary",
+        "csv",
+        "csv"
+      ],
+      "artifact_paths": [
+        "downloads/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024.zip",
+        "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/escolas.csv",
+        "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/turmas.csv"
+      ],
+      "checkpoint_value": "6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f",
+      "dead_letters": null,
+      "extraction_metadata": {
+        "archive_member_count": "2",
+        "checkpoint_loaded": "false",
+        "checksum_verified_count": "0",
+        "dead_letter_count": "0",
+        "dead_letter_skipped_count": "0",
+        "discovered_file_count": "1",
+        "normalization_candidate_count": "2",
+        "persisted_file_count": "1",
+        "resolved_versions": "6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f",
+        "selected_file_count": "1",
+        "skipped_file_count": "0"
+      },
+      "handoff": {
+        "artifact_formats": [
+          "csv",
+          "csv"
+        ],
+        "artifact_paths": [
+          "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/escolas.csv",
+          "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/turmas.csv"
+        ],
+        "normalization_artifact_count": "2"
+      },
+      "raw_files_sha256": [
+        [
+          "downloads/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024.zip",
+          "6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f"
+        ],
+        [
+          "downloads/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024.zip.sha256",
+          "939ae70d4b16364648de90ac236dfc0a6f772c49f925853424c8dc2283aef917"
+        ],
+        [
+          "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/escolas.csv",
+          "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0"
+        ],
+        [
+          "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/escolas.csv.sha256",
+          "d1a70edbefb418e1e1467199a21332a4dfeb42d09934ed5bb6af921b6502ec13"
+        ],
+        [
+          "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/turmas.csv",
+          "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d"
+        ],
+        [
+          "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/turmas.csv.sha256",
+          "f8da5f38a80b32e6af21581dbbfc5256d341a1cc04226ac7ea3a9f64883800f4"
+        ]
+      ],
+      "raw_tree": [
+        "downloads/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024.zip",
+        "downloads/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024.zip.sha256",
+        "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/escolas.csv",
+        "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/escolas.csv.sha256",
+        "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/turmas.csv",
+        "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/turmas.csv.sha256"
+      ],
+      "records_extracted": 2,
+      "sidecars": [
+        [
+          "downloads/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024.zip.sha256",
+          "6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f\n"
+        ],
+        [
+          "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/escolas.csv.sha256",
+          "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0\n"
+        ],
+        [
+          "extracted/6c6ff0d5956b4326db8f0bde57f4ebd73fd290b67b685fc3fafc15411e70f92f/microdados_censo_escolar_2024/package/dados/turmas.csv.sha256",
+          "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d\n"
+        ]
+      ]
+    }
+  },
+  "cnpj_failure_exceeds_budget": {
+    "exception": {
+      "message": "File request failed with status 500 for https://files.download.test/public.php/dav/files/***REDACTED***/2023-05/Empresas5.zip: scripted download failure",
+      "type": "FileDownloadError"
+    },
+    "fingerprint": {
+      "artifact_bytes_sha256": [],
+      "artifact_checksums": [],
+      "artifact_formats": [],
+      "artifact_paths": [],
+      "checkpoint_value": null,
+      "dead_letters": {
+        "entries": [
+          {
+            "error_message": "File request failed with status 500 for https://files.download.test/public.php/dav/files/***REDACTED***/2023-05/Empresas2.zip: scripted download failure",
+            "error_type": "FileDownloadError",
+            "item_key": "remote:https://files.download.test/public.php/dav/files/fixture-share/2023-05/Empresas2.zip",
+            "item_type": "file_candidate",
+            "metadata": {
+              "file_index": "3",
+              "filename": "Empresas2.zip",
+              "selected_file_count": "10",
+              "source_kind": "remote",
+              "source_location": "https://files.download.test/public.php/dav/files/***REDACTED***/2023-05/Empresas2.zip"
+            }
+          },
+          {
+            "error_message": "File request failed with status 500 for https://files.download.test/public.php/dav/files/***REDACTED***/2023-05/Empresas5.zip: scripted download failure",
+            "error_type": "FileDownloadError",
+            "item_key": "remote:https://files.download.test/public.php/dav/files/fixture-share/2023-05/Empresas5.zip",
+            "item_type": "file_candidate",
+            "metadata": {
+              "file_index": "6",
+              "filename": "Empresas5.zip",
+              "selected_file_count": "10",
+              "source_kind": "remote",
+              "source_location": "https://files.download.test/public.php/dav/files/***REDACTED***/2023-05/Empresas5.zip"
+            }
+          }
+        ],
+        "source_id": "fixture_cnpj",
+        "strategy_family": "file",
+        "strategy_variant": "static_file"
+      },
+      "extraction_metadata": {},
+      "handoff": null,
+      "raw_files_sha256": [
+        [
+          "downloads/current/Empresas0.zip",
+          "9ec0a8b5b4b2945834e5be28ec16b3069559bb95db671d3d13ede6100c4db6e8"
+        ],
+        [
+          "downloads/current/Empresas0.zip.sha256",
+          "b3836d805f80542555e65d2a8fc80327622fd89f93c394b6ecd111882f869097"
+        ],
+        [
+          "downloads/current/Empresas1.zip",
+          "3a8bb8deddef14fecad9ab97195eb6aa40661a8f0b62fca4fcba0655548da68d"
+        ],
+        [
+          "downloads/current/Empresas1.zip.sha256",
+          "981e4cc611a793c6bc5e2fe268e19ae4de7e3945d4ad55255dd681b9bdc19989"
+        ],
+        [
+          "downloads/current/Empresas3.zip",
+          "5e53dd7cef41025050c4031b46631a4e18d2a04b6863ab8001390762aa90a1e7"
+        ],
+        [
+          "downloads/current/Empresas3.zip.sha256",
+          "db3d298818104ec907a866c1403af67fcb886d7156bb46fb487f31dd1919038c"
+        ],
+        [
+          "downloads/current/Empresas4.zip",
+          "489baa399300b8ef23f461d3f33c4e97b863bd2fbd3a93f7bc2a83f3d8efd77f"
+        ],
+        [
+          "downloads/current/Empresas4.zip.sha256",
+          "c91197725c998b0d95d150be5531c0d31aba3aa3a6b754c0054555ea16394b15"
+        ],
+        [
+          "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV",
+          "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0"
+        ],
+        [
+          "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV.sha256",
+          "d1a70edbefb418e1e1467199a21332a4dfeb42d09934ed5bb6af921b6502ec13"
+        ],
+        [
+          "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV",
+          "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d"
+        ],
+        [
+          "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV.sha256",
+          "f8da5f38a80b32e6af21581dbbfc5256d341a1cc04226ac7ea3a9f64883800f4"
+        ],
+        [
+          "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV",
+          "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5"
+        ],
+        [
+          "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV.sha256",
+          "5afbfa6fc095b3fd14617bad966dbea30bcd2033db3db42b86013ec34dd9636b"
+        ],
+        [
+          "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV",
+          "26918586c5e4756a6577484ebfb119986b683365ee0246ef2358ebf99c07b999"
+        ],
+        [
+          "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV.sha256",
+          "dc1281263056b1828e29d07e0cec9f1af8476be18fd3f2f7fabf7ee119083a52"
+        ]
+      ],
+      "raw_tree": [
+        "downloads/current/Empresas0.zip",
+        "downloads/current/Empresas0.zip.sha256",
+        "downloads/current/Empresas1.zip",
+        "downloads/current/Empresas1.zip.sha256",
+        "downloads/current/Empresas3.zip",
+        "downloads/current/Empresas3.zip.sha256",
+        "downloads/current/Empresas4.zip",
+        "downloads/current/Empresas4.zip.sha256",
+        "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV",
+        "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV",
+        "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV",
+        "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV",
+        "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV.sha256"
+      ],
+      "records_extracted": null,
+      "sidecars": [
+        [
+          "downloads/current/Empresas0.zip.sha256",
+          "9ec0a8b5b4b2945834e5be28ec16b3069559bb95db671d3d13ede6100c4db6e8\n"
+        ],
+        [
+          "downloads/current/Empresas1.zip.sha256",
+          "3a8bb8deddef14fecad9ab97195eb6aa40661a8f0b62fca4fcba0655548da68d\n"
+        ],
+        [
+          "downloads/current/Empresas3.zip.sha256",
+          "5e53dd7cef41025050c4031b46631a4e18d2a04b6863ab8001390762aa90a1e7\n"
+        ],
+        [
+          "downloads/current/Empresas4.zip.sha256",
+          "489baa399300b8ef23f461d3f33c4e97b863bd2fbd3a93f7bc2a83f3d8efd77f\n"
+        ],
+        [
+          "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV.sha256",
+          "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0\n"
+        ],
+        [
+          "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV.sha256",
+          "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d\n"
+        ],
+        [
+          "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV.sha256",
+          "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5\n"
+        ],
+        [
+          "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV.sha256",
+          "26918586c5e4756a6577484ebfb119986b683365ee0246ef2358ebf99c07b999\n"
+        ]
+      ]
+    }
+  },
+  "cnpj_one_failure_continues": {
+    "exception": null,
+    "fingerprint": {
+      "artifact_bytes_sha256": [
+        "9ec0a8b5b4b2945834e5be28ec16b3069559bb95db671d3d13ede6100c4db6e8",
+        "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0",
+        "3a8bb8deddef14fecad9ab97195eb6aa40661a8f0b62fca4fcba0655548da68d",
+        "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d",
+        "32396a7ea486bcaf1f69044c3d02e26e23fcf32c142207a759565faf5bfdb23f",
+        "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837",
+        "5e53dd7cef41025050c4031b46631a4e18d2a04b6863ab8001390762aa90a1e7",
+        "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5",
+        "3dacb303a3352f8bc2f3d8de2ac7a4f944e96f3c81656e4498a42048d5553407",
+        "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba",
+        "36555f600045f08bcf1120f11669518dd9e763ae57e465bdccd9d661c3e13437",
+        "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad",
+        "be8dbfcb2be781c687115de6caa082a0e6517544926f34972c8814dc580aab67",
+        "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918",
+        "57810505c12d07b35e387548efea2bce77b3465e0aca62c7215da082f45e25ac",
+        "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479",
+        "4670b524b6ea07dbdea6adf0d76641b365866fe400a1de9d8be86ecd98035bb6",
+        "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2"
+      ],
+      "artifact_checksums": [
+        "9ec0a8b5b4b2945834e5be28ec16b3069559bb95db671d3d13ede6100c4db6e8",
+        "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0",
+        "3a8bb8deddef14fecad9ab97195eb6aa40661a8f0b62fca4fcba0655548da68d",
+        "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d",
+        "32396a7ea486bcaf1f69044c3d02e26e23fcf32c142207a759565faf5bfdb23f",
+        "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837",
+        "5e53dd7cef41025050c4031b46631a4e18d2a04b6863ab8001390762aa90a1e7",
+        "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5",
+        "3dacb303a3352f8bc2f3d8de2ac7a4f944e96f3c81656e4498a42048d5553407",
+        "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba",
+        "36555f600045f08bcf1120f11669518dd9e763ae57e465bdccd9d661c3e13437",
+        "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad",
+        "be8dbfcb2be781c687115de6caa082a0e6517544926f34972c8814dc580aab67",
+        "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918",
+        "57810505c12d07b35e387548efea2bce77b3465e0aca62c7215da082f45e25ac",
+        "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479",
+        "4670b524b6ea07dbdea6adf0d76641b365866fe400a1de9d8be86ecd98035bb6",
+        "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2"
+      ],
+      "artifact_formats": [
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv"
+      ],
+      "artifact_paths": [
+        "downloads/current/Empresas0.zip",
+        "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV",
+        "downloads/current/Empresas1.zip",
+        "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV",
+        "downloads/current/Empresas2.zip",
+        "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV",
+        "downloads/current/Empresas3.zip",
+        "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV",
+        "downloads/current/Empresas5.zip",
+        "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV",
+        "downloads/current/Empresas6.zip",
+        "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV",
+        "downloads/current/Empresas7.zip",
+        "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV",
+        "downloads/current/Empresas8.zip",
+        "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV",
+        "downloads/current/Empresas9.zip",
+        "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV"
+      ],
+      "checkpoint_value": "current",
+      "dead_letters": {
+        "entries": [
+          {
+            "error_message": "File request failed with status 500 for https://files.download.test/public.php/dav/files/***REDACTED***/2023-05/Empresas4.zip: scripted download failure",
+            "error_type": "FileDownloadError",
+            "item_key": "remote:https://files.download.test/public.php/dav/files/fixture-share/2023-05/Empresas4.zip",
+            "item_type": "file_candidate",
+            "metadata": {
+              "file_index": "5",
+              "filename": "Empresas4.zip",
+              "selected_file_count": "10",
+              "source_kind": "remote",
+              "source_location": "https://files.download.test/public.php/dav/files/***REDACTED***/2023-05/Empresas4.zip"
+            }
+          }
+        ],
+        "source_id": "fixture_cnpj",
+        "strategy_family": "file",
+        "strategy_variant": "static_file"
+      },
+      "extraction_metadata": {
+        "archive_member_count": "9",
+        "checkpoint_loaded": "false",
+        "checksum_verified_count": "0",
+        "dead_letter_count": "1",
+        "dead_letter_path": "dead_letters/current.json",
+        "dead_letter_skipped_count": "1",
+        "discovered_file_count": "10",
+        "normalization_candidate_count": "9",
+        "persisted_file_count": "9",
+        "resolved_versions": "current,current,current,current,current,current,current,current,current",
+        "selected_file_count": "10",
+        "skipped_file_count": "0"
+      },
+      "handoff": {
+        "artifact_formats": [
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv"
+        ],
+        "artifact_paths": [
+          "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV",
+          "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV",
+          "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV",
+          "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV",
+          "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV",
+          "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV",
+          "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV",
+          "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV",
+          "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV"
+        ],
+        "normalization_artifact_count": "9"
+      },
+      "raw_files_sha256": [
+        [
+          "downloads/current/Empresas0.zip",
+          "9ec0a8b5b4b2945834e5be28ec16b3069559bb95db671d3d13ede6100c4db6e8"
+        ],
+        [
+          "downloads/current/Empresas0.zip.sha256",
+          "b3836d805f80542555e65d2a8fc80327622fd89f93c394b6ecd111882f869097"
+        ],
+        [
+          "downloads/current/Empresas1.zip",
+          "3a8bb8deddef14fecad9ab97195eb6aa40661a8f0b62fca4fcba0655548da68d"
+        ],
+        [
+          "downloads/current/Empresas1.zip.sha256",
+          "981e4cc611a793c6bc5e2fe268e19ae4de7e3945d4ad55255dd681b9bdc19989"
+        ],
+        [
+          "downloads/current/Empresas2.zip",
+          "32396a7ea486bcaf1f69044c3d02e26e23fcf32c142207a759565faf5bfdb23f"
+        ],
+        [
+          "downloads/current/Empresas2.zip.sha256",
+          "76855cc4ae94fb904af6123184b1b38097dc72870ca74503733c19017f4dad2f"
+        ],
+        [
+          "downloads/current/Empresas3.zip",
+          "5e53dd7cef41025050c4031b46631a4e18d2a04b6863ab8001390762aa90a1e7"
+        ],
+        [
+          "downloads/current/Empresas3.zip.sha256",
+          "db3d298818104ec907a866c1403af67fcb886d7156bb46fb487f31dd1919038c"
+        ],
+        [
+          "downloads/current/Empresas5.zip",
+          "3dacb303a3352f8bc2f3d8de2ac7a4f944e96f3c81656e4498a42048d5553407"
+        ],
+        [
+          "downloads/current/Empresas5.zip.sha256",
+          "4460324ef3574951fb76770e96635a6aefa927434fe7a9a5ec020b85583afb85"
+        ],
+        [
+          "downloads/current/Empresas6.zip",
+          "36555f600045f08bcf1120f11669518dd9e763ae57e465bdccd9d661c3e13437"
+        ],
+        [
+          "downloads/current/Empresas6.zip.sha256",
+          "8e6ba16c181ff17d4802456b82fdf046d754b23f4838ac08de73bf4e1a9e1db6"
+        ],
+        [
+          "downloads/current/Empresas7.zip",
+          "be8dbfcb2be781c687115de6caa082a0e6517544926f34972c8814dc580aab67"
+        ],
+        [
+          "downloads/current/Empresas7.zip.sha256",
+          "cf1a7b26a121cced521c6968211c7f0027ef7cf889c61aa2aed0cb214b8e05d8"
+        ],
+        [
+          "downloads/current/Empresas8.zip",
+          "57810505c12d07b35e387548efea2bce77b3465e0aca62c7215da082f45e25ac"
+        ],
+        [
+          "downloads/current/Empresas8.zip.sha256",
+          "683b2ce88d3ae7423711ec73965fa4e51b2d9f3f78c4b34287b65009f2169c9b"
+        ],
+        [
+          "downloads/current/Empresas9.zip",
+          "4670b524b6ea07dbdea6adf0d76641b365866fe400a1de9d8be86ecd98035bb6"
+        ],
+        [
+          "downloads/current/Empresas9.zip.sha256",
+          "03cad3e2882915febcc60c9912e33efa1f4a3aa83780fe779cb5a7376b49bc5b"
+        ],
+        [
+          "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV",
+          "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0"
+        ],
+        [
+          "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV.sha256",
+          "d1a70edbefb418e1e1467199a21332a4dfeb42d09934ed5bb6af921b6502ec13"
+        ],
+        [
+          "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV",
+          "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d"
+        ],
+        [
+          "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV.sha256",
+          "f8da5f38a80b32e6af21581dbbfc5256d341a1cc04226ac7ea3a9f64883800f4"
+        ],
+        [
+          "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV",
+          "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837"
+        ],
+        [
+          "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV.sha256",
+          "b913de0c8d306f8566988e58e0d7fbe9e0bd6de900aa0b5542abd551b59cfc39"
+        ],
+        [
+          "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV",
+          "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5"
+        ],
+        [
+          "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV.sha256",
+          "5afbfa6fc095b3fd14617bad966dbea30bcd2033db3db42b86013ec34dd9636b"
+        ],
+        [
+          "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV",
+          "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba"
+        ],
+        [
+          "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV.sha256",
+          "00cd1ebab68ac7ae7018c4972a568034e57b61f938f0ebd694ffe240bcc754e0"
+        ],
+        [
+          "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV",
+          "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad"
+        ],
+        [
+          "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV.sha256",
+          "96da5eb03f422350e72921bf2f61900ef4de3869e95455d968b2a466b20f228b"
+        ],
+        [
+          "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV",
+          "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918"
+        ],
+        [
+          "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV.sha256",
+          "dbfd07e2352110bf086f5e1b9082c4a744f9499248910d68382b80eab29d4a76"
+        ],
+        [
+          "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV",
+          "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479"
+        ],
+        [
+          "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV.sha256",
+          "194b1ed253b9675379703cd0cc1b5358afad108267d0ff3236af437b1bd60b66"
+        ],
+        [
+          "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV",
+          "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2"
+        ],
+        [
+          "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV.sha256",
+          "137fc14d1177fe7060c88a2d2ea1a3444b790342934004dccc2126525182893f"
+        ]
+      ],
+      "raw_tree": [
+        "downloads/current/Empresas0.zip",
+        "downloads/current/Empresas0.zip.sha256",
+        "downloads/current/Empresas1.zip",
+        "downloads/current/Empresas1.zip.sha256",
+        "downloads/current/Empresas2.zip",
+        "downloads/current/Empresas2.zip.sha256",
+        "downloads/current/Empresas3.zip",
+        "downloads/current/Empresas3.zip.sha256",
+        "downloads/current/Empresas5.zip",
+        "downloads/current/Empresas5.zip.sha256",
+        "downloads/current/Empresas6.zip",
+        "downloads/current/Empresas6.zip.sha256",
+        "downloads/current/Empresas7.zip",
+        "downloads/current/Empresas7.zip.sha256",
+        "downloads/current/Empresas8.zip",
+        "downloads/current/Empresas8.zip.sha256",
+        "downloads/current/Empresas9.zip",
+        "downloads/current/Empresas9.zip.sha256",
+        "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV",
+        "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV",
+        "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV",
+        "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV",
+        "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV",
+        "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV",
+        "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV",
+        "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV",
+        "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV",
+        "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV.sha256"
+      ],
+      "records_extracted": 9,
+      "sidecars": [
+        [
+          "downloads/current/Empresas0.zip.sha256",
+          "9ec0a8b5b4b2945834e5be28ec16b3069559bb95db671d3d13ede6100c4db6e8\n"
+        ],
+        [
+          "downloads/current/Empresas1.zip.sha256",
+          "3a8bb8deddef14fecad9ab97195eb6aa40661a8f0b62fca4fcba0655548da68d\n"
+        ],
+        [
+          "downloads/current/Empresas2.zip.sha256",
+          "32396a7ea486bcaf1f69044c3d02e26e23fcf32c142207a759565faf5bfdb23f\n"
+        ],
+        [
+          "downloads/current/Empresas3.zip.sha256",
+          "5e53dd7cef41025050c4031b46631a4e18d2a04b6863ab8001390762aa90a1e7\n"
+        ],
+        [
+          "downloads/current/Empresas5.zip.sha256",
+          "3dacb303a3352f8bc2f3d8de2ac7a4f944e96f3c81656e4498a42048d5553407\n"
+        ],
+        [
+          "downloads/current/Empresas6.zip.sha256",
+          "36555f600045f08bcf1120f11669518dd9e763ae57e465bdccd9d661c3e13437\n"
+        ],
+        [
+          "downloads/current/Empresas7.zip.sha256",
+          "be8dbfcb2be781c687115de6caa082a0e6517544926f34972c8814dc580aab67\n"
+        ],
+        [
+          "downloads/current/Empresas8.zip.sha256",
+          "57810505c12d07b35e387548efea2bce77b3465e0aca62c7215da082f45e25ac\n"
+        ],
+        [
+          "downloads/current/Empresas9.zip.sha256",
+          "4670b524b6ea07dbdea6adf0d76641b365866fe400a1de9d8be86ecd98035bb6\n"
+        ],
+        [
+          "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV.sha256",
+          "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0\n"
+        ],
+        [
+          "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV.sha256",
+          "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d\n"
+        ],
+        [
+          "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV.sha256",
+          "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837\n"
+        ],
+        [
+          "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV.sha256",
+          "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5\n"
+        ],
+        [
+          "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV.sha256",
+          "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba\n"
+        ],
+        [
+          "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV.sha256",
+          "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad\n"
+        ],
+        [
+          "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV.sha256",
+          "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918\n"
+        ],
+        [
+          "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV.sha256",
+          "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479\n"
+        ],
+        [
+          "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV.sha256",
+          "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2\n"
+        ]
+      ]
+    }
+  },
+  "cnpj_ten_archives": {
+    "exception": null,
+    "fingerprint": {
+      "artifact_bytes_sha256": [
+        "9ec0a8b5b4b2945834e5be28ec16b3069559bb95db671d3d13ede6100c4db6e8",
+        "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0",
+        "3a8bb8deddef14fecad9ab97195eb6aa40661a8f0b62fca4fcba0655548da68d",
+        "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d",
+        "32396a7ea486bcaf1f69044c3d02e26e23fcf32c142207a759565faf5bfdb23f",
+        "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837",
+        "5e53dd7cef41025050c4031b46631a4e18d2a04b6863ab8001390762aa90a1e7",
+        "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5",
+        "489baa399300b8ef23f461d3f33c4e97b863bd2fbd3a93f7bc2a83f3d8efd77f",
+        "26918586c5e4756a6577484ebfb119986b683365ee0246ef2358ebf99c07b999",
+        "3dacb303a3352f8bc2f3d8de2ac7a4f944e96f3c81656e4498a42048d5553407",
+        "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba",
+        "36555f600045f08bcf1120f11669518dd9e763ae57e465bdccd9d661c3e13437",
+        "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad",
+        "be8dbfcb2be781c687115de6caa082a0e6517544926f34972c8814dc580aab67",
+        "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918",
+        "57810505c12d07b35e387548efea2bce77b3465e0aca62c7215da082f45e25ac",
+        "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479",
+        "4670b524b6ea07dbdea6adf0d76641b365866fe400a1de9d8be86ecd98035bb6",
+        "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2"
+      ],
+      "artifact_checksums": [
+        "9ec0a8b5b4b2945834e5be28ec16b3069559bb95db671d3d13ede6100c4db6e8",
+        "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0",
+        "3a8bb8deddef14fecad9ab97195eb6aa40661a8f0b62fca4fcba0655548da68d",
+        "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d",
+        "32396a7ea486bcaf1f69044c3d02e26e23fcf32c142207a759565faf5bfdb23f",
+        "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837",
+        "5e53dd7cef41025050c4031b46631a4e18d2a04b6863ab8001390762aa90a1e7",
+        "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5",
+        "489baa399300b8ef23f461d3f33c4e97b863bd2fbd3a93f7bc2a83f3d8efd77f",
+        "26918586c5e4756a6577484ebfb119986b683365ee0246ef2358ebf99c07b999",
+        "3dacb303a3352f8bc2f3d8de2ac7a4f944e96f3c81656e4498a42048d5553407",
+        "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba",
+        "36555f600045f08bcf1120f11669518dd9e763ae57e465bdccd9d661c3e13437",
+        "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad",
+        "be8dbfcb2be781c687115de6caa082a0e6517544926f34972c8814dc580aab67",
+        "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918",
+        "57810505c12d07b35e387548efea2bce77b3465e0aca62c7215da082f45e25ac",
+        "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479",
+        "4670b524b6ea07dbdea6adf0d76641b365866fe400a1de9d8be86ecd98035bb6",
+        "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2"
+      ],
+      "artifact_formats": [
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv",
+        "binary",
+        "csv"
+      ],
+      "artifact_paths": [
+        "downloads/current/Empresas0.zip",
+        "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV",
+        "downloads/current/Empresas1.zip",
+        "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV",
+        "downloads/current/Empresas2.zip",
+        "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV",
+        "downloads/current/Empresas3.zip",
+        "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV",
+        "downloads/current/Empresas4.zip",
+        "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV",
+        "downloads/current/Empresas5.zip",
+        "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV",
+        "downloads/current/Empresas6.zip",
+        "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV",
+        "downloads/current/Empresas7.zip",
+        "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV",
+        "downloads/current/Empresas8.zip",
+        "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV",
+        "downloads/current/Empresas9.zip",
+        "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV"
+      ],
+      "checkpoint_value": "current",
+      "dead_letters": null,
+      "extraction_metadata": {
+        "archive_member_count": "10",
+        "checkpoint_loaded": "false",
+        "checksum_verified_count": "0",
+        "dead_letter_count": "0",
+        "dead_letter_skipped_count": "0",
+        "discovered_file_count": "10",
+        "normalization_candidate_count": "10",
+        "persisted_file_count": "10",
+        "resolved_versions": "current,current,current,current,current,current,current,current,current,current",
+        "selected_file_count": "10",
+        "skipped_file_count": "0"
+      },
+      "handoff": {
+        "artifact_formats": [
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv"
+        ],
+        "artifact_paths": [
+          "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV",
+          "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV",
+          "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV",
+          "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV",
+          "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV",
+          "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV",
+          "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV",
+          "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV",
+          "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV",
+          "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV"
+        ],
+        "normalization_artifact_count": "10"
+      },
+      "raw_files_sha256": [
+        [
+          "downloads/current/Empresas0.zip",
+          "9ec0a8b5b4b2945834e5be28ec16b3069559bb95db671d3d13ede6100c4db6e8"
+        ],
+        [
+          "downloads/current/Empresas0.zip.sha256",
+          "b3836d805f80542555e65d2a8fc80327622fd89f93c394b6ecd111882f869097"
+        ],
+        [
+          "downloads/current/Empresas1.zip",
+          "3a8bb8deddef14fecad9ab97195eb6aa40661a8f0b62fca4fcba0655548da68d"
+        ],
+        [
+          "downloads/current/Empresas1.zip.sha256",
+          "981e4cc611a793c6bc5e2fe268e19ae4de7e3945d4ad55255dd681b9bdc19989"
+        ],
+        [
+          "downloads/current/Empresas2.zip",
+          "32396a7ea486bcaf1f69044c3d02e26e23fcf32c142207a759565faf5bfdb23f"
+        ],
+        [
+          "downloads/current/Empresas2.zip.sha256",
+          "76855cc4ae94fb904af6123184b1b38097dc72870ca74503733c19017f4dad2f"
+        ],
+        [
+          "downloads/current/Empresas3.zip",
+          "5e53dd7cef41025050c4031b46631a4e18d2a04b6863ab8001390762aa90a1e7"
+        ],
+        [
+          "downloads/current/Empresas3.zip.sha256",
+          "db3d298818104ec907a866c1403af67fcb886d7156bb46fb487f31dd1919038c"
+        ],
+        [
+          "downloads/current/Empresas4.zip",
+          "489baa399300b8ef23f461d3f33c4e97b863bd2fbd3a93f7bc2a83f3d8efd77f"
+        ],
+        [
+          "downloads/current/Empresas4.zip.sha256",
+          "c91197725c998b0d95d150be5531c0d31aba3aa3a6b754c0054555ea16394b15"
+        ],
+        [
+          "downloads/current/Empresas5.zip",
+          "3dacb303a3352f8bc2f3d8de2ac7a4f944e96f3c81656e4498a42048d5553407"
+        ],
+        [
+          "downloads/current/Empresas5.zip.sha256",
+          "4460324ef3574951fb76770e96635a6aefa927434fe7a9a5ec020b85583afb85"
+        ],
+        [
+          "downloads/current/Empresas6.zip",
+          "36555f600045f08bcf1120f11669518dd9e763ae57e465bdccd9d661c3e13437"
+        ],
+        [
+          "downloads/current/Empresas6.zip.sha256",
+          "8e6ba16c181ff17d4802456b82fdf046d754b23f4838ac08de73bf4e1a9e1db6"
+        ],
+        [
+          "downloads/current/Empresas7.zip",
+          "be8dbfcb2be781c687115de6caa082a0e6517544926f34972c8814dc580aab67"
+        ],
+        [
+          "downloads/current/Empresas7.zip.sha256",
+          "cf1a7b26a121cced521c6968211c7f0027ef7cf889c61aa2aed0cb214b8e05d8"
+        ],
+        [
+          "downloads/current/Empresas8.zip",
+          "57810505c12d07b35e387548efea2bce77b3465e0aca62c7215da082f45e25ac"
+        ],
+        [
+          "downloads/current/Empresas8.zip.sha256",
+          "683b2ce88d3ae7423711ec73965fa4e51b2d9f3f78c4b34287b65009f2169c9b"
+        ],
+        [
+          "downloads/current/Empresas9.zip",
+          "4670b524b6ea07dbdea6adf0d76641b365866fe400a1de9d8be86ecd98035bb6"
+        ],
+        [
+          "downloads/current/Empresas9.zip.sha256",
+          "03cad3e2882915febcc60c9912e33efa1f4a3aa83780fe779cb5a7376b49bc5b"
+        ],
+        [
+          "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV",
+          "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0"
+        ],
+        [
+          "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV.sha256",
+          "d1a70edbefb418e1e1467199a21332a4dfeb42d09934ed5bb6af921b6502ec13"
+        ],
+        [
+          "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV",
+          "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d"
+        ],
+        [
+          "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV.sha256",
+          "f8da5f38a80b32e6af21581dbbfc5256d341a1cc04226ac7ea3a9f64883800f4"
+        ],
+        [
+          "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV",
+          "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837"
+        ],
+        [
+          "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV.sha256",
+          "b913de0c8d306f8566988e58e0d7fbe9e0bd6de900aa0b5542abd551b59cfc39"
+        ],
+        [
+          "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV",
+          "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5"
+        ],
+        [
+          "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV.sha256",
+          "5afbfa6fc095b3fd14617bad966dbea30bcd2033db3db42b86013ec34dd9636b"
+        ],
+        [
+          "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV",
+          "26918586c5e4756a6577484ebfb119986b683365ee0246ef2358ebf99c07b999"
+        ],
+        [
+          "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV.sha256",
+          "dc1281263056b1828e29d07e0cec9f1af8476be18fd3f2f7fabf7ee119083a52"
+        ],
+        [
+          "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV",
+          "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba"
+        ],
+        [
+          "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV.sha256",
+          "00cd1ebab68ac7ae7018c4972a568034e57b61f938f0ebd694ffe240bcc754e0"
+        ],
+        [
+          "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV",
+          "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad"
+        ],
+        [
+          "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV.sha256",
+          "96da5eb03f422350e72921bf2f61900ef4de3869e95455d968b2a466b20f228b"
+        ],
+        [
+          "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV",
+          "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918"
+        ],
+        [
+          "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV.sha256",
+          "dbfd07e2352110bf086f5e1b9082c4a744f9499248910d68382b80eab29d4a76"
+        ],
+        [
+          "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV",
+          "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479"
+        ],
+        [
+          "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV.sha256",
+          "194b1ed253b9675379703cd0cc1b5358afad108267d0ff3236af437b1bd60b66"
+        ],
+        [
+          "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV",
+          "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2"
+        ],
+        [
+          "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV.sha256",
+          "137fc14d1177fe7060c88a2d2ea1a3444b790342934004dccc2126525182893f"
+        ]
+      ],
+      "raw_tree": [
+        "downloads/current/Empresas0.zip",
+        "downloads/current/Empresas0.zip.sha256",
+        "downloads/current/Empresas1.zip",
+        "downloads/current/Empresas1.zip.sha256",
+        "downloads/current/Empresas2.zip",
+        "downloads/current/Empresas2.zip.sha256",
+        "downloads/current/Empresas3.zip",
+        "downloads/current/Empresas3.zip.sha256",
+        "downloads/current/Empresas4.zip",
+        "downloads/current/Empresas4.zip.sha256",
+        "downloads/current/Empresas5.zip",
+        "downloads/current/Empresas5.zip.sha256",
+        "downloads/current/Empresas6.zip",
+        "downloads/current/Empresas6.zip.sha256",
+        "downloads/current/Empresas7.zip",
+        "downloads/current/Empresas7.zip.sha256",
+        "downloads/current/Empresas8.zip",
+        "downloads/current/Empresas8.zip.sha256",
+        "downloads/current/Empresas9.zip",
+        "downloads/current/Empresas9.zip.sha256",
+        "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV",
+        "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV",
+        "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV",
+        "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV",
+        "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV",
+        "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV",
+        "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV",
+        "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV",
+        "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV",
+        "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV.sha256",
+        "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV",
+        "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV.sha256"
+      ],
+      "records_extracted": 10,
+      "sidecars": [
+        [
+          "downloads/current/Empresas0.zip.sha256",
+          "9ec0a8b5b4b2945834e5be28ec16b3069559bb95db671d3d13ede6100c4db6e8\n"
+        ],
+        [
+          "downloads/current/Empresas1.zip.sha256",
+          "3a8bb8deddef14fecad9ab97195eb6aa40661a8f0b62fca4fcba0655548da68d\n"
+        ],
+        [
+          "downloads/current/Empresas2.zip.sha256",
+          "32396a7ea486bcaf1f69044c3d02e26e23fcf32c142207a759565faf5bfdb23f\n"
+        ],
+        [
+          "downloads/current/Empresas3.zip.sha256",
+          "5e53dd7cef41025050c4031b46631a4e18d2a04b6863ab8001390762aa90a1e7\n"
+        ],
+        [
+          "downloads/current/Empresas4.zip.sha256",
+          "489baa399300b8ef23f461d3f33c4e97b863bd2fbd3a93f7bc2a83f3d8efd77f\n"
+        ],
+        [
+          "downloads/current/Empresas5.zip.sha256",
+          "3dacb303a3352f8bc2f3d8de2ac7a4f944e96f3c81656e4498a42048d5553407\n"
+        ],
+        [
+          "downloads/current/Empresas6.zip.sha256",
+          "36555f600045f08bcf1120f11669518dd9e763ae57e465bdccd9d661c3e13437\n"
+        ],
+        [
+          "downloads/current/Empresas7.zip.sha256",
+          "be8dbfcb2be781c687115de6caa082a0e6517544926f34972c8814dc580aab67\n"
+        ],
+        [
+          "downloads/current/Empresas8.zip.sha256",
+          "57810505c12d07b35e387548efea2bce77b3465e0aca62c7215da082f45e25ac\n"
+        ],
+        [
+          "downloads/current/Empresas9.zip.sha256",
+          "4670b524b6ea07dbdea6adf0d76641b365866fe400a1de9d8be86ecd98035bb6\n"
+        ],
+        [
+          "extracted/current/Empresas0/K3241.K03200Y0.D30513.EMPRECSV.sha256",
+          "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0\n"
+        ],
+        [
+          "extracted/current/Empresas1/K3241.K03200Y1.D30513.EMPRECSV.sha256",
+          "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d\n"
+        ],
+        [
+          "extracted/current/Empresas2/K3241.K03200Y2.D30513.EMPRECSV.sha256",
+          "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837\n"
+        ],
+        [
+          "extracted/current/Empresas3/K3241.K03200Y3.D30513.EMPRECSV.sha256",
+          "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5\n"
+        ],
+        [
+          "extracted/current/Empresas4/K3241.K03200Y4.D30513.EMPRECSV.sha256",
+          "26918586c5e4756a6577484ebfb119986b683365ee0246ef2358ebf99c07b999\n"
+        ],
+        [
+          "extracted/current/Empresas5/K3241.K03200Y5.D30513.EMPRECSV.sha256",
+          "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba\n"
+        ],
+        [
+          "extracted/current/Empresas6/K3241.K03200Y6.D30513.EMPRECSV.sha256",
+          "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad\n"
+        ],
+        [
+          "extracted/current/Empresas7/K3241.K03200Y7.D30513.EMPRECSV.sha256",
+          "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918\n"
+        ],
+        [
+          "extracted/current/Empresas8/K3241.K03200Y8.D30513.EMPRECSV.sha256",
+          "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479\n"
+        ],
+        [
+          "extracted/current/Empresas9/K3241.K03200Y9.D30513.EMPRECSV.sha256",
+          "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2\n"
+        ]
+      ]
+    }
+  },
+  "flat_ten_csvs": {
+    "exception": null,
+    "fingerprint": {
+      "artifact_bytes_sha256": [
+        "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0",
+        "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d",
+        "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837",
+        "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5",
+        "26918586c5e4756a6577484ebfb119986b683365ee0246ef2358ebf99c07b999",
+        "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba",
+        "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad",
+        "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918",
+        "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479",
+        "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2"
+      ],
+      "artifact_checksums": [
+        "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0",
+        "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d",
+        "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837",
+        "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5",
+        "26918586c5e4756a6577484ebfb119986b683365ee0246ef2358ebf99c07b999",
+        "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba",
+        "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad",
+        "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918",
+        "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479",
+        "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2"
+      ],
+      "artifact_formats": [
+        "csv",
+        "csv",
+        "csv",
+        "csv",
+        "csv",
+        "csv",
+        "csv",
+        "csv",
+        "csv",
+        "csv"
+      ],
+      "artifact_paths": [
+        "downloads/current/part-00.csv",
+        "downloads/current/part-01.csv",
+        "downloads/current/part-02.csv",
+        "downloads/current/part-03.csv",
+        "downloads/current/part-04.csv",
+        "downloads/current/part-05.csv",
+        "downloads/current/part-06.csv",
+        "downloads/current/part-07.csv",
+        "downloads/current/part-08.csv",
+        "downloads/current/part-09.csv"
+      ],
+      "checkpoint_value": "current",
+      "dead_letters": null,
+      "extraction_metadata": {
+        "archive_member_count": "0",
+        "checkpoint_loaded": "false",
+        "checksum_verified_count": "0",
+        "dead_letter_count": "0",
+        "dead_letter_skipped_count": "0",
+        "discovered_file_count": "10",
+        "normalization_candidate_count": "10",
+        "persisted_file_count": "10",
+        "resolved_versions": "current,current,current,current,current,current,current,current,current,current",
+        "selected_file_count": "10",
+        "skipped_file_count": "0"
+      },
+      "handoff": {
+        "artifact_formats": [
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv",
+          "csv"
+        ],
+        "artifact_paths": [
+          "downloads/current/part-00.csv",
+          "downloads/current/part-01.csv",
+          "downloads/current/part-02.csv",
+          "downloads/current/part-03.csv",
+          "downloads/current/part-04.csv",
+          "downloads/current/part-05.csv",
+          "downloads/current/part-06.csv",
+          "downloads/current/part-07.csv",
+          "downloads/current/part-08.csv",
+          "downloads/current/part-09.csv"
+        ],
+        "normalization_artifact_count": "10"
+      },
+      "raw_files_sha256": [
+        [
+          "downloads/current/part-00.csv",
+          "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0"
+        ],
+        [
+          "downloads/current/part-00.csv.sha256",
+          "d1a70edbefb418e1e1467199a21332a4dfeb42d09934ed5bb6af921b6502ec13"
+        ],
+        [
+          "downloads/current/part-01.csv",
+          "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d"
+        ],
+        [
+          "downloads/current/part-01.csv.sha256",
+          "f8da5f38a80b32e6af21581dbbfc5256d341a1cc04226ac7ea3a9f64883800f4"
+        ],
+        [
+          "downloads/current/part-02.csv",
+          "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837"
+        ],
+        [
+          "downloads/current/part-02.csv.sha256",
+          "b913de0c8d306f8566988e58e0d7fbe9e0bd6de900aa0b5542abd551b59cfc39"
+        ],
+        [
+          "downloads/current/part-03.csv",
+          "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5"
+        ],
+        [
+          "downloads/current/part-03.csv.sha256",
+          "5afbfa6fc095b3fd14617bad966dbea30bcd2033db3db42b86013ec34dd9636b"
+        ],
+        [
+          "downloads/current/part-04.csv",
+          "26918586c5e4756a6577484ebfb119986b683365ee0246ef2358ebf99c07b999"
+        ],
+        [
+          "downloads/current/part-04.csv.sha256",
+          "dc1281263056b1828e29d07e0cec9f1af8476be18fd3f2f7fabf7ee119083a52"
+        ],
+        [
+          "downloads/current/part-05.csv",
+          "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba"
+        ],
+        [
+          "downloads/current/part-05.csv.sha256",
+          "00cd1ebab68ac7ae7018c4972a568034e57b61f938f0ebd694ffe240bcc754e0"
+        ],
+        [
+          "downloads/current/part-06.csv",
+          "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad"
+        ],
+        [
+          "downloads/current/part-06.csv.sha256",
+          "96da5eb03f422350e72921bf2f61900ef4de3869e95455d968b2a466b20f228b"
+        ],
+        [
+          "downloads/current/part-07.csv",
+          "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918"
+        ],
+        [
+          "downloads/current/part-07.csv.sha256",
+          "dbfd07e2352110bf086f5e1b9082c4a744f9499248910d68382b80eab29d4a76"
+        ],
+        [
+          "downloads/current/part-08.csv",
+          "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479"
+        ],
+        [
+          "downloads/current/part-08.csv.sha256",
+          "194b1ed253b9675379703cd0cc1b5358afad108267d0ff3236af437b1bd60b66"
+        ],
+        [
+          "downloads/current/part-09.csv",
+          "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2"
+        ],
+        [
+          "downloads/current/part-09.csv.sha256",
+          "137fc14d1177fe7060c88a2d2ea1a3444b790342934004dccc2126525182893f"
+        ]
+      ],
+      "raw_tree": [
+        "downloads/current/part-00.csv",
+        "downloads/current/part-00.csv.sha256",
+        "downloads/current/part-01.csv",
+        "downloads/current/part-01.csv.sha256",
+        "downloads/current/part-02.csv",
+        "downloads/current/part-02.csv.sha256",
+        "downloads/current/part-03.csv",
+        "downloads/current/part-03.csv.sha256",
+        "downloads/current/part-04.csv",
+        "downloads/current/part-04.csv.sha256",
+        "downloads/current/part-05.csv",
+        "downloads/current/part-05.csv.sha256",
+        "downloads/current/part-06.csv",
+        "downloads/current/part-06.csv.sha256",
+        "downloads/current/part-07.csv",
+        "downloads/current/part-07.csv.sha256",
+        "downloads/current/part-08.csv",
+        "downloads/current/part-08.csv.sha256",
+        "downloads/current/part-09.csv",
+        "downloads/current/part-09.csv.sha256"
+      ],
+      "records_extracted": 10,
+      "sidecars": [
+        [
+          "downloads/current/part-00.csv.sha256",
+          "66268154a13058e338bfee02dccea90f3da632da0d45b97d4ce048a83873ece0\n"
+        ],
+        [
+          "downloads/current/part-01.csv.sha256",
+          "5100b6a0b67fbd5535d267b4332535d9e71aba00678790238d23b01ba80e226d\n"
+        ],
+        [
+          "downloads/current/part-02.csv.sha256",
+          "85566b1203722e81621a93be0a4afe7167c8e47ba13b5f772d0183b3e338b837\n"
+        ],
+        [
+          "downloads/current/part-03.csv.sha256",
+          "d3f6029782d44b3780cfc440cb3a224a5acaea427f7d0cf94e27a97d2d5eaad5\n"
+        ],
+        [
+          "downloads/current/part-04.csv.sha256",
+          "26918586c5e4756a6577484ebfb119986b683365ee0246ef2358ebf99c07b999\n"
+        ],
+        [
+          "downloads/current/part-05.csv.sha256",
+          "348b6bdad210c0e0f24df8b7bd3e52348a09f04621ded955493ea4c476ac6bba\n"
+        ],
+        [
+          "downloads/current/part-06.csv.sha256",
+          "789dfea09ea14371e05637850acb6f3376a7cbcc563518859448779348bafbad\n"
+        ],
+        [
+          "downloads/current/part-07.csv.sha256",
+          "c0f4291794f34fd9b13a60102497783d8ac549529c4aa64a53bce3a07a09d918\n"
+        ],
+        [
+          "downloads/current/part-08.csv.sha256",
+          "ac6dc8d5ada86954f22c0f39cb99ce8f055e51dfce23023213472ff625a85479\n"
+        ],
+        [
+          "downloads/current/part-09.csv.sha256",
+          "24d402333439e4c0ca171d051278d4be90d70eba4c6c903de558ef9bd22682b2\n"
+        ]
+      ]
+    }
+  }
+}

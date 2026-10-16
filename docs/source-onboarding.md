@@ -162,7 +162,7 @@ The registry contract is intentionally small. The most important current options
 - `access.pagination.past_end_status_codes` is an optional 4xx list meaning "you asked past the last page", defaulting to `[404, 416]`. It only matters when `concurrency > 1`.
 - `access.pagination.total_count_field` is an optional dotted path to a total-record count, used to cap concurrent look-ahead exactly.
 - `access.rate_limit` carries `requests_per_minute`, optional `backoff_seconds`, and optional `concurrency`.
-- `access.rate_limit.concurrency` above `1` is an API-family capability with a validated precondition — see [Concurrent pagination](#concurrent-pagination).
+- `access.rate_limit.concurrency` is family-specific: `api` enables [concurrent pagination](#concurrent-pagination) with the validated page-number/offset and past-end precondition; `file` enables [concurrent downloads](#concurrent-downloads); `catalog` accepts the key and ignores it.
 - `access.limits` sets five structural, per-source remote-content ceilings: `max_payload_bytes` defaults to 32 GiB (bytes), `max_redirects` defaults to `5` (hops; `0` disables redirects; maximum `20`), `max_archive_member_bytes` defaults to the resolved `max_payload_bytes` (bytes), `max_archive_total_bytes` defaults to 128 GiB (bytes), and `max_archive_ratio` defaults to `200` (dimensionless). Every value is a positive integer except `max_redirects`, which may be zero; all five are overridable per source and do not involve `ValidationPolicy`.
 - API and catalog sources should set `access.limits.max_payload_bytes` much lower than the file-oriented 32 GiB default because their response bodies remain in memory.
 - `access.params` is the home for static literal request parameters.
@@ -416,7 +416,7 @@ does not pull in its dependencies.
 
 ### Concurrent pagination
 
-`access.rate_limit.concurrency` is the only knob that makes JANUS issue more than one request at a time. It is a **capability with a precondition**, not a throughput dial you can turn up on any source. Read this section before setting it above `1`.
+For the API family, `access.rate_limit.concurrency` enables speculative pagination. It is a **capability with a precondition**, not a throughput dial you can turn up on any API. Read this section before setting it above `1`; file sources use the separate [Concurrent downloads](#concurrent-downloads) rules below.
 
 #### What concurrency actually does
 
@@ -432,9 +432,9 @@ That prediction is the whole point and the whole risk. Every request beyond the 
 | `api` + `cursor` | **rejected at config load** | the next request is only knowable from the current response, so there is nothing to predict |
 | `api` + `none` | **rejected at config load** | a single page cannot be paginated ahead |
 | `catalog` | accepted, **inert** | the catalog strategy paginates sequentially and never reads the key |
-| `file` | accepted, **inert** | parallel downloads are unimplemented; the value only reaches a log field |
+| `file` | allowed | downloads up to N candidates at once; discovery, archive expansion and handoff stay sequential |
 
-The `api` rules are enforced by `SourceConfig.from_mapping`, so a `cursor_api` source with `concurrency: 2` fails to load with an issue at `access.rate_limit.concurrency` that names the offending pagination type. The `catalog` and `file` rows are accepted for backward compatibility only — setting the key there buys nothing, so leave it at `1` rather than implying throughput the runtime does not deliver.
+The `api` rules are enforced by `SourceConfig.from_mapping`, so a `cursor_api` source with `concurrency: 2` fails to load with an issue at `access.rate_limit.concurrency` that names the offending pagination type. The `catalog` row is accepted for backward compatibility only — setting the key there buys nothing, so leave it at `1`.
 
 #### The precondition, stated plainly
 
@@ -514,13 +514,40 @@ The tail-degradation rule makes an unreliable total safe: past the reported tota
 
 #### When to leave it at 1
 
-- **Tight rate limits.** Receita Federal is capped at 6 req/min; concurrency cannot beat a throttle, it only makes the queue deeper.
+- **Tight rate limits with short requests.** Concurrency cannot beat the throttle and helps only when requests last longer than its interval.
 - **Endpoints documented as single-writer or unstable under parallel reads.**
 - **Any API whose past-end behavior you have not verified** with the three commands above. This is the default answer. `concurrency: 1` is always correct; `concurrency: 10` is correct only with evidence.
 
 #### What a concurrent run reports
 
 Concurrent runs emit extra extraction metadata that sequential runs do not: `speculative_request_count`, `speculative_discarded_count`, `past_end_terminated_count`, `past_end_status`, `total_records_reported`, and `lookahead_ceiling_source`. These are the *only* legitimate differences between a concurrent and a sequential run of the same source — artifacts, records, and checkpoints are identical. `pagination_concurrency` is reported on every run.
+
+### Concurrent downloads
+
+Every checked-in **file source** ships at `concurrency: 1`, including CNPJ and INEP. Keep that setting until a [live smoke](#live-smoke-before-raising-file-concurrency) shows that your upstream share tolerates concurrent downloads. Prefer enabling it with source lock in place; that lock has landed in this repository and protects one source attempt across processes.
+
+**What it changes.** With `access.rate_limit.concurrency: N`, up to N downloads are submitted and not yet consumed at once. Each remote download streams through a bounded memory prefix into the raw zone's `.staging/` area and is hashed while written. A finished download still occupies a slot until the loop consumes it, keeping buffered payloads bounded. Only this download phase uses workers; `concurrency: 1` uses the sequential path without a pool.
+
+**What it does not change.** Discovery and link resolution remain sequential (one PROPFIND or one HTML listing request for the selected resolver). Artifacts are committed and reported in candidate order. Checksum verification, archive expansion, normalization handoff, checkpoints, dead-letter rules and budgets are unchanged. Every hook runs on the loop thread, one call at a time; hooks never run concurrently.
+
+**Rate limits.** Concurrency cannot beat `requests_per_minute`. At Receita Federal's six requests per minute, three downloads in flight still receive request slots one every **10 seconds**; retries use the same throttle and consume slots too. Concurrent downloads help when a download takes much longer than that interval, such as a multi-GB archive on a slow share. Many small files under a tight rate gain nothing from increasing the window.
+
+**Memory.** Each in-flight download holds at most one **64 MiB** spool buffer, so budget about N × 64 MiB plus fixed and per-thread overhead.
+
+**Failures.** A failed download becomes that candidate's dead letter, decided in candidate order. Once the dead-letter budget is exceeded, the loop stops submitting downloads, lets in-flight work finish and **discards** those outcomes. Drained successes are never committed, drained failures are never dead-lettered, staging files are removed, and the original budget-exceeding exception is raised, preserving the sequential run's evidence.
+
+**Reported metadata and logs.** Only a run configured with `concurrency > 1` emits the three keys in `FILE_CONCURRENCY_ONLY_METADATA_KEYS`: `download_concurrency` (configured N), `concurrent_downloads_used` (`"true"` only when more than one slot was occupied) and `max_in_flight_observed` (the largest submitted, unconsumed window, at most N). These are the only differences in extraction metadata after normalizing the run-specific raw prefix. They also travel in the `strategy.*` metadata block; they add no columns to `metadata.runs`.
+
+The loop reports `file_download_dispatched` (candidate index and in-flight count), `file_download_completed` (candidate index, in-flight count, outcome, attempts, payload size, `download_seconds` and `waited_seconds`) and `file_download_drained` (candidate index, outcome and `discarded: true`). `waited_seconds` measures how long the loop waited for the next candidate in order, exposing a slow earlier download. The completed event records ordered consumption, not worker completion order.
+
+**Log order.** A later candidate's `file_candidate_started` can appear before an earlier candidate's `file_payload_persisted`. Dispatch can overlap downloads while commits and accounting remain ordered.
+
+**Resume.** `--resume` loads and skips the existing dead-letter keys. The file family **re-downloads every selected non-dead-lettered candidate**, including ones persisted before an interrupt; it has no persisted-candidate rediscovery or file progress record. The existing checkpoint gate may then skip completion for a version covered by a checkpoint saved after a successful run. This behavior is identical at concurrency 1 and N.
+
+#### Live smoke before raising file concurrency
+
+Use one CNPJ table whose current listing contains **at least four archives**, such as Empresas. Confirm that count before the comparison. Run the same listing once at `1` and once at `3` against the real share, with `--include-disabled`, keeping the six-per-minute rate, retry policy, limits and archive selection identical. Use the pinned development container with its Spark dependencies and enough disk for both raw archives, expanded members and scratch Bronze tables. This runbook is an operator procedure.
+
 
 ### `extraction`
 

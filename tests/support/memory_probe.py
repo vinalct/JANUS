@@ -27,6 +27,8 @@ class MemoryProbeResult:
     peak_rss_bytes: int
     artifact_count: int
     artifact_bytes: int
+    file_count: int = 1
+    concurrency: int = 1
 
     @property
     def delta_bytes(self) -> int:
@@ -51,7 +53,9 @@ class MemoryProbeResult:
             f"({self.delta_bytes / mib:.1f} MiB)\n"
             f"delta / payload   : {self.delta_ratio:.2f}x\n"
             f"artifacts written : {self.artifact_count} "
-            f"({self.artifact_bytes:,} bytes)"
+            f"({self.artifact_bytes:,} bytes)\n"
+            f"file count        : {self.file_count}\n"
+            f"concurrency       : {self.concurrency}"
         )
 
 
@@ -61,16 +65,22 @@ def max_rss_bytes() -> int:
 
 
 class _PayloadHandler(BaseHTTPRequestHandler):
-    """Serves the generated payload with a declared ``Content-Length``, and nothing else."""
+    """Serve a listing and generated payloads without allocating their complete bodies."""
 
     payload_bytes = 0
+    payload_paths = frozenset({"/probe.csv"})
+    listing_body = b""
     protocol_version = "HTTP/1.1"
 
     def do_GET(self) -> None:  # BaseHTTPRequestHandler dispatches on this exact name
-        self.send_response(200)
-        self.send_header("Content-Type", "text/csv")
-        self.send_header("Content-Length", str(self.payload_bytes))
-        self.end_headers()
+        if self.path == "/listing.html":
+            self._send_headers("text/html", len(self.listing_body))
+            self.wfile.write(self.listing_body)
+            return
+        if self.path not in self.payload_paths:
+            self.send_error(404)
+            return
+        self._send_headers("text/csv", self.payload_bytes)
         remaining = self.payload_bytes
         while remaining > 0:
             block = _CHUNK[: min(len(_CHUNK), remaining)]
@@ -78,8 +88,17 @@ class _PayloadHandler(BaseHTTPRequestHandler):
             remaining -= len(block)
 
     def do_HEAD(self) -> None:  # BaseHTTPRequestHandler dispatches on this exact name
+        if self.path == "/listing.html":
+            self._send_headers("text/html", len(self.listing_body))
+        elif self.path in self.payload_paths:
+            self._send_headers("text/csv", self.payload_bytes)
+        else:
+            self.send_error(404)
+
+    def _send_headers(self, content_type: str, content_length: int) -> None:
         self.send_response(200)
-        self.send_header("Content-Length", str(self.payload_bytes))
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(content_length))
         self.end_headers()
 
     def log_message(self, format: str, *args: Any) -> None:  # stdlib signature
@@ -89,13 +108,36 @@ class _PayloadHandler(BaseHTTPRequestHandler):
 @contextmanager
 def serve_payload(payload_bytes: int) -> Iterator[str]:
     """Serve ``payload_bytes`` of filler on loopback; yields the URL of the one artifact."""
-    handler = type("_SizedPayloadHandler", (_PayloadHandler,), {"payload_bytes": payload_bytes})
+    with serve_payloads(payload_bytes, file_count=1) as url:
+        yield url
+
+
+@contextmanager
+def serve_payloads(payload_bytes: int, *, file_count: int) -> Iterator[str]:
+    """Yield the old single-file URL or an HTML listing of multiple streamed payloads."""
+    if file_count < 1:
+        raise ValueError("file_count must be positive")
+    paths = frozenset(f"/probe-{index}.csv" for index in range(file_count))
+    links = "".join(
+        f'<a href="/probe-{index}.csv">probe-{index}.csv</a>'
+        for index in range(file_count)
+    )
+    handler = type(
+        "_SizedPayloadHandler",
+        (_PayloadHandler,),
+        {
+            "payload_bytes": payload_bytes,
+            "payload_paths": paths | {"/probe.csv"} if file_count == 1 else paths,
+            "listing_body": f"<html><body>{links}</body></html>".encode(),
+        },
+    )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address[0], server.server_address[1]
     try:
-        yield f"http://{host}:{port}/probe.csv"
+        endpoint = "/probe.csv" if file_count == 1 else "/listing.html"
+        yield f"http://{host}:{port}{endpoint}"
     finally:
         server.shutdown()
         server.server_close()
@@ -134,7 +176,12 @@ def seed_environment_profile(project_root: Path) -> Path:
 
 
 def build_probe_plan(
-    project_root: Path, url: str, *, source_id: str = "memory_probe"
+    project_root: Path,
+    url: str,
+    *,
+    source_id: str = "memory_probe",
+    concurrency: int = 1,
+    link_resolver: str | None = None,
 ) -> ExecutionPlan:
     """A minimal enabled ``static_file`` plan pointed at ``url``.
 
@@ -157,12 +204,13 @@ def build_probe_plan(
                 "url": url,
                 "method": "GET",
                 "format": "csv",
+                **({"link_resolver": link_resolver} if link_resolver is not None else {}),
                 "timeout_seconds": 120,
                 "auth": {"type": "none"},
                 "pagination": {"type": "none"},
                 "rate_limit": {
                     "requests_per_minute": 600,
-                    "concurrency": 1,
+                    "concurrency": concurrency,
                     "backoff_seconds": 1,
                 },
             },
@@ -196,16 +244,35 @@ def build_probe_plan(
 
 
 def measure_download_peak_rss(project_root: Path, payload_bytes: int) -> MemoryProbeResult:
-    """Run one real ``FileStrategy.extract`` over a generated payload and report peak RSS.
+    return measure_concurrent_download_peak_rss(
+        project_root, payload_bytes, file_count=1, concurrency=1
+    )
+
+
+def measure_concurrent_download_peak_rss(
+    project_root: Path,
+    payload_bytes: int,
+    *,
+    file_count: int,
+    concurrency: int,
+) -> MemoryProbeResult:
+    """Run real ``FileStrategy.extract`` over loopback payloads and report peak RSS.
 
     ``ru_maxrss`` is a high-water mark that never falls, so the baseline is taken after the
-    server, the plan and the strategy exist — the delta is what *extraction* added.
+    server, the plan and the strategy exist. Use a fresh process for a meaningful delta.
     """
     from janus.strategies.files.core import FileStrategy
 
+    if concurrency < 1:
+        raise ValueError("concurrency must be positive")
     seed_environment_profile(project_root)
-    with serve_payload(payload_bytes) as url:
-        plan = build_probe_plan(project_root, url)
+    with serve_payloads(payload_bytes, file_count=file_count) as url:
+        plan = build_probe_plan(
+            project_root,
+            url,
+            concurrency=concurrency,
+            link_resolver="html_links" if file_count > 1 else None,
+        )
         strategy = FileStrategy()
         gc.collect()
         baseline = max_rss_bytes()
@@ -222,22 +289,35 @@ def measure_download_peak_rss(project_root: Path, payload_bytes: int) -> MemoryP
             for artifact in result.artifacts
             if Path(artifact.path).is_file()
         ),
+        file_count=file_count,
+        concurrency=concurrency,
     )
 
 
 def main() -> int:
-    """One-off run: ``python -m tests.support.memory_probe [payload_mib] [project_root]``."""
+    """CLI: ``memory_probe [payload_mib] [project_root] [--files N] [--concurrency N]``."""
     import argparse
     import tempfile
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("payload_mib", nargs="?", type=int, default=256)
     parser.add_argument("project_root", nargs="?", default=None)
+    parser.add_argument("--files", type=int, default=1)
+    parser.add_argument("--concurrency", type=int, default=1)
     args = parser.parse_args()
+    if args.files < 1 or args.concurrency < 1:
+        parser.error("--files and --concurrency must be positive")
 
     with tempfile.TemporaryDirectory(prefix="janus-memory-probe-") as tmp:
         root = Path(args.project_root) if args.project_root else Path(tmp)
-        print(measure_download_peak_rss(root, args.payload_mib * 2**20).render())
+        print(
+            measure_concurrent_download_peak_rss(
+                root,
+                args.payload_mib * 2**20,
+                file_count=args.files,
+                concurrency=args.concurrency,
+            ).render()
+        )
     return 0
 
 

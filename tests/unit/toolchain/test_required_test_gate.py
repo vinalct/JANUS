@@ -282,6 +282,18 @@ LOCKING_PARALLEL_CLASSES = (
     "tests.unit.toolchain.test_no_threaded_source_execution",
     "tests.unit.orchestration.test_orchestration_settings",
 )
+CONCURRENT_DOWNLOAD_CLASSES = (
+    "tests.unit.strategies.files.test_file_download_harness",
+    "tests.unit.strategies.files.test_download_seam",
+    "tests.unit.strategies.files.test_download_window",
+    "tests.unit.strategies.files.test_concurrent_sequential_equivalence",
+    "tests.unit.strategies.files.test_download_throttle_pacing",
+    "tests.unit.strategies.files.test_concurrent_dead_letter_order",
+    "tests.unit.strategies.files.test_state_mutation_single_threaded",
+    "tests.unit.strategies.files.test_download_boundary",
+    "tests.unit.strategies.files.test_concurrent_resume_and_caps",
+    "tests.unit.strategies.files.test_concurrent_download_memory",
+)
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -328,6 +340,31 @@ def test_fast_requires_all_nine_locking_and_parallel_suites():
     assert "$(LOCKING_PARALLEL_REQUIRED_CLASSES)" in recipe
     assert '--class-name "$$class_name" --minimum-passed 1 || exit $$?' in recipe
     assert any(step.get("run") == "make test-fast PYTHON=python" for step in jobs["fast"]["steps"])
+
+
+def test_fast_requires_all_ten_concurrent_download_suites_in_ci():
+    makefile, variables, jobs = _gate_configuration()
+    assert tuple(variables["CONCURRENT_DOWNLOAD_REQUIRED_CLASSES"].split()) == (
+        CONCURRENT_DOWNLOAD_CLASSES
+    )
+    first_loop = _recipe(makefile, "test-fast").split("\tdone\n", 1)[0]
+    assert "$(CONCURRENT_DOWNLOAD_REQUIRED_CLASSES)" in first_loop
+    assert '--class-name "$$class_name" --minimum-passed 1 || exit $$?' in first_loop
+    assert any(step.get("run") == "make test-fast PYTHON=python" for step in jobs["fast"]["steps"])
+
+
+@pytest.mark.parametrize(("class_name", "count"), [
+    ("tests.unit.strategies.files.test_concurrent_sequential_equivalence", 35),
+    ("tests.unit.strategies.files.test_concurrent_dead_letter_order", 12),
+    ("tests.unit.strategies.files.test_concurrent_resume_and_caps", 34),
+    ("tests.unit.strategies.files.test_state_mutation_single_threaded", 70),
+    ("tests.unit.strategies.files.test_concurrent_download_memory", 2),
+])
+def test_fast_requires_complete_download_breadth_and_memory_cases(class_name, count):
+    makefile, variables, _jobs = _gate_configuration()
+    counted = _recipe(makefile, "test-fast").split("\tdone\n")[-1]
+    gates = _report_gates(counted, variables)
+    assert gates[(class_name, None, None)] == (count, (variables["FAST_TEST_REPORT"],))
 
 
 @pytest.mark.parametrize(("class_name", "count"), [

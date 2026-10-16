@@ -110,6 +110,17 @@ COMPACTION_REQUIRED_CLASSES := \
 	tests.unit.writers.test_table_properties \
 	tests.unit.models.test_spark_write_block \
 	tests.unit.models.test_spark_handoff_block
+CONCURRENT_DOWNLOAD_REQUIRED_CLASSES := \
+	tests.unit.strategies.files.test_file_download_harness \
+	tests.unit.strategies.files.test_download_seam \
+	tests.unit.strategies.files.test_download_window \
+	tests.unit.strategies.files.test_concurrent_sequential_equivalence \
+	tests.unit.strategies.files.test_download_throttle_pacing \
+	tests.unit.strategies.files.test_concurrent_dead_letter_order \
+	tests.unit.strategies.files.test_state_mutation_single_threaded \
+	tests.unit.strategies.files.test_download_boundary \
+	tests.unit.strategies.files.test_concurrent_resume_and_caps \
+	tests.unit.strategies.files.test_concurrent_download_memory
 GUARDRAIL_CLASSES := \
 	tests.unit.strategies.http.test_transport_boundary \
 	tests.unit.strategies.http.test_no_second_opener \
@@ -338,7 +349,7 @@ test-write-sizing:
 test-fast:
 	@mkdir -p "$(dir $(FAST_TEST_REPORT))"
 	$(PYTHON) -m pytest -ra $(FAST_TEST_ARGS) --durations=20 --junitxml="$(FAST_TEST_REPORT)"
-	@for class_name in $(FAST_REQUIRED_CLASSES) $(COMPACTION_REQUIRED_CLASSES) $(METRICS_REQUIRED_CLASSES) $(LOCKING_PARALLEL_REQUIRED_CLASSES); do \
+	@for class_name in $(FAST_REQUIRED_CLASSES) $(COMPACTION_REQUIRED_CLASSES) $(CONCURRENT_DOWNLOAD_REQUIRED_CLASSES) $(METRICS_REQUIRED_CLASSES) $(LOCKING_PARALLEL_REQUIRED_CLASSES); do \
 		$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" \
 			--class-name "$$class_name" --minimum-passed 1 || exit $$?; \
 	done
@@ -354,6 +365,11 @@ test-fast:
 	# Full green counts: every acquisition rule and kernel-release/CLOEXEC case must run.
 	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name $(LOCK_ACQUISITION_CLASS) --minimum-passed 39
 	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name $(SOURCE_STATE_LOCK_CLASS) --minimum-passed 34
+	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name tests.unit.strategies.files.test_concurrent_sequential_equivalence --minimum-passed 35
+	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name tests.unit.strategies.files.test_concurrent_dead_letter_order --minimum-passed 12
+	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name tests.unit.strategies.files.test_concurrent_resume_and_caps --minimum-passed 34
+	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name tests.unit.strategies.files.test_state_mutation_single_threaded --minimum-passed 70
+	$(PYTHON) -m tests.support.required_test_gate "$(FAST_TEST_REPORT)" --class-name tests.unit.strategies.files.test_concurrent_download_memory --minimum-passed 2
 
 # Focused, session-free metrics/budget/freshness gate; Spark parity is required by ci.
 test-metrics:

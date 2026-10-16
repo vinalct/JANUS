@@ -1,20 +1,8 @@
-"""One discovered file's journey: bytes in, persisted raw artifacts out.
+"""One candidate, two phases: download bytes, then complete on the loop thread.
 
-The body of the candidate loop, lifted out of ``extraction.py`` so that module stays the
-loop, the dead-letter policy and the result — this is what happens *inside* one iteration:
-load → validate → hook → resolve version → checkpoint gate → checksum → persist → expand.
-
-It composes the family's mechanics and adds none of its own: bytes come from
-``download.py``, archive expansion from ``archives.py``, paths and redaction from
-``artifacts.py``, the checkpoint comparison from ``discovery.py``. The one decision it owns
-is the *checksum comparison* — it computes the digest and raises ``FileIntegrityError`` on a
-mismatch. What that failure costs the run is not decided here: the caller in ``extraction.py``
-owns the dead-letter policy, and a mismatch on a single-file run still propagates because one
-dead letter exhausts that run's budget.
-
-``FileExtractionContext`` is named under ``TYPE_CHECKING`` only. ``extraction.py`` defines it
-and imports this module, so binding it at runtime would close a cycle — the same reason
-``catalog/requests.py`` states its hook as a protocol rather than importing ``CatalogHook``.
+``_download_candidate`` (network, worker-safe); ``_complete_candidate`` (loop thread):
+validate → hook → version → checkpoint → checksum → persist → expand. The caller owns
+dead-letter policy; ``FileExtractionContext`` is type-only to avoid an extraction cycle.
 """
 
 from __future__ import annotations
@@ -22,8 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from janus.models import ExtractedArtifact
-from janus.strategies.http import ApiClient
+from janus.models import ExecutionPlan, ExtractedArtifact
+from janus.strategies.http import ApiClient, ApiStreamedResponse, HttpRequestThrottle
+from janus.utils.logging import StructuredLogger
 from janus.writers import SPOOL_THRESHOLD_BYTES, RawArtifactWriter
 
 from .archives import _extract_archive, _is_archive_file
@@ -32,6 +21,7 @@ from .core import FileHook, FileIntegrityError
 from .discovery import _should_skip_for_checkpoint
 from .download import (
     DownloadedPayload,
+    FileDownloader,
     FileResponse,
     _expected_checksum,
     _payload_from_bytes,
@@ -56,6 +46,15 @@ class FileCandidateResult:
     total_attempts: int
     archive_member_count: int
     checksum_verified_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadedCandidate:
+    """The network phase's payload and response metadata, with no decisions made."""
+
+    payload: DownloadedPayload
+    response: ApiStreamedResponse | None
+    attempts_used: int
 
 
 def _prepare_download_payload(
@@ -97,6 +96,31 @@ def _prepare_download_payload(
     return replacement
 
 
+def _download_candidate(
+    downloader: FileDownloader,
+    plan: ExecutionPlan,
+    discovered_file: DiscoveredFile,
+    *,
+    client: ApiClient | None,
+    throttle: HttpRequestThrottle,
+    logger: StructuredLogger | None,
+    raw_writer: RawArtifactWriter,
+) -> DownloadedCandidate:
+    """Fetch, stage and hash only: worker-safe.
+    ``client=None`` opens a dedicated client; sequential calls reuse the run-wide client.
+    """
+    if client is None:
+        loaded = downloader.load_payload_with_dedicated_client(
+            plan, discovered_file, throttle=throttle, logger=logger, raw_writer=raw_writer,
+        )
+    else:
+        loaded = downloader.load_payload(
+            plan, discovered_file, client=client, throttle=throttle, logger=logger,
+            raw_writer=raw_writer,
+        )
+    return DownloadedCandidate(*loaded)
+
+
 def _extract_one_file(
     context: FileExtractionContext,
     discovered_file: DiscoveredFile,
@@ -105,26 +129,33 @@ def _extract_one_file(
     raw_writer: RawArtifactWriter,
     file_index: int,
 ) -> FileCandidateResult | None:
-    """Take one candidate from bytes to persisted artifacts.
-
-    Returns ``None`` when the checkpoint says this version is not newer than the last run's —
-    a skip, not a failure: the attempt it cost is deliberately dropped rather than counted,
-    exactly as the pre-split loop did. Anything raised here is the caller's dead-letter
-    decision, including the ``FileIntegrityError`` a checksum mismatch produces.
-    """
-    plan = context.plan
-    logger = context.logger
-    file_hook = context.file_hook
-
-    payload, response, attempts_used = context.downloader.load_payload(
-        plan,
-        discovered_file,
-        client=client,
-        throttle=context.throttle,
-        logger=logger,
-        raw_writer=raw_writer,
+    """Compose both phases with the sequential path's existing client and behavior."""
+    downloaded = _download_candidate(
+        context.downloader, context.plan, discovered_file,
+        client=client, throttle=context.throttle, logger=context.logger, raw_writer=raw_writer,
     )
+    return _complete_candidate(
+        context, discovered_file, downloaded, raw_writer=raw_writer, file_index=file_index,
+    )
+
+
+def _complete_candidate(
+    context: FileExtractionContext,
+    discovered_file: DiscoveredFile,
+    downloaded: DownloadedCandidate,
+    *,
+    raw_writer: RawArtifactWriter,
+    file_index: int,
+) -> FileCandidateResult | None:
+    """Complete on the loop thread only; discard payloads on any failure.
+    Checkpoint skips return ``None`` without counting attempts; callers own dead-letter policy.
+    """
+    payload = downloaded.payload
     try:
+        response, attempts_used = downloaded.response, downloaded.attempts_used
+        plan = context.plan
+        logger = context.logger
+        file_hook = context.file_hook
         if logger is not None:
             logger.info(
                 "file_payload_loaded",
