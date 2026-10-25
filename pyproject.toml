@@ -14,7 +14,7 @@ authors = [{ name = "JANUS contributors" }]
 dependencies = [
   "PyYAML==6.0.3",
   "certifi==2026.2.25",
-  "pyspark==4.0.1",
+  "pyspark==4.2.0",
   "pyiceberg[pyarrow,pyiceberg-core,sql-postgres,sql-sqlite,s3fs]==0.12.0",
 ]
 
